@@ -1,0 +1,80 @@
+#!/bin/sh
+set -eu
+SELF_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd -P)
+if [ -r "$SELF_DIR/../lib/common.sh" ]; then . "$SELF_DIR/../lib/common.sh"; else . /usr/lib/litefwm/common.sh; fi
+
+module_package() {
+  case "$1" in
+    openvpn) echo openvpn;;
+    tailscale) echo tailscale;;
+    bind) echo bind;;
+    squid) echo squid;;
+    snort) echo snort;;
+    haproxy) echo haproxy;;
+    *) die "Unknown module: $1";;
+  esac
+}
+module_service() {
+  case "$1" in
+    bind) echo named;;
+    *) echo "$1";;
+  esac
+}
+
+set_state() {
+  mod=$1
+  value=$2
+  tmp=$(mktemp)
+  jq --arg mod "$mod" --argjson value "$value" '.modules[$mod]=$value' "$LITEFWM_CONFIG" > "$tmp"
+  cp "$LITEFWM_CONFIG" "$LITEFWM_STATE/config.previous.json"
+  mv "$tmp" "$LITEFWM_CONFIG"
+}
+
+list_modules() {
+  config_exists
+  jq -r '.modules | to_entries[] | [.key,(.value|tostring)] | @tsv' "$LITEFWM_CONFIG" |
+  while IFS="$(printf '\t')" read -r name enabled; do
+    pkg=$(module_package "$name")
+    installed=false
+    apk info -e "$pkg" >/dev/null 2>&1 && installed=true
+    jq -n --arg name "$name" --argjson enabled "$enabled" --argjson installed "$installed"       '{name:$name,enabled:$enabled,installed:$installed}'
+  done | jq -s .
+}
+
+cmd=$1
+case "$cmd" in
+  list) list_modules;;
+  install)
+    require_root
+    mod=$2
+    pkg=$(module_package "$mod")
+    apk add --no-cache "$pkg" || die "Could not install optional Alpine package: $pkg"
+    set_state "$mod" true
+    mkdir -p "$LITEFWM_ETC/modules/$mod"
+    echo "$mod installed and enabled."
+    ;;
+  remove)
+    require_root
+    mod=$2
+    pkg=$(module_package "$mod")
+    set_state "$mod" false
+    svc=$(module_service "$mod")
+    rc-service "$svc" stop >/dev/null 2>&1 || true
+    rc-update del "$svc" default >/dev/null 2>&1 || true
+    apk del "$pkg" >/dev/null 2>&1 || true
+    echo "$mod disabled and package removal requested."
+    ;;
+  enable)
+    require_root
+    mod=$2
+    module_package "$mod" >/dev/null
+    set_state "$mod" true
+    ;;
+  disable)
+    require_root
+    mod=$2
+    module_package "$mod" >/dev/null
+    set_state "$mod" false
+    ;;
+  *) echo "Usage: modulectl list|install|remove|enable|disable [module]" >&2; exit 2;;
+esac

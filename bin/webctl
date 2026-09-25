@@ -1,0 +1,34 @@
+#!/bin/sh
+set -eu
+SELF_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd -P)
+if [ -r "$SELF_DIR/../lib/common.sh" ]; then . "$SELF_DIR/../lib/common.sh"; else . /usr/lib/litefwm/common.sh; fi
+
+template=/usr/share/litefwm/litefwm-lighttpd.conf
+[ -r "$template" ] || template="$(dirname "$0")/../lighttpd/litefwm.conf"
+
+render() {
+  config_exists
+  ensure_dirs
+  port=$(jq -r '.management.port' "$LITEFWM_CONFIG")
+  out="$LITEFWM_GENERATED/lighttpd-litefwm.conf"
+  sed "s/@LITEFWM_PORT@/$port/g" "$template" > "$out"
+  echo "$out"
+}
+
+case "$1" in
+  render) render;;
+  apply)
+    require_root
+    f=$(render)
+    changed=true
+    if [ -r /etc/lighttpd/litefwm.conf ] && cmp -s "$f" /etc/lighttpd/litefwm.conf; then
+      changed=false
+    fi
+    install -m 0644 "$f" /etc/lighttpd/litefwm.conf
+    lighttpd -tt -f /etc/lighttpd/lighttpd.conf
+    if [ "$changed" = true ] && rc-service lighttpd status >/dev/null 2>&1; then
+      rc-service lighttpd restart
+    fi
+    ;;
+  *) echo "Usage: webctl render|apply" >&2; exit 2;;
+esac

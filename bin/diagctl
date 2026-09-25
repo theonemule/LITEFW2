@@ -1,0 +1,37 @@
+#!/bin/sh
+set -eu
+
+valid_host() {
+  printf '%s' "$1" | grep -Eq '^[A-Za-z0-9._:-]{1,253}$'
+}
+
+cmd=$1
+case "$cmd" in
+  lookup)
+    host=$2
+    valid_host "$host" || { echo "Invalid lookup target" >&2; exit 2; }
+    server=''
+    [ "$#" -lt 3 ] || server=$3
+    if [ -n "$server" ]; then
+      valid_host "$server" || { echo "Invalid DNS server" >&2; exit 2; }
+      dig +time=3 +tries=1 "$host" @"$server"
+    else
+      dig +time=3 +tries=1 "$host"
+    fi
+    ;;
+  ping)
+    host=$2
+    valid_host "$host" || { echo "Invalid ping target" >&2; exit 2; }
+    count=3
+    [ "$#" -lt 3 ] || count=$3
+    case "$count" in *[!0-9]*|'') exit 2;; esac
+    [ "$count" -le 5 ] || count=5
+    ping -c "$count" -W 2 "$host"
+    ;;
+  route)
+    host=$2
+    valid_host "$host" || { echo "Invalid route target" >&2; exit 2; }
+    ip route get "$host"
+    ;;
+  *) echo "Usage: diagctl lookup HOST [DNS_SERVER] | ping HOST [COUNT] | route HOST" >&2; exit 2;;
+esac

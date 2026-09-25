@@ -1,0 +1,15 @@
+#!/bin/sh
+set -eu
+count=200
+[ "$#" -lt 2 ] || count=$2
+case "$count" in *[!0-9]*|'') count=200;; esac
+[ "$count" -le 2000 ] || count=2000
+case "$1" in
+  firewall)
+    logread 2>/dev/null | grep 'LiteFWM ' | tail -n "$count" || true
+    ;;
+  system)
+    logread 2>/dev/null | tail -n "$count" || dmesg | tail -n "$count"
+    ;;
+  *) echo "Usage: logctl firewall|system [COUNT]" >&2; exit 2;;
+esac

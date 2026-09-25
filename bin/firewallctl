@@ -1,0 +1,163 @@
+#!/bin/sh
+set -eu
+SELF_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd -P)
+if [ -r "$SELF_DIR/../lib/common.sh" ]; then . "$SELF_DIR/../lib/common.sh"; else . /usr/lib/litefwm/common.sh; fi
+
+policy_word() {
+  case "$1" in
+    accept) echo ACCEPT;;
+    drop) echo DROP;;
+    *) die "Invalid firewall policy: $1";;
+  esac
+}
+
+iface_clause() {
+  direction=$1
+  seg=$2
+  if [ -z "$seg" ] || [ "$seg" = any ]; then
+    return 0
+  fi
+  dev=$(segment_device "$seg") || die "Unknown segment: $seg"
+  if [ "$direction" = in ]; then
+    printf -- '-i %s ' "$dev"
+  else
+    printf -- '-o %s ' "$dev"
+  fi
+}
+
+render_rule() {
+  rule=$1
+  chain=$(printf '%s' "$rule" | jq -r '.chain // "forward"' | tr '[:lower:]' '[:upper:]')
+  proto=$(printf '%s' "$rule" | jq -r '.protocol // "any"')
+  src=$(printf '%s' "$rule" | jq -r '.source // "any"')
+  dst=$(printf '%s' "$rule" | jq -r '.destination // "any"')
+  sport=$(printf '%s' "$rule" | jq -r '.sourcePort // "any"')
+  dport=$(printf '%s' "$rule" | jq -r '.destinationPort // "any"')
+  action=$(printf '%s' "$rule" | jq -r .action | tr '[:lower:]' '[:upper:]')
+  inseg=$(printf '%s' "$rule" | jq -r '.inSegment // "any"')
+  outseg=$(printf '%s' "$rule" | jq -r '.outSegment // "any"')
+
+  case "$chain" in INPUT|OUTPUT|FORWARD) :;; *) die "Invalid chain: $chain";; esac
+
+  printf -- '-A %s ' "$chain"
+  if [ "$chain" != OUTPUT ]; then iface_clause in "$inseg"; fi
+  if [ "$chain" != INPUT ]; then iface_clause out "$outseg"; fi
+  [ "$proto" = any ] || printf -- '-p %s ' "$proto"
+  [ "$src" = any ] || printf -- '-s %s ' "$src"
+  [ "$dst" = any ] || printf -- '-d %s ' "$dst"
+  [ "$sport" = any ] || printf -- '--sport %s ' "$sport"
+  [ "$dport" = any ] || printf -- '--dport %s ' "$dport"
+
+  case "$action" in
+    LOG) printf -- '-j LOG --log-prefix "LiteFWM " --log-level 6\n';;
+    ACCEPT|DROP|REJECT) printf -- '-j %s\n' "$action";;
+    *) die "Invalid action: $action";;
+  esac
+}
+
+render() {
+  config_exists
+  ensure_dirs
+  need jq
+
+  out="$LITEFWM_GENERATED/iptables.rules"
+  input=$(policy_word "$(jq -r '.firewall.defaults.input' "$LITEFWM_CONFIG")")
+  forward=$(policy_word "$(jq -r '.firewall.defaults.forward' "$LITEFWM_CONFIG")")
+  output=$(policy_word "$(jq -r '.firewall.defaults.output' "$LITEFWM_CONFIG")")
+  mgmt=$(jq -r '.management.port' "$LITEFWM_CONFIG")
+  allow_any=$(jq -r '.management.allowAny // false' "$LITEFWM_CONFIG")
+
+  {
+    echo '*filter'
+    echo ":INPUT $input [0:0]"
+    echo ":FORWARD $forward [0:0]"
+    echo ":OUTPUT $output [0:0]"
+    echo '-A INPUT -i lo -j ACCEPT'
+    echo '-A INPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT'
+    echo '-A FORWARD -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT'
+    echo '-A INPUT -p icmp -j ACCEPT'
+
+    if [ "$allow_any" = true ]; then
+      printf -- '-A INPUT -p tcp --dport %s -j ACCEPT\n' "$mgmt"
+    else
+      jq -r '.management.allowedSegments[]?' "$LITEFWM_CONFIG" | while IFS= read -r seg; do
+        dev=$(segment_device "$seg")
+        printf -- '-A INPUT -i %s -p tcp --dport %s -j ACCEPT\n' "$dev" "$mgmt"
+      done
+    fi
+
+    jq -c '.firewall.rules | sort_by(.position // 999999)[] | select(.enabled != false)' "$LITEFWM_CONFIG" |
+    while IFS= read -r rule; do
+      render_rule "$rule"
+    done
+    echo 'COMMIT'
+
+    echo '*nat'
+    echo ':PREROUTING ACCEPT [0:0]'
+    echo ':INPUT ACCEPT [0:0]'
+    echo ':OUTPUT ACCEPT [0:0]'
+    echo ':POSTROUTING ACCEPT [0:0]'
+
+    jq -c '.firewall.nat.masquerade[]? | select(.enabled != false)' "$LITEFWM_CONFIG" |
+    while IFS= read -r nat; do
+      outseg=$(printf '%s' "$nat" | jq -r .outSegment)
+      src=$(printf '%s' "$nat" | jq -r '.source // "any"')
+      dev=$(segment_device "$outseg")
+      printf -- '-A POSTROUTING -o %s ' "$dev"
+      [ "$src" = any ] || printf -- '-s %s ' "$src"
+      echo '-j MASQUERADE'
+    done
+
+    jq -c '.firewall.nat.snat[]? | select(.enabled != false)' "$LITEFWM_CONFIG" |
+    while IFS= read -r nat; do
+      outseg=$(printf '%s' "$nat" | jq -r .outSegment)
+      src=$(printf '%s' "$nat" | jq -r '.source // "any"')
+      tosrc=$(printf '%s' "$nat" | jq -r .toSource)
+      dev=$(segment_device "$outseg")
+      printf -- '-A POSTROUTING -o %s ' "$dev"
+      [ "$src" = any ] || printf -- '-s %s ' "$src"
+      printf -- '-j SNAT --to-source %s\n' "$tosrc"
+    done
+
+    jq -c '.firewall.nat.dnat[]? | select(.enabled != false)' "$LITEFWM_CONFIG" |
+    while IFS= read -r nat; do
+      inseg=$(printf '%s' "$nat" | jq -r .inSegment)
+      proto=$(printf '%s' "$nat" | jq -r '.protocol // "tcp"')
+      dport=$(printf '%s' "$nat" | jq -r .destinationPort)
+      todst=$(printf '%s' "$nat" | jq -r .toDestination)
+      dev=$(segment_device "$inseg")
+      printf -- '-A PREROUTING -i %s -p %s --dport %s -j DNAT --to-destination %s\n' "$dev" "$proto" "$dport" "$todst"
+    done
+    echo 'COMMIT'
+  } > "$out"
+
+  echo "$out"
+}
+
+cmd=$1
+case "$cmd" in
+  render) render;;
+  check)
+    need iptables-restore
+    f=$(render)
+    iptables-restore --test < "$f"
+    echo "Firewall rules valid."
+    ;;
+  apply)
+    require_root
+    need iptables-save
+    need iptables-restore
+    ensure_dirs
+    iptables-save > "$LITEFWM_STATE/iptables.previous.rules"
+    f=$(render)
+    iptables-restore --test < "$f"
+    iptables-restore < "$f"
+    ;;
+  rollback)
+    require_root
+    [ -r "$LITEFWM_STATE/iptables.previous.rules" ] || die "No previous firewall snapshot."
+    iptables-restore < "$LITEFWM_STATE/iptables.previous.rules"
+    ;;
+  show) iptables-save;;
+  *) echo "Usage: firewallctl render|check|apply|rollback|show" >&2; exit 2;;
+esac

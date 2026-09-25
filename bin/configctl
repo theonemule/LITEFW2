@@ -1,0 +1,122 @@
+#!/bin/sh
+set -eu
+SELF_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd -P)
+if [ -r "$SELF_DIR/../lib/common.sh" ]; then . "$SELF_DIR/../lib/common.sh"; else . /usr/lib/litefwm/common.sh; fi
+
+usage() {
+  cat <<'TXT'
+Usage:
+  configctl show
+  configctl validate [FILE]
+  configctl set FILE
+  configctl snapshot
+  configctl restore SNAPSHOT
+TXT
+}
+
+validate_file() {
+  f=$1
+  need jq
+  jq -e '
+    def dev: type=="string" and test("^[A-Za-z0-9_.:-]{1,63}$");
+    def ipv4: type=="string" and test("^([0-9]{1,3}[.]){3}[0-9]{1,3}$");
+    def cidr: type=="string" and test("^([0-9]{1,3}[.]){3}[0-9]{1,3}/([0-9]|[12][0-9]|3[0-2])$");
+    def addr: .=="any" or ipv4 or cidr;
+    def port: type=="string" and test("^(any|[0-9]{1,5}(:[0-9]{1,5})?)$");
+    def mac: type=="string" and test("^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$");
+    def target: type=="string" and test("^([0-9]{1,3}[.]){3}[0-9]{1,3}(:[0-9]{1,5})?$");
+
+    .version == 1 and
+    (.hostname|type=="string" and length>0 and length<64) and
+    (.management.port|type=="number" and .>=1 and .<=65535) and
+    (.management.allowAny|type=="boolean") and
+    (.management.allowedSegments|type=="array") and
+    (.segments|type=="array") and
+    (.firewall.defaults.input=="accept" or .firewall.defaults.input=="drop") and
+    (.firewall.defaults.forward=="accept" or .firewall.defaults.forward=="drop") and
+    (.firewall.defaults.output=="accept" or .firewall.defaults.output=="drop") and
+    (.firewall.rules|type=="array") and
+    (.firewall.nat.masquerade|type=="array") and
+    (.firewall.nat.snat|type=="array") and
+    (.firewall.nat.dnat|type=="array") and
+    ([.segments[].id] | length == (unique|length)) and
+    (. as $root | [.segments[].id] as $ids |
+      ([.management.allowedSegments[]? as $s | ($ids|index($s) != null)] | all) and
+      ([.segments[] |
+        (.id|dev) and
+        (.type=="interface" or .type=="bridge" or .type=="vlan") and
+        (.address|cidr) and
+        ((.gateway // "")=="" or (.gateway|ipv4)) and
+        ((.mtu // 1500)|type=="number" and .>=576 and .<=9216) and
+        (if .type=="interface" then (.interface|dev)
+         elif .type=="bridge" then (.bridge|dev) and ([.members[]? | dev] | all)
+         elif .type=="vlan" then (.parent|dev) and (.vlanId|type=="number" and .>=1 and .<=4094) and ((.device // "vlan0")|dev)
+         else false end) and
+        (if (.dhcp.enabled // false) then
+          (.dhcp.poolStart|ipv4) and (.dhcp.poolEnd|ipv4) and
+          (((.dhcp.gateway // "")=="") or (.dhcp.gateway|ipv4)) and
+          ([.dhcp.dns[]? | ipv4] | all) and
+          ([.dhcp.reservations[]? | (.mac|mac) and (.ip|ipv4)] | all)
+         else true end)
+      ] | all) and
+      ([.segments[] | select((.gateway // "") != "")] | length <= 1) and
+      ([.firewall.rules[]? as $r |
+        ($r.chain=="input" or $r.chain=="output" or $r.chain=="forward") and
+        ($r.protocol=="any" or $r.protocol=="tcp" or $r.protocol=="udp" or $r.protocol=="icmp") and
+        ($r.action=="accept" or $r.action=="drop" or $r.action=="reject" or $r.action=="log") and
+        (($r.source // "any")|addr) and (($r.destination // "any")|addr) and
+        (($r.sourcePort // "any")|port) and (($r.destinationPort // "any")|port) and
+        (($r.protocol=="tcp" or $r.protocol=="udp") or ((($r.sourcePort // "any")=="any") and (($r.destinationPort // "any")=="any"))) and
+        ((($r.inSegment // "any")=="any") or ($ids|index($r.inSegment) != null)) and
+        ((($r.outSegment // "any")=="any") or ($ids|index($r.outSegment) != null))
+      ] | all) and
+      ([.firewall.nat.masquerade[]? as $n |
+        (($n.source // "any")|addr) and ($ids|index($n.outSegment) != null)
+      ] | all) and
+      ([.firewall.nat.snat[]? as $n |
+        (($n.source // "any")|addr) and ($n.toSource|ipv4) and ($ids|index($n.outSegment) != null)
+      ] | all) and
+      ([.firewall.nat.dnat[]? as $n |
+        ($n.protocol=="tcp" or $n.protocol=="udp") and
+        ($n.destinationPort|port) and ($n.destinationPort!="any") and
+        ($n.toDestination|target) and ($ids|index($n.inSegment) != null)
+      ] | all)
+    )
+  ' "$f" >/dev/null || die "Configuration schema or value validation failed"
+}
+
+cmd=$1
+case "$cmd" in
+  show) config_exists; jq . "$LITEFWM_CONFIG";;
+  validate)
+    f=$LITEFWM_CONFIG
+    [ "$#" -lt 2 ] || f=$2
+    validate_file "$f"
+    echo "Configuration valid."
+    ;;
+  set)
+    require_root
+    src=$2
+    validate_file "$src"
+    ensure_dirs
+    [ ! -e "$LITEFWM_CONFIG" ] || cp "$LITEFWM_CONFIG" "$LITEFWM_STATE/config.previous.json"
+    install -m 0640 "$src" "$LITEFWM_CONFIG"
+    echo "Configuration updated. Run fwmctl apply to activate it."
+    ;;
+  snapshot)
+    config_exists; ensure_dirs
+    ts=$(date +%Y%m%d-%H%M%S)
+    out="$LITEFWM_STATE/config-$ts.json"
+    cp "$LITEFWM_CONFIG" "$out"
+    echo "$out"
+    ;;
+  restore)
+    require_root
+    src=$2
+    [ -r "$src" ] || die "Snapshot not found: $src"
+    validate_file "$src"
+    cp "$src" "$LITEFWM_CONFIG"
+    echo "Configuration restored. Run fwmctl apply."
+    ;;
+  *) usage; exit 2;;
+esac

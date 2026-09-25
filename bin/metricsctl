@@ -1,0 +1,28 @@
+#!/bin/sh
+set -eu
+SELF_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd -P)
+if [ -r "$SELF_DIR/../lib/common.sh" ]; then . "$SELF_DIR/../lib/common.sh"; else . /usr/lib/litefwm/common.sh; fi
+
+interfaces_json() {
+  ip -j -s link show | jq '[.[] | {
+    name:.ifname,
+    state:.operstate,
+    mtu:.mtu,
+    mac:(.address // ""),
+    rxBytes:(.stats64.rx.bytes // 0),
+    rxPackets:(.stats64.rx.packets // 0),
+    txBytes:(.stats64.tx.bytes // 0),
+    txPackets:(.stats64.tx.packets // 0)
+  }]'
+}
+
+connections=0
+if [ -r /proc/sys/net/netfilter/nf_conntrack_count ]; then
+  connections=$(cat /proc/sys/net/netfilter/nf_conntrack_count)
+fi
+
+load1=$(awk '{print $1}' /proc/loadavg 2>/dev/null || echo 0)
+mem_total=$(awk '/MemTotal:/ {print $2*1024}' /proc/meminfo 2>/dev/null || echo 0)
+mem_free=$(awk '/MemAvailable:/ {print $2*1024}' /proc/meminfo 2>/dev/null || echo 0)
+
+jq -n   --argjson interfaces "$(interfaces_json)"   --argjson connections "$connections"   --argjson load1 "$load1"   --argjson memTotal "$mem_total"   --argjson memAvailable "$mem_free"   '{interfaces:$interfaces,conntrack:$connections,load1:$load1,memory:{total:$memTotal,available:$memAvailable}}'

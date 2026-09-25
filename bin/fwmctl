@@ -1,0 +1,59 @@
+#!/bin/sh
+set -eu
+SELF_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd -P)
+if [ -r "$SELF_DIR/../lib/common.sh" ]; then . "$SELF_DIR/../lib/common.sh"; else . /usr/lib/litefwm/common.sh; fi
+
+bindir=$(dirname "$0")
+
+render_all() {
+  "$bindir/configctl" validate >/dev/null
+  "$bindir/netctl" render >/dev/null
+  "$bindir/dhcpctl" render >/dev/null
+  "$bindir/firewallctl" render >/dev/null
+  "$bindir/webctl" render >/dev/null
+}
+
+status_json() {
+  config_exists
+  host=$(hostname)
+  applied=$(cat "$LITEFWM_STATE/last-apply" 2>/dev/null || echo never)
+  segments=$(jq '.segments|length' "$LITEFWM_CONFIG")
+  rules=$(jq '.firewall.rules|length' "$LITEFWM_CONFIG")
+  leases=$("$bindir/dhcpctl" leases 2>/dev/null | jq 'length' 2>/dev/null || echo 0)
+  jq -n --arg host "$host" --arg applied "$applied" --argjson segments "$segments" --argjson rules "$rules" --argjson leases "$leases"     '{hostname:$host,lastApply:$applied,segments:$segments,rules:$rules,leases:$leases}'
+}
+
+case "$1" in
+  status) status_json;;
+  validate)
+    "$bindir/configctl" validate
+    render_all
+    echo "Generated configuration rendered successfully."
+    ;;
+  render)
+    render_all
+    echo "$LITEFWM_GENERATED"
+    ;;
+  apply)
+    require_root
+    ensure_dirs
+    "$bindir/configctl" snapshot >/dev/null
+    render_all
+    sysctl -w net.ipv4.ip_forward=1 >/dev/null
+    "$bindir/netctl" apply
+    "$bindir/dhcpctl" apply
+    "$bindir/firewallctl" apply
+    "$bindir/webctl" apply
+    date "+%Y-%m-%dT%H:%M:%S%z" > "$LITEFWM_STATE/last-apply"
+    echo "LiteFWM configuration applied."
+    ;;
+  rollback)
+    require_root
+    "$bindir/firewallctl" rollback
+    if [ -r "$LITEFWM_STATE/config.previous.json" ]; then
+      cp "$LITEFWM_STATE/config.previous.json" "$LITEFWM_CONFIG"
+    fi
+    echo "Firewall rolled back and previous configuration restored where available."
+    ;;
+  *) echo "Usage: fwmctl status|validate|render|apply|rollback" >&2; exit 2;;
+esac

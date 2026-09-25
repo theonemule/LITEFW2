@@ -1,0 +1,31 @@
+{
+  "version": 1,
+  "hostname": "litefwm",
+  "management": {
+    "port": 8080,
+    "allowedSegments": [],
+    "allowAny": true
+  },
+  "segments": [],
+  "firewall": {
+    "defaults": {
+      "input": "drop",
+      "forward": "drop",
+      "output": "accept"
+    },
+    "rules": [],
+    "nat": {
+      "masquerade": [],
+      "snat": [],
+      "dnat": []
+    }
+  },
+  "modules": {
+    "openvpn": false,
+    "tailscale": false,
+    "bind": false,
+    "squid": false,
+    "snort": false,
+    "haproxy": false
+  }
+}
