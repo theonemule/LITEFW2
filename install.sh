@@ -86,6 +86,15 @@ cat > /etc/conf.d/dnsmasq <<'DNSMASQ'
 DNSMASQ_OPTS="--conf-file=/var/lib/litefwm/generated/dnsmasq.conf"
 DNSMASQ
 
+# Alpine's stock lighttpd.conf already defines server.document-root. Update
+# that single global value instead of redefining it in the LiteFWM include,
+# which Lighttpd rejects as a duplicate global variable.
+if grep -Eq '^[[:space:]]*server[.]document-root[[:space:]]*=' /etc/lighttpd/lighttpd.conf; then
+  sed -i 's|^[[:space:]]*server[.]document-root[[:space:]]*=.*|server.document-root = "/usr/share/litefwm/www"|' /etc/lighttpd/lighttpd.conf
+else
+  printf '\nserver.document-root = "/usr/share/litefwm/www"\n' >> /etc/lighttpd/lighttpd.conf
+fi
+
 grep -q 'include "litefwm.conf"' /etc/lighttpd/lighttpd.conf 2>/dev/null || printf '\ninclude "litefwm.conf"\n' >> /etc/lighttpd/lighttpd.conf
 
 /usr/local/sbin/configctl validate
