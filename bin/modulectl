@@ -16,76 +16,81 @@ module_package() {
   esac
 }
 module_service() {
-  case "$1" in
-    bind) echo named;;
-    ddns) echo ddclient;;
-    *) echo "$1";;
+  case "$1" in bind) echo named;; ddns) echo ddclient;; *) echo "$1";; esac
+}
+install_packages() {
+  mod=$1
+  case "$mod" in
+    ddns) apk add --no-cache ddclient ddclient-openrc;;
+    openvpn) apk add --no-cache openvpn openvpn-openrc;;
+    tailscale) apk add --no-cache tailscale tailscale-openrc;;
+    bind) apk add --no-cache bind bind-openrc;;
+    squid) apk add --no-cache squid squid-openrc;;
+    haproxy) apk add --no-cache haproxy haproxy-openrc;;
+    snort)
+      apk add --no-cache snort
+      if apk search -x snort-openrc 2>/dev/null | grep -q '^snort-openrc-'; then
+        apk add --no-cache snort-openrc
+      fi
+      ;;
+  esac
+}
+remove_packages() {
+  mod=$1
+  case "$mod" in
+    ddns) apk del ddclient-openrc ddclient >/dev/null 2>&1 || true;;
+    openvpn) apk del openvpn-openrc openvpn >/dev/null 2>&1 || true;;
+    tailscale) apk del tailscale-openrc tailscale >/dev/null 2>&1 || true;;
+    bind) apk del bind-openrc bind >/dev/null 2>&1 || true;;
+    squid) apk del squid-openrc squid >/dev/null 2>&1 || true;;
+    haproxy) apk del haproxy-openrc haproxy >/dev/null 2>&1 || true;;
+    snort)
+      apk del snort-openrc snort >/dev/null 2>&1 || apk del snort >/dev/null 2>&1 || true
+      ;;
   esac
 }
 
 set_state() {
-  mod=$1
-  value=$2
-  tmp=$(mktemp)
+  mod=$1; value=$2; tmp=$(mktemp)
   jq --arg mod "$mod" --argjson value "$value" '.modules[$mod]=$value' "$LITEFWM_CONFIG" > "$tmp"
-  cp "$LITEFWM_CONFIG" "$LITEFWM_STATE/config.previous.json"
+  cp "$LITEFWM_CONFIG" "$LITEFWM_STATE/config.previous.json" 2>/dev/null || true
   mv "$tmp" "$LITEFWM_CONFIG"
 }
-
 list_modules() {
   config_exists
   jq -r '.modules | to_entries[] | [.key,(.value|tostring)] | @tsv' "$LITEFWM_CONFIG" |
   while IFS="$(printf '\t')" read -r name enabled; do
-    pkg=$(module_package "$name")
-    installed=false
-    apk info -e "$pkg" >/dev/null 2>&1 && installed=true
-    jq -n --arg name "$name" --argjson enabled "$enabled" --argjson installed "$installed"       '{name:$name,enabled:$enabled,installed:$installed}'
+    installed=false; module_installed "$name" && installed=true
+    configured=false; running=false
+    status=$("$SELF_DIR/modulecfgctl" status "$name" 2>/dev/null || true)
+    [ -z "$status" ] || { configured=$(printf '%s' "$status"|jq -r '.configured // false'); running=$(printf '%s' "$status"|jq -r '.running // false'); }
+    jq -n --arg name "$name" --argjson enabled "$enabled" --argjson installed "$installed" \
+      --argjson configured "$configured" --argjson running "$running" \
+      '{name:$name,enabled:$enabled,installed:$installed,configured:$configured,running:$running}'
   done | jq -s .
 }
-
-cmd=$1
-case "$cmd" in
+case "${1:-}" in
   list) list_modules;;
   install)
-    require_root
-    mod=$2
-    pkg=$(module_package "$mod")
-    if [ "$mod" = ddns ]; then
-      apk add --no-cache ddclient ddclient-openrc || die "Could not install Dynamic DNS packages."
-    else
-      apk add --no-cache "$pkg" || die "Could not install optional Alpine package: $pkg"
-    fi
+    require_root; mod=${2:?MODULE}; pkg=$(module_package "$mod")
+    install_packages "$mod" || die "Could not install optional module packages for $mod."
+    ensure_dirs
     set_state "$mod" true
-    mkdir -p "$LITEFWM_ETC/modules/$mod"
-    if [ "$mod" = ddns ]; then "$SELF_DIR/ddnsctl" init; fi
-    echo "$mod installed and enabled."
+    "$SELF_DIR/modulecfgctl" init "$mod"
+    echo "$mod installed and ready to configure."
     ;;
   remove)
-    require_root
-    mod=$2
-    pkg=$(module_package "$mod")
+    require_root; mod=${2:?MODULE}; pkg=$(module_package "$mod")
     set_state "$mod" false
     svc=$(module_service "$mod")
     rc-service "$svc" stop >/dev/null 2>&1 || true
     rc-update del "$svc" default >/dev/null 2>&1 || true
-    if [ "$mod" = ddns ]; then
-      apk del ddclient-openrc ddclient >/dev/null 2>&1 || true
-    else
-      apk del "$pkg" >/dev/null 2>&1 || true
-    fi
-    echo "$mod disabled and package removal requested."
+    remove_packages "$mod"
+    echo "$mod disabled and package removal requested. Module configuration was preserved."
     ;;
   enable)
-    require_root
-    mod=$2
-    module_package "$mod" >/dev/null
-    set_state "$mod" true
-    ;;
+    require_root; mod=${2:?MODULE}; module_package "$mod" >/dev/null; set_state "$mod" true;;
   disable)
-    require_root
-    mod=$2
-    module_package "$mod" >/dev/null
-    set_state "$mod" false
-    ;;
+    require_root; mod=${2:?MODULE}; module_package "$mod" >/dev/null; set_state "$mod" false;;
   *) echo "Usage: modulectl list|install|remove|enable|disable [module]" >&2; exit 2;;
 esac

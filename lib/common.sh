@@ -17,13 +17,36 @@ ensure_dirs() { mkdir -p "$LITEFWM_ETC" "$LITEFWM_STATE" "$LITEFWM_RUN" "$LITEFW
 config_exists() { [ -r "$LITEFWM_CONFIG" ] || die "Missing configuration: $LITEFWM_CONFIG"; }
 slug_ok() { printf '%s' "$1" | grep -Eq '^[A-Za-z0-9][A-Za-z0-9_.-]{0,62}$'; }
 
+interface_device() {
+  id=$1
+  jq -er --arg id "$id" '.interfaces[] | select(.id==$id) | .device' "$LITEFWM_CONFIG"
+}
+
 segment_device() {
   id=$1
-  jq -er --arg id "$id" '
-    .segments[] | select(.id==$id) |
-    if .type=="interface" then .interface
-    elif .type=="bridge" then .bridge
-    elif .type=="vlan" then (.device // (.parent + "." + (.vlanId|tostring)))
-    else empty end
-  ' "$LITEFWM_CONFIG"
+  iid=$(jq -er --arg id "$id" '.segments[] | select(.id==$id) | .interface' "$LITEFWM_CONFIG")
+  interface_device "$iid"
+}
+
+segment_cidr() {
+  id=$1
+  jq -er --arg id "$id" '.segments[] | select(.id==$id) | .address' "$LITEFWM_CONFIG"
+}
+
+segment_ip() {
+  cidr=$(segment_cidr "$1")
+  printf '%s\n' "${cidr%/*}"
+}
+
+module_installed() {
+  case "$1" in
+    openvpn) command -v openvpn >/dev/null 2>&1;;
+    tailscale) command -v tailscale >/dev/null 2>&1;;
+    bind) command -v named >/dev/null 2>&1;;
+    squid) command -v squid >/dev/null 2>&1;;
+    snort) command -v snort >/dev/null 2>&1;;
+    haproxy) command -v haproxy >/dev/null 2>&1;;
+    ddns) command -v ddclient >/dev/null 2>&1;;
+    *) return 1;;
+  esac
 }

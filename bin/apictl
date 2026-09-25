@@ -3,9 +3,8 @@ set -eu
 SELF_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd -P)
 if [ -r "$SELF_DIR/../lib/common.sh" ]; then . "$SELF_DIR/../lib/common.sh"; else . /usr/lib/litefwm/common.sh; fi
 require_root
-
 bindir=$(dirname "$0")
-cmd=$1
+cmd=${1:-}
 
 safe_module() {
   case "$1" in openvpn|tailscale|bind|squid|snort|haproxy|ddns) :;; *) die "Invalid module";; esac
@@ -16,35 +15,24 @@ case "$cmd" in
   config-get) config_exists; cat "$LITEFWM_CONFIG";;
   config-set)
     ensure_dirs
-    tmp=$(mktemp)
-    cat > "$tmp"
+    tmp=$(mktemp); cat > "$tmp"
     "$bindir/configctl" validate "$tmp" >/dev/null
     cp "$LITEFWM_CONFIG" "$LITEFWM_STATE/config.previous.json" 2>/dev/null || true
     install -m 0640 "$tmp" "$LITEFWM_CONFIG"
     rm -f "$tmp"
     jq -n '{ok:true}'
     ;;
-  interfaces)
-    ip -j addr show | jq '[.[] | {name:.ifname,state:.operstate,mtu:.mtu,mac:(.address // ""),addresses:[.addr_info[]? | {family:.family,address:.local,prefixlen:.prefixlen}]}]'
-    ;;
+  interfaces) "$bindir/netctl" inventory;;
   leases) "$bindir/dhcpctl" leases;;
   modules) "$bindir/modulectl" list;;
   metrics) "$bindir/metricsctl";;
   captures) "$bindir/capturectl" list;;
   diag-lookup)
-    host=$2
-    server=''
-    [ "$#" -lt 3 ] || server=$3
+    host=${2:?HOST}; server=${3:-}
     "$bindir/diagctl" lookup "$host" "$server" | jq -R -s '{output:.}'
     ;;
-  diag-ping)
-    host=$2
-    "$bindir/diagctl" ping "$host" 3 | jq -R -s '{output:.}'
-    ;;
-  diag-route)
-    host=$2
-    "$bindir/diagctl" route "$host" | jq -R -s '{output:.}'
-    ;;
+  diag-ping) "$bindir/diagctl" ping "${2:?HOST}" 3 | jq -R -s '{output:.}';;
+  diag-route) "$bindir/diagctl" route "${2:?HOST}" | jq -R -s '{output:.}';;
   validate)
     out=$("$bindir/fwmctl" validate 2>&1)
     jq -n --arg message "$out" '{ok:true,message:$message}'
@@ -58,40 +46,56 @@ case "$cmd" in
     jq -n --arg message "$out" '{ok:true,message:$message}'
     ;;
   reserve)
-    seg=$2
-    mac=$3
-    host=''
-    [ "$#" -lt 4 ] || host=$4
-    ip=$("$bindir/dhcpctl" reserve-lease "$seg" "$mac" "$host")
-    jq -n --arg ip "$ip" '{ok:true,ip:$ip}'
+    seg=${2:-}; mac=${3:?MAC}; host=${4:-}; publish=${5:-false}
+    result=$("$bindir/dhcpctl" reserve-lease "$seg" "$mac" "$host")
+    if [ "$publish" = true ]; then
+      [ -n "$host" ] || die "Hostname is required to publish a DNS record."
+      ip=$(printf '%s' "$result" | jq -r .ip)
+      dns=$("$bindir/modulecfgctl" bind-reserve "$host" "$ip")
+      jq -n --argjson reservation "$result" --argjson dns "$dns" '{ok:true,reservation:$reservation,dns:$dns}'
+    else
+      jq -n --argjson reservation "$result" '{ok:true,reservation:$reservation}'
+    fi
     ;;
   module-install)
-    mod=$2
-    safe_module "$mod"
+    mod=${2:?MODULE}; safe_module "$mod"
     out=$("$bindir/modulectl" install "$mod" 2>&1)
     jq -n --arg message "$out" '{ok:true,message:$message}'
     ;;
   module-remove)
-    mod=$2
-    safe_module "$mod"
+    mod=${2:?MODULE}; safe_module "$mod"
     out=$("$bindir/modulectl" remove "$mod" 2>&1)
     jq -n --arg message "$out" '{ok:true,message:$message}'
     ;;
+  module-get)
+    mod=${2:?MODULE}; safe_module "$mod"; "$bindir/modulecfgctl" show "$mod";;
+  module-status)
+    mod=${2:?MODULE}; safe_module "$mod"; "$bindir/modulecfgctl" status "$mod";;
+  module-set)
+    mod=${2:?MODULE}; safe_module "$mod"
+    tmp=$(mktemp); cat > "$tmp"
+    "$bindir/modulecfgctl" set "$mod" "$tmp"
+    rm -f "$tmp"
+    ;;
+  module-apply)
+    mod=${2:?MODULE}; safe_module "$mod"; "$bindir/modulecfgctl" apply "$mod";;
+  ddns-get) "$bindir/modulecfgctl" show ddns;;
+  ddns-status) "$bindir/modulecfgctl" status ddns;;
+  ddns-set)
+    tmp=$(mktemp); cat > "$tmp"; "$bindir/modulecfgctl" set ddns "$tmp"; rm -f "$tmp";;
+  ddns-apply) "$bindir/modulecfgctl" apply ddns;;
+  ddns-query) "$bindir/ddnsctl" query;;
   capture-start)
-    seg=$2
-    seconds=$3
+    seg=${2:?SEGMENT}; seconds=${3:-30}
     out=$("$bindir/capturectl" start "$seg" "$seconds")
     jq -n --arg path "$out" '{ok:true,path:$path}'
     ;;
   capture-delete)
-    name=$2
-    "$bindir/capturectl" delete "$name"
+    "$bindir/capturectl" delete "${2:?NAME}"
     jq -n '{ok:true}'
     ;;
   logs)
-    kind=$2
-    count=$3
-    "$bindir/logctl" "$kind" "$count" | jq -R -s '{lines:(split("\n") | map(select(length>0)))}'
+    "$bindir/logctl" "${2:-system}" "${3:-200}" | jq -R -s '{lines:(split("\n") | map(select(length>0)))}'
     ;;
   *) die "Unsupported API operation";;
 esac

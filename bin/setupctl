@@ -1,0 +1,97 @@
+#!/bin/sh
+set -eu
+SELF_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd -P)
+if [ -r "$SELF_DIR/../lib/common.sh" ]; then . "$SELF_DIR/../lib/common.sh"; else . /usr/lib/litefwm/common.sh; fi
+require_root
+config_exists
+
+write_cfg() {
+  tmp=$1
+  "$SELF_DIR/configctl" validate "$tmp" >/dev/null
+  cp "$LITEFWM_CONFIG" "$LITEFWM_STATE/config.previous.json" 2>/dev/null || true
+  install -m 0640 "$tmp" "$LITEFWM_CONFIG"
+  rm -f "$tmp"
+}
+upsert_interface() {
+  obj=$1
+  tmp=$(mktemp)
+  jq --argjson o "$obj" '.interfaces = ((.interfaces // []) | map(select(.id != $o.id)) + [$o])' "$LITEFWM_CONFIG" > "$tmp"
+  write_cfg "$tmp"
+}
+case "${1:-}" in
+  show) jq . "$LITEFWM_CONFIG";;
+  inventory) "$SELF_DIR/netctl" inventory;;
+  physical)
+    id=${2:?ID}; dev=${3:?DEVICE}; role=${4:-none}; name=${5:-$id}
+    obj=$(jq -n --arg id "$id" --arg name "$name" --arg dev "$dev" --arg role "$role" \
+      '{id:$id,name:$name,type:"physical",device:$dev,role:$role,mtu:1500,enabled:true}')
+    upsert_interface "$obj"
+    ;;
+  bridge)
+    id=${2:?ID}; dev=${3:?DEVICE}; role=${4:-lan}; members=${5:-}; aware=${6:-true}
+    obj=$(jq -n --arg id "$id" --arg dev "$dev" --arg role "$role" --arg members "$members" --argjson aware "$aware" \
+      '{id:$id,name:$id,type:"bridge",device:$dev,role:$role,mtu:1500,enabled:true,vlanAware:$aware,members:($members|split(",")|map(select(length>0)))}')
+    upsert_interface "$obj"
+    ;;
+  vlan)
+    id=${2:?ID}; parent=${3:?PARENT_ID}; vid=${4:?VLAN_ID}; role=${5:-lan}; dev=${6:-}
+    [ -n "$dev" ] || dev="$(interface_device "$parent").$vid"
+    obj=$(jq -n --arg id "$id" --arg parent "$parent" --arg dev "$dev" --arg role "$role" --argjson vid "$vid" \
+      '{id:$id,name:$id,type:"vlan",device:$dev,parent:$parent,vlanId:$vid,role:$role,mtu:1500,enabled:true}')
+    upsert_interface "$obj"
+    ;;
+  segment)
+    id=${2:?ID}; iid=${3:?INTERFACE_ID}; cidr=${4:?CIDR}; gateway=${5:-}; dns=${6:-}; domain=${7:-}
+    tmp=$(mktemp)
+    jq --arg id "$id" --arg iid "$iid" --arg cidr "$cidr" --arg gateway "$gateway" --arg dns "$dns" --arg domain "$domain" '
+      .segments = ((.segments // []) | map(select(.id != $id)) + [{
+        id:$id,name:$id,interface:$iid,address:$cidr,gateway:$gateway,
+        dns:($dns|split(",")|map(select(length>0))),domain:$domain,
+        dhcp:{enabled:false,reservations:[]}
+      }])
+    ' "$LITEFWM_CONFIG" > "$tmp"
+    write_cfg "$tmp"
+    ;;
+  dhcp)
+    id=${2:?SEGMENT}; enabled=${3:?true_or_false}; start=${4:-}; end=${5:-}; lease=${6:-12h}
+    tmp=$(mktemp)
+    jq --arg id "$id" --argjson enabled "$enabled" --arg start "$start" --arg end "$end" --arg lease "$lease" '
+      .segments |= map(if .id==$id then
+        .dhcp = ((.dhcp // {reservations:[]}) + {enabled:$enabled,poolStart:$start,poolEnd:$end,leaseTime:$lease})
+      else . end)
+    ' "$LITEFWM_CONFIG" > "$tmp"
+    write_cfg "$tmp"
+    ;;
+  management)
+    scope=${2:-any}; port=${3:-5187}
+    tmp=$(mktemp)
+    if [ "$scope" = any ]; then
+      jq --argjson port "$port" '.management.port=$port | .management.allowAny=true | .management.allowedSegments=[]' "$LITEFWM_CONFIG" > "$tmp"
+    else
+      jq --argjson port "$port" --arg seg "$scope" '.management.port=$port | .management.allowAny=false | .management.allowedSegments=[$seg]' "$LITEFWM_CONFIG" > "$tmp"
+    fi
+    write_cfg "$tmp"
+    ;;
+  ssh)
+    enabled=${2:?true_or_false}; port=${3:-22}
+    tmp=$(mktemp)
+    jq --argjson enabled "$enabled" --argjson port "$port" '.management.allowSsh=$enabled | .management.sshPort=$port' "$LITEFWM_CONFIG" > "$tmp"
+    write_cfg "$tmp"
+    ;;
+  apply) "$SELF_DIR/fwmctl" apply;;
+  *)
+    cat >&2 <<'TXT'
+Usage:
+  setupctl inventory
+  setupctl physical ID DEVICE [wan|lan|none] [NAME]
+  setupctl bridge ID DEVICE [wan|lan|none] [MEMBER_IDS_CSV] [true|false]
+  setupctl vlan ID PARENT_ID VLAN_ID [wan|lan|none] [DEVICE]
+  setupctl segment ID INTERFACE_ID CIDR [GATEWAY] [DNS_CSV] [DOMAIN]
+  setupctl dhcp SEGMENT true|false [POOL_START] [POOL_END] [LEASE]
+  setupctl management any|SEGMENT [PORT]
+  setupctl ssh true|false [PORT]
+  setupctl show
+  setupctl apply
+TXT
+    exit 2;;
+esac

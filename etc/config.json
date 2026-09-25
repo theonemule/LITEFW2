@@ -1,11 +1,14 @@
 {
-  "version": 1,
+  "version": 2,
   "hostname": "litefwm",
   "management": {
-    "port": 8080,
+    "port": 5187,
+    "sshPort": 22,
+    "allowSsh": true,
     "allowedSegments": [],
     "allowAny": true
   },
+  "interfaces": [],
   "segments": [],
   "firewall": {
     "defaults": {

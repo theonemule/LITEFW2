@@ -1,145 +1,62 @@
 {
-  "version": 1,
+  "version": 2,
   "hostname": "edge-fw-01",
   "management": {
-    "port": 8080,
+    "port": 5187,
+    "sshPort": 22,
+    "allowSsh": true,
     "allowAny": false,
-    "allowedSegments": [
-      "lan"
-    ]
+    "allowedSegments": ["lan"]
   },
+  "interfaces": [
+    {"id":"wan0","name":"WAN NIC","type":"physical","device":"eth0","role":"wan","mtu":1500,"enabled":true},
+    {"id":"lanp1","name":"LAN port 1","type":"physical","device":"eth1","role":"none","mtu":1500,"enabled":true},
+    {"id":"lanp2","name":"LAN port 2","type":"physical","device":"eth2","role":"none","mtu":1500,"enabled":true},
+    {"id":"lan","name":"LAN bridge","type":"bridge","device":"br0","role":"lan","mtu":1500,"enabled":true,"vlanAware":true,"members":["lanp1","lanp2"]},
+    {"id":"iot-vlan","name":"IoT VLAN","type":"vlan","device":"br0.20","role":"lan","mtu":1500,"enabled":true,"parent":"lan","vlanId":20}
+  ],
   "segments": [
     {
-      "id": "wan",
-      "name": "WAN",
-      "type": "interface",
-      "interface": "eth0",
-      "address": "203.0.113.2/24",
-      "mtu": 1500,
-      "dhcp": {
-        "enabled": false,
-        "reservations": []
-      },
-      "gateway": "203.0.113.1"
+      "id":"wan","name":"WAN","interface":"wan0","address":"203.0.113.2/24","gateway":"203.0.113.1",
+      "dns":[],"domain":"","dhcp":{"enabled":false,"reservations":[]}
     },
     {
-      "id": "lan",
-      "name": "LAN",
-      "type": "bridge",
-      "bridge": "br0",
-      "members": [
-        "eth1",
-        "eth2"
-      ],
-      "address": "192.168.10.1/24",
-      "mtu": 1500,
-      "dhcp": {
-        "enabled": true,
-        "poolStart": "192.168.10.100",
-        "poolEnd": "192.168.10.200",
-        "leaseTime": "12h",
-        "gateway": "192.168.10.1",
-        "dns": [
-          "1.1.1.1",
-          "9.9.9.9"
-        ],
-        "reservations": [
-          {
-            "mac": "02:00:00:00:00:50",
-            "ip": "192.168.10.50",
-            "hostname": "server"
-          }
-        ]
+      "id":"lan","name":"LAN","interface":"lan","address":"192.168.10.1/24","gateway":"",
+      "dns":["1.1.1.1","9.9.9.9"],"domain":"home.arpa",
+      "dhcp":{
+        "enabled":true,"poolStart":"192.168.10.100","poolEnd":"192.168.10.200","leaseTime":"12h",
+        "gateway":"192.168.10.1","dns":["1.1.1.1","9.9.9.9"],
+        "reservations":[{"mac":"02:00:00:00:00:50","ip":"192.168.10.50","hostname":"server"}]
       }
     },
     {
-      "id": "iot",
-      "name": "IoT",
-      "type": "vlan",
-      "parent": "br0",
-      "vlanId": 20,
-      "address": "192.168.20.1/24",
-      "mtu": 1500,
-      "dhcp": {
-        "enabled": true,
-        "poolStart": "192.168.20.100",
-        "poolEnd": "192.168.20.199",
-        "leaseTime": "8h",
-        "gateway": "192.168.20.1",
-        "dns": [
-          "192.168.20.1"
-        ],
-        "reservations": []
+      "id":"iot","name":"IoT","interface":"iot-vlan","address":"192.168.20.1/24","gateway":"",
+      "dns":["192.168.20.1"],"domain":"iot.home.arpa",
+      "dhcp":{
+        "enabled":true,"poolStart":"192.168.20.100","poolEnd":"192.168.20.199","leaseTime":"8h",
+        "gateway":"192.168.20.1","dns":["192.168.20.1"],"reservations":[]
       }
     }
   ],
   "firewall": {
-    "defaults": {
-      "input": "drop",
-      "forward": "drop",
-      "output": "accept"
-    },
-    "rules": [
+    "defaults":{"input":"drop","forward":"drop","output":"accept"},
+    "rules":[
       {
-        "id": "lan-out",
-        "position": 10,
-        "enabled": true,
-        "description": "LAN to WAN",
-        "chain": "forward",
-        "inSegment": "lan",
-        "outSegment": "wan",
-        "protocol": "any",
-        "source": "192.168.10.0/24",
-        "destination": "any",
-        "sourcePort": "any",
-        "destinationPort": "any",
-        "action": "accept"
+        "id":"lan-out","position":10,"enabled":true,"description":"LAN to WAN",
+        "chain":"forward","inSegment":"lan","outSegment":"wan","protocol":"any",
+        "source":"192.168.10.0/24","destination":"any","sourcePort":"any","destinationPort":"any","action":"accept"
       },
       {
-        "id": "https-forward",
-        "position": 20,
-        "enabled": true,
-        "description": "Published HTTPS",
-        "chain": "forward",
-        "inSegment": "wan",
-        "outSegment": "lan",
-        "protocol": "tcp",
-        "source": "any",
-        "destination": "192.168.10.50",
-        "sourcePort": "any",
-        "destinationPort": "443",
-        "action": "accept"
+        "id":"https-forward","position":20,"enabled":true,"description":"Published HTTPS",
+        "chain":"forward","inSegment":"wan","outSegment":"lan","protocol":"tcp",
+        "source":"any","destination":"192.168.10.50","sourcePort":"any","destinationPort":"443","action":"accept"
       }
     ],
-    "nat": {
-      "masquerade": [
-        {
-          "id": "lan-masq",
-          "enabled": true,
-          "source": "192.168.10.0/24",
-          "outSegment": "wan"
-        }
-      ],
-      "snat": [],
-      "dnat": [
-        {
-          "id": "https",
-          "enabled": true,
-          "inSegment": "wan",
-          "protocol": "tcp",
-          "destinationPort": "443",
-          "toDestination": "192.168.10.50:443"
-        }
-      ]
+    "nat":{
+      "masquerade":[{"id":"lan-masq","enabled":true,"source":"192.168.10.0/24","outSegment":"wan"}],
+      "snat":[],
+      "dnat":[{"id":"https","enabled":true,"inSegment":"wan","protocol":"tcp","destinationPort":"443","toDestination":"192.168.10.50:443"}]
     }
   },
-  "modules": {
-    "openvpn": false,
-    "tailscale": false,
-    "bind": false,
-    "squid": false,
-    "snort": false,
-    "haproxy": false,
-    "ddns": false
-  }
+  "modules":{"openvpn":false,"tailscale":false,"bind":false,"squid":false,"snort":false,"haproxy":false,"ddns":false}
 }

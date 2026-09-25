@@ -7,7 +7,7 @@ set -eu
 [ "$ID" = alpine ] || { echo "LiteFWM currently targets Alpine Linux only." >&2; exit 1; }
 
 BASE=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd -P)
-PORT=8080
+PORT=5187
 ADMIN=admin
 START_WEB=true
 
@@ -18,7 +18,7 @@ while [ "$#" -gt 0 ]; do
     --no-start) START_WEB=false; shift;;
     -h|--help)
       cat <<'TXT'
-Usage: sudo ./install.sh [--port 8080] [--admin-user admin] [--no-start]
+Usage: sudo ./install.sh [--port 5187] [--admin-user admin] [--no-start]
 
 Installs LiteFWM onto an Alpine Linux target. The installer does not create
 network segments or apply custom firewall/NAT policy. Configure the appliance
@@ -48,6 +48,9 @@ install -m 0755 "$BASE/openrc/litefwm" /etc/init.d/litefwm
 
 if [ ! -r /etc/litefwm/config.json ]; then
   install -m 0640 "$BASE/etc/config.json" /etc/litefwm/config.json
+fi
+if [ "$(jq -r '.version // 1' /etc/litefwm/config.json)" -lt 2 ]; then
+  /usr/local/sbin/configctl migrate
 fi
 jq --argjson port "$PORT" '.management.port=$port' /etc/litefwm/config.json > /etc/litefwm/config.json.tmp
 mv /etc/litefwm/config.json.tmp /etc/litefwm/config.json
@@ -124,8 +127,8 @@ interface until you restrict management to specific segments.
 
 Next:
   1. Sign in to the web console.
-  2. Create WAN/LAN/VLAN/bridge segments.
-  3. Configure DHCP, firewall rules, and NAT.
-  4. Validate.
-  5. Apply changes.
+  2. Configure physical, bridge, and VLAN interfaces.
+  3. Create network segments and DHCP settings.
+  4. Configure firewall rules and NAT.
+  5. Validate and apply changes.
 TXT
