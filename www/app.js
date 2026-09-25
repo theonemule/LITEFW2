@@ -37,9 +37,12 @@ async function load() {
     if (!r.ok) throw new Error(j.error || r.statusText);
     S = j;
     $('#hostName').textContent = S.system.hostname;
-    $('#stamp').textContent = 'live state read ' + new Date().toLocaleTimeString();
+    $('#stamp').textContent = 'Live system state · read ' + new Date().toLocaleTimeString();
+    $('#version').textContent = 'LiteFWM ' + S.system.version;
+    $('#statusDot').classList.add('online'); $('#statusText').textContent = 'Connected';
     render();
   } catch (e) {
+    $('#statusDot').classList.remove('online'); $('#statusText').textContent = 'Error';
     $('#view').replaceChildren(h('div', { class: 'alert alert-danger' }, 'Could not read the system state: ' + e.message));
   }
 }
@@ -72,24 +75,30 @@ function toast(msg, kind) {
 
 // ------------------------------------------------------------------ dialog
 const dlg = () => bootstrap.Modal.getOrCreateInstance($('#dlg'));
+// open the dialog; if the previous one is still fading out, open it once that finishes
+function showDlg() {
+  const el = $('#dlg'), m = dlg();
+  if (m._isTransitioning) el.addEventListener('hidden.bs.modal', () => m.show(), { once: true });
+  else m.show();
+}
 let dlgApply = null;
+const KEEP = Symbol('keep-dialog-open');
 $('#dlgApply').addEventListener('click', async () => {
   if (!dlgApply) return;
   const b = $('#dlgApply'); b.disabled = true; $('#dlgErr').textContent = '';
-  try { await dlgApply(); dlg().hide(); }
+  try { if (await dlgApply() !== KEEP) dlg().hide(); }
   catch (e) { $('#dlgErr').textContent = e.message; }
   finally { b.disabled = false; }
 });
 
-// form(title, fields, onApply(values), {note, applyText})
+// buildFields(fields, initial) -> { body, vals() }   (vals() returns visible fields only)
 // field: {k, label, type: text|number|select|check|multi|list|textarea|password|info, value,
 //         options: [[value,label]], help, placeholder, show: vals => bool}
-function form(title, fields, onApply, o = {}) {
-  const ctl = {};
+function buildFields(fields, initial) {
+  const ctl = {}, wraps = [];
   const body = h('div', {});
-  if (o.note) body.append(h('div', { class: 'alert alert-' + (o.noteKind || 'info') + ' py-2 small' }, o.note));
-  const wraps = [];
-  for (const f of fields) {
+  for (const f0 of fields) {
+    const f = initial && f0.k in initial && f0.type !== 'info' ? Object.assign({}, f0, { value: initial[f0.k] }) : f0;
     const id = 'f_' + f.k;
     let el;
     if (f.type === 'select') {
@@ -117,7 +126,7 @@ function form(title, fields, onApply, o = {}) {
     wraps.push([f, w]);
     body.append(w);
   }
-  const vals = () => {
+  const raw = () => {
     const v = {};
     for (const [k, { f, el }] of Object.entries(ctl)) {
       if (f.type === 'info') continue;
@@ -128,20 +137,27 @@ function form(title, fields, onApply, o = {}) {
     }
     return v;
   };
-  const refresh = () => { const v = vals(); for (const [f, w] of wraps) w.classList.toggle('d-none', !!f.show && !f.show(v)); };
+  const refresh = () => { const v = raw(); for (const [f, w] of wraps) w.classList.toggle('d-none', !!f.show && !f.show(v)); };
   body.addEventListener('change', refresh); body.addEventListener('input', refresh);
   refresh();
+  const vals = () => { const v = raw(); for (const [f] of wraps) if (f.show && !f.show(v)) delete v[f.k]; return v; };
+  return { body, vals };
+}
+function dlgChrome(title, applyText, danger) {
   $('#dlgTitle').textContent = title;
-  $('#dlgBody').replaceChildren(body);
   $('#dlgErr').textContent = '';
-  $('#dlgApply').textContent = o.applyText || 'Apply';
-  $('#dlgApply').className = 'btn ' + (o.danger ? 'btn-danger' : 'btn-primary');
-  dlgApply = () => {
-    const v = vals();
-    for (const [f] of wraps) if (f.show && !f.show(v)) delete v[f.k];
-    return onApply(v);
-  };
-  dlg().show();
+  $('#dlgBack').classList.add('d-none');
+  $('#dlgApply').classList.remove('d-none');
+  $('#dlgApply').textContent = applyText || 'Apply';
+  $('#dlgApply').className = 'btn ' + (danger ? 'btn-danger' : 'btn-primary');
+}
+// form(title, fields, onApply(values), {note, noteKind, applyText, danger})
+function form(title, fields, onApply, o = {}) {
+  const ui = buildFields(fields);
+  dlgChrome(title, o.applyText, o.danger);
+  $('#dlgBody').replaceChildren(h('div', {}, o.note && h('div', { class: 'alert alert-' + (o.noteKind || 'info') + ' py-2 small' }, o.note), ui.body));
+  dlgApply = () => onApply(ui.vals());
+  showDlg();
 }
 const confirmDo = (title, msg, fn, text) => form(title, [], fn, { note: msg, noteKind: 'warning', applyText: text || 'Apply', danger: true });
 
@@ -176,7 +192,7 @@ views.overview = () => {
       stat('Segments', l3().filter(i => i.role !== 'none').length, '#segments'),
       stat('Active leases', S.dhcp.leases.filter(l => !l.expires || l.expires > Date.now() / 1000).length, '#dhcp'),
       stat('Firewall rules', S.firewall.rules.length, '#firewall'),
-      stat('Port forwards', S.firewall.forwards.length, '#forwards')),
+      stat('Port forwards', S.firewall.forwards.length, '#firewall')),
     h('div', { class: 'row g-3' },
       h('div', { class: 'col-lg-5' }, card('System', null, h('div', { class: 'card-body' }, h('dl', { class: 'row mb-0 small' },
         [['Hostname', s.hostname], ['LiteFWM', s.version], ['Alpine', s.alpine], ['Kernel', s.kernel], ['Uptime', upt],
@@ -388,7 +404,7 @@ function ruleTable(chain) {
         btn('Delete', () => confirmDo('Delete rule', `Delete rule ${n + 1}${r.description ? ' "' + r.description + '"' : ''}?`, () => apply('rule.delete', { id: r.id }, 'Rule deleted'), 'Delete'), 'btn-outline-danger')]))),
     chain === 'forward' ? 'No rules: all traffic between segments and to the internet is blocked.' : 'No rules.');
 }
-views.firewall = () => {
+const builtins = () => {
   const w = wan(), s = S.system;
   const lans = l3().filter(i => i.role === 'lan').map(i => disp(i.name)).join(', ') || 'none';
   const implicit = [
@@ -399,13 +415,15 @@ views.firewall = () => {
     ['nat', w ? `Outbound NAT (masquerade) on the WAN ${disp(w.name)}` : 'Outbound NAT: no WAN segment defined'],
     ['drop', `Everything else (policy INPUT ${S.firewall.policies.INPUT || '?'}, FORWARD ${S.firewall.policies.FORWARD || '?'})`]
   ];
-  return [
-    card('Forwarding rules — between segments and to the internet', [btn('Add rule', () => editRule(null, 'forward'), 'btn-primary')], ruleTable('forward')),
-    card('Input rules — traffic to this firewall', [btn('Add rule', () => editRule(null, 'input'), 'btn-primary')], ruleTable('input')),
-    card('Built-in behaviour', [btn('Management access', () => location.hash = '#system')], table(['', 'Rule'],
-      implicit.map(([a, t]) => h('tr', { class: 'implicit' }, h('td', {}, badge(a, a === 'drop' ? 'text-bg-danger' : a === 'nat' ? 'text-bg-info' : 'text-bg-success')), h('td', {}, t)))))
-  ];
+  return implicit;
 };
+const advancedFirewall = () => [
+  card('Forwarding rules (filter FORWARD) — between segments and to the internet', [btn('Add rule', () => editRule(null, 'forward'), 'btn-primary')], ruleTable('forward')),
+  card('Input rules (filter INPUT) — traffic to this firewall', [btn('Add rule', () => editRule(null, 'input'), 'btn-primary')], ruleTable('input')),
+  forwardsTable(),
+  card('Built-in behaviour', [btn('Management access', () => location.hash = '#system')], table(['', 'Rule'],
+    builtins().map(([a, t]) => h('tr', { class: 'implicit' }, h('td', {}, badge(a, a === 'drop' ? 'text-bg-danger' : a === 'nat' ? 'text-bg-info' : 'text-bg-success')), h('td', {}, t)))))
+];
 
 // ---------- port forwards
 function editForward(f) {
@@ -422,7 +440,7 @@ function editForward(f) {
   ], v => isNew ? apply('forward.add', v, 'Port forward added') : apply('forward.update', Object.assign({ id: f.id }, v), 'Port forward updated'),
   { note: 'Forwarded traffic is allowed through the firewall automatically; no extra rule is needed.' });
 }
-views.forwards = () => card('Port forwards (destination NAT)', [btn('Add port forward', () => editForward(null), 'btn-primary')],
+const forwardsTable = () => card('Port forwards (destination NAT, nat PREROUTING)', [btn('Add port forward', () => editForward(null), 'btn-primary')],
   table(['Interface', 'Protocol', 'External port', 'Internal host', 'Sources', 'Description', ''],
     S.firewall.forwards.map(f => h('tr', {},
       h('td', {}, disp(f.in)), h('td', {}, f.proto === 'both' ? 'tcp+udp' : f.proto), h('td', { class: 'mono' }, f.port),
@@ -431,6 +449,262 @@ views.forwards = () => card('Port forwards (destination NAT)', [btn('Add port fo
       h('td', { class: 'text-end text-nowrap' }, f.managed && [btn('Edit', () => editForward(f)), ' ',
         btn('Delete', () => confirmDo('Delete port forward', `Delete the forward of port ${f.port}?`, () => apply('forward.delete', { id: f.id }, 'Port forward deleted'), 'Delete'), 'btn-outline-danger')]))),
     'No port forwards.'));
+
+// ---------- firewall: plain-language view + guided rule wizard
+let fwAdvanced = false;
+const isWan = n => { const w = wan(); return !!w && !!n && n === w.name; };
+const segLabel = n => { const i = I(n); return i && i.label ? i.label : n; };
+function devices() {
+  const m = new Map();
+  for (const r of S.dhcp.reservations) m.set(r.ip, { ip: r.ip, mac: r.mac, name: r.hostname, reserved: true });
+  for (const l of S.dhcp.leases) if (!m.has(l.ip) && !l.reserved) m.set(l.ip, { ip: l.ip, mac: l.mac, name: l.hostname, reserved: false });
+  return [...m.values()].sort((a, b) => ip2int(a.ip) - ip2int(b.ip));
+}
+const hostText = a => { if (!a) return ''; const d = devices().find(x => x.ip === a); return d && d.name ? `${d.name} (${a})` : a; };
+const svcText = (proto, ports) => !proto || proto === 'any' ? 'all traffic' : proto === 'icmp' ? 'ping' : `${proto.toUpperCase()} ${ports || 'all ports'}`;
+const where = (iface, addr, anyText) => {
+  if (isWan(iface)) return addr ? `${hostText(addr)} on the internet` : 'the internet';
+  const seg = iface ? segLabel(iface) : '';
+  if (addr) return seg ? `${hostText(addr)} in ${seg}` : hostText(addr);
+  return seg || anyText;
+};
+function ruleSentence(r) {
+  const verb = r.action === 'accept' ? 'Allow' : 'Block';
+  const from = where(r.in, r.src, 'any segment');
+  const to = r.chain === 'input' ? 'this firewall' : where(r.out, r.dst, 'anywhere');
+  return `${verb} ${from} → ${to} · ${svcText(r.proto, r.ports)}`;
+}
+function forwardSentence(f) {
+  const proto = f.proto === 'both' ? 'TCP+UDP' : f.proto.toUpperCase();
+  const src = f.src ? ` (only from ${f.src})` : '';
+  const via = isWan(f.in) ? 'Internet' : `Traffic arriving on ${segLabel(f.in)}`;
+  return `${via} → ${proto} ${f.port} on this firewall is forwarded to ${hostText(f.to)}${f.toPort ? ' port ' + f.toPort : ''}${src}`;
+}
+const actBadge = a => badge(a === 'accept' ? 'allow' : 'block', a === 'accept' ? 'text-bg-success' : 'text-bg-danger');
+const descOf = s => s.replace(/[^A-Za-z0-9 _.,:/()+#@-]/g, '').replace(/\s+/g, ' ').trim().slice(0, 64);
+
+function ruleItems(rules, emptyText) {
+  if (!rules.length) return h('div', { class: 'card-body text-secondary small' }, emptyText);
+  return h('ol', { class: 'rule-list' }, rules.map((r, n) => h('li', {},
+    h('span', { class: 'num' }, n + 1), r.managed ? actBadge(r.action) : badge('foreign'),
+    h('span', { class: 'what' }, r.managed ? ruleSentence(r) : h('span', { class: 'mono small' }, r.raw), r.managed && r.description && h('small', {}, r.description)),
+    h('span', { class: 'acts' }, r.managed && [btn('Edit', () => editRule(r)),
+      btn('Delete', () => confirmDo('Delete rule', `Delete: ${ruleSentence(r)}?`, () => apply('rule.delete', { id: r.id }, 'Rule deleted'), 'Delete'), 'btn-outline-danger')]))));
+}
+
+views.firewall = () => {
+  const fwd = S.firewall.rules.filter(r => r.chain === 'forward'), inp = S.firewall.rules.filter(r => r.chain === 'input');
+  const head = h('div', { class: 'd-flex flex-wrap gap-2 align-items-center mb-3' },
+    btn('+ New rule…', () => wizard(), 'btn-primary'),
+    h('span', { class: 'small text-secondary' }, 'Guided: pick what you want to achieve and LiteFWM builds the rules.'),
+    h('div', { class: 'form-check form-switch ms-auto' },
+      h('input', { class: 'form-check-input', type: 'checkbox', id: 'advToggle', checked: fwAdvanced, onchange: e => { fwAdvanced = e.target.checked; render(); } }),
+      h('label', { class: 'form-check-label small', for: 'advToggle' }, 'Advanced (manual rules)')));
+  if (fwAdvanced) return [head, advancedFirewall()];
+  const explain = h('div', { class: 'alert alert-light border explain py-2' },
+    h('b', {}, 'Everything is blocked unless allowed. '),
+    h('b', {}, 'Traffic rules'), ' say what devices inside may reach (the internet, other segments). ',
+    h('b', {}, 'Port forwards'), ' open a door from the internet to one device inside. ',
+    h('b', {}, 'Firewall access'), ' covers traffic to the firewall itself. Replies to allowed traffic always come back.');
+  const b = builtins();
+  return [head, explain,
+    card('Traffic rules — what may go where', h('span', { class: 'small text-secondary fw-normal' }, 'checked top to bottom, first match wins'),
+      ruleItems(fwd, 'Nothing is allowed yet: devices cannot reach the internet or each other. Use “New rule…” → “Let devices reach the internet”.')),
+    card('Port forwards — services published to the internet', null, S.firewall.forwards.length
+      ? h('ol', { class: 'rule-list' }, S.firewall.forwards.map((f, n) => h('li', {}, h('span', { class: 'num' }, n + 1), badge('forward', 'text-bg-info'),
+          h('span', { class: 'what' }, f.managed ? forwardSentence(f) : h('span', { class: 'mono small' }, f.raw), f.managed && f.description && h('small', {}, f.description)),
+          h('span', { class: 'acts' }, f.managed && [btn('Edit', () => editForward(f)),
+            btn('Delete', () => confirmDo('Delete port forward', `Delete: ${forwardSentence(f)}?`, () => apply('forward.delete', { id: f.id }, 'Port forward deleted'), 'Delete'), 'btn-outline-danger')]))))
+      : h('div', { class: 'card-body text-secondary small' }, 'Nothing is reachable from the internet. Use “New rule…” → “Publish a service to the internet”.')),
+    card('Access to this firewall', [btn('Management settings', () => location.hash = '#system')], [
+      ruleItems(inp, 'No extra access rules.'),
+      h('ul', { class: 'rule-list border-top' }, b.map(([a, t]) => h('li', { class: 'builtin' }, h('span', { class: 'num' }, ''),
+        badge(a === 'drop' ? 'block' : a === 'nat' ? 'NAT' : 'allow', a === 'drop' ? 'text-bg-secondary' : a === 'nat' ? 'text-bg-info' : 'text-bg-light border'),
+        h('span', { class: 'what' }, t, h('small', {}, 'built in'))))) ])
+  ];
+};
+
+// ----- wizard building blocks
+const SVC = [['any', 'Everything'], ['web', 'Web (HTTP 80 + HTTPS 443)'], ['https', 'HTTPS (443)'], ['http', 'HTTP (80)'], ['ssh', 'SSH (22)'],
+  ['dns', 'DNS (53)'], ['rdp', 'Remote desktop (3389)'], ['ping', 'Ping'], ['custom', 'Other port(s)…']];
+function svcSpec(v) {
+  switch (v.svc) {
+    case 'any': return [{ proto: 'any' }];
+    case 'web': return [{ proto: 'tcp', ports: '80,443' }];
+    case 'https': return [{ proto: 'tcp', ports: '443' }];
+    case 'http': return [{ proto: 'tcp', ports: '80' }];
+    case 'ssh': return [{ proto: 'tcp', ports: '22' }];
+    case 'rdp': return [{ proto: 'tcp', ports: '3389' }];
+    case 'dns': return [{ proto: 'udp', ports: '53' }, { proto: 'tcp', ports: '53' }];
+    case 'ping': return [{ proto: 'icmp' }];
+    default: return (v.cproto === 'both' ? ['tcp', 'udp'] : [v.cproto || 'tcp']).map(p => ({ proto: p, ports: v.cports }));
+  }
+}
+const svcName = v => v.svc === 'custom' ? `${v.cproto === 'both' ? 'TCP+UDP' : (v.cproto || 'tcp').toUpperCase()} ${v.cports}` : SVC.find(s => s[0] === v.svc)[1];
+const svcFields = (exclude = [], dflt = 'any') => [
+  { k: 'svc', label: 'Which traffic?', type: 'select', value: dflt, options: SVC.filter(s => !exclude.includes(s[0])) },
+  { k: 'cproto', label: 'Protocol', type: 'select', value: 'tcp', options: [['tcp', 'TCP'], ['udp', 'UDP'], ['both', 'TCP + UDP']], show: v => v.svc === 'custom' },
+  { k: 'cports', label: 'Port(s)', placeholder: '8080  or  8000-8100  or  80,443', show: v => v.svc === 'custom' }];
+const devOpts = () => devices().map(d => [d.ip, `${d.name || 'unnamed device'} — ${d.ip}${d.reserved ? ' (static)' : ' (dynamic)'}`]);
+function targetFields(p, label, allText) {
+  const opts = [['all', allText]];
+  if (devices().length) opts.push(['device', 'One known device']);
+  opts.push(['addr', 'An IP address or subnet']);
+  return [
+    { k: p + 'scope', label, type: 'select', value: 'all', options: opts },
+    { k: p + 'dev', label: 'Device', type: 'select', options: devOpts(), show: v => v[p + 'scope'] === 'device', help: 'Devices come from DHCP leases and reservations.' },
+    { k: p + 'addr', label: 'IP address or subnet', placeholder: '192.168.10.20  or  192.168.10.0/26', show: v => v[p + 'scope'] === 'addr' }];
+}
+const addrOf = (v, p) => v[p + 'scope'] === 'device' ? v[p + 'dev'] : v[p + 'scope'] === 'addr' ? v[p + 'addr'] : '';
+const lanOpts = () => l3().filter(i => i.role === 'lan').map(i => [i.name, `${disp(i.name)}${i.addresses.length ? ' · ' + i.addresses.join(' ') : ''}`]);
+const need = (cond, msg) => { if (!cond) throw new Error(msg); };
+const ruleItem = (body, position) => {
+  const b = Object.assign({}, body); if (position !== undefined) b.position = position;
+  for (const k of Object.keys(b)) if (b[k] === '' || b[k] === undefined) delete b[k];
+  return { op: 'rule.add', body: b, text: ruleSentence(Object.assign({ proto: 'any' }, body)) };
+};
+const pre = {
+  lan: () => lanOpts().length ? null : 'There are no LAN segments yet. Give an interface the LAN role on the Network segments page first.',
+  wan: () => wan() ? null : 'No interface has the WAN role, so there is no internet side. Set one on the Network segments page first.'
+};
+
+const INTENTS = [
+  { id: 'internet', ico: '🌐', title: 'Let devices reach the internet',
+    desc: 'A whole segment, or one device, may go out to the internet — everything or only some services.',
+    pre: () => pre.lan() || pre.wan(),
+    fields: () => [{ k: 'from', label: 'From which segment?', type: 'select', options: lanOpts() },
+      ...targetFields('s', 'Which devices in it?', 'Every device in the segment'), ...svcFields()],
+    plan: v => {
+      const src = addrOf(v, 's'); need(v.sscope === 'all' || src, 'Choose a device or enter an address.');
+      return { items: svcSpec(v).map(s => ruleItem({ chain: 'forward', action: 'accept', in: v.from, out: wan().name, src, proto: s.proto, ports: s.ports,
+        description: descOf(`${src ? hostText(src) : segLabel(v.from)} to internet - ${svcName(v)}`) })),
+        notes: ['Outgoing traffic is translated to the WAN address automatically (NAT); no extra rule is needed.'] };
+    } },
+  { id: 'between', ico: '🔀', title: 'Let one segment reach another',
+    desc: 'e.g. the LAN may use the printer in IoT, or the DMZ may reach a database in the LAN.',
+    pre: () => lanOpts().length >= 2 ? null : 'You need at least two LAN segments for this.',
+    fields: () => [{ k: 'from', label: 'From which segment?', type: 'select', options: lanOpts() },
+      { k: 'to', label: 'To which segment?', type: 'select', options: lanOpts(), value: (lanOpts()[1] || [])[0] },
+      ...targetFields('d', 'Which devices there?', 'Every device in that segment'), ...svcFields(),
+      { k: 'reverse', label: 'Also allow the other direction', type: 'check', help: 'Replies are always allowed. Only tick this if devices on the other side must start connections too.' }],
+    plan: v => {
+      need(v.from !== v.to, 'Pick two different segments.');
+      const dst = addrOf(v, 'd'); need(v.dscope === 'all' || dst, 'Choose a device or enter an address.');
+      const items = svcSpec(v).map(s => ruleItem({ chain: 'forward', action: 'accept', in: v.from, out: v.to, dst, proto: s.proto, ports: s.ports,
+        description: descOf(`${segLabel(v.from)} to ${dst ? hostText(dst) : segLabel(v.to)} - ${svcName(v)}`) }));
+      if (v.reverse) svcSpec(v).forEach(s => items.push(ruleItem({ chain: 'forward', action: 'accept', in: v.to, out: v.from, src: dst, proto: s.proto, ports: s.ports,
+        description: descOf(`${dst ? hostText(dst) : segLabel(v.to)} to ${segLabel(v.from)} - ${svcName(v)}`) })));
+      return { items, notes: [] };
+    } },
+  { id: 'block', ico: '⛔', title: 'Block something',
+    desc: 'Stop a device or segment from reaching the internet, another segment or a specific address — even if another rule allows it.',
+    pre: () => pre.lan(),
+    fields: () => [{ k: 'from', label: 'Whose traffic?', type: 'select', options: [['', 'Any segment']].concat(lanOpts()) },
+      ...targetFields('s', 'Which devices?', 'Every device'),
+      { k: 'to', label: 'Going where?', type: 'select', value: wan() ? 'internet' : 'anywhere',
+        options: (wan() ? [['internet', 'The internet']] : []).concat(lanOpts().map(([n, l]) => ['seg:' + n, 'Segment ' + l]), [['addr', 'A specific IP address or subnet'], ['anywhere', 'Anywhere']]) },
+      { k: 'taddr', label: 'Destination IP or subnet', placeholder: '8.8.8.8  or  10.20.0.0/16', show: v => v.to === 'addr' },
+      ...svcFields(),
+      { k: 'how', label: 'How to block', type: 'select', value: 'reject', options: [['reject', 'Reject (the device gets an immediate “refused”)'], ['drop', 'Drop silently']] }],
+    plan: v => {
+      const src = addrOf(v, 's'); need(v.sscope === 'all' || src, 'Choose a device or enter an address.');
+      need(v.to !== 'addr' || v.taddr, 'Enter the destination address.');
+      const out = v.to === 'internet' ? wan().name : v.to.startsWith('seg:') ? v.to.slice(4) : '';
+      const dst = v.to === 'addr' ? v.taddr : '';
+      const tgt = v.to === 'internet' ? 'internet' : out ? segLabel(out) : dst || 'anywhere';
+      return { items: svcSpec(v).map(s => ruleItem({ chain: 'forward', action: v.how, in: v.from, out, src, dst, proto: s.proto, ports: s.ports,
+        description: descOf(`block ${src ? hostText(src) : v.from ? segLabel(v.from) : 'all'} to ${tgt} - ${svcName(v)}`) }, 0)),
+        notes: ['Block rules are placed at the top of the list so they win over allow rules.'] };
+    } },
+  { id: 'publish', ico: '📡', title: 'Publish a service to the internet (port forward)',
+    desc: 'Make a device inside reachable from outside, e.g. a reverse proxy or web server on 443.',
+    pre: () => pre.wan(),
+    fields: () => [
+      { k: 'dev', label: 'Which device inside?', type: 'select', options: devOpts().concat([['other', 'Another address…']]) },
+      { k: 'addr', label: 'Internal IP address', placeholder: '192.168.10.20', show: v => v.dev === 'other' },
+      { k: 'static', label: 'Also make this device’s address static (DHCP reservation)', type: 'check', value: true,
+        show: v => { const d = devices().find(x => x.ip === v.dev); return !!d && !d.reserved; },
+        help: 'Recommended: otherwise the device can get a different address and the forward stops working.' },
+      ...svcFields(['any', 'ping'], 'web'),
+      { k: 'ext', label: 'Public port (optional)', placeholder: 'same as the service port',
+        show: v => ['https', 'http', 'ssh', 'rdp'].includes(v.svc) || (v.svc === 'custom' && /^\d+$/.test(v.cports || '')),
+        help: 'Use a different outside port, e.g. 2222 on the internet → 22 on the device.' },
+      { k: 'src', label: 'Only reachable from (optional)', placeholder: 'anyone — or an IP / subnet, e.g. your office' }],
+    plan: v => {
+      const to = v.dev === 'other' ? v.addr : v.dev; need(to, 'Choose a device or enter its address.');
+      const specs = svcSpec(v); need(v.svc !== 'custom' || v.cports, 'Enter the port(s).');
+      const items = [];
+      const d = devices().find(x => x.ip === to);
+      if (v.static && d && !d.reserved) items.push({ op: 'reservation.add', body: { mac: d.mac, ip: d.ip, hostname: d.name || undefined },
+        text: `Reserve ${d.ip} for ${d.name || d.mac} (always the same address)` });
+      const protoOf = s => specs.length > 1 ? 'both' : s.proto;
+      for (const port of specs[0].ports.split(',')) {
+        const single = /^\d+$/.test(port);
+        const body = { proto: protoOf(specs[0]), port: v.ext && single ? v.ext : port, to, src: v.src || undefined,
+          description: descOf(`${svcName(v)} to ${hostText(to)}`) };
+        if (v.ext && single && v.ext !== port) body.toPort = port;
+        items.push({ op: 'forward.add', body, text: forwardSentence(Object.assign({ in: wan().name, toPort: '', src: '' }, body)) });
+      }
+      return { items, notes: ['Forwarded traffic is allowed through the firewall automatically; no extra traffic rule is needed.'] };
+    } },
+  { id: 'fwaccess', ico: '🛡️', title: 'Allow access to this firewall',
+    desc: 'e.g. answer ping on the WAN, or reach a service running on the firewall. Web UI and SSH access are under System.',
+    fields: () => [{ k: 'from', label: 'From where?', type: 'select', options: [['', 'Anywhere']].concat(l3().map(i => [i.name, `${disp(i.name)}${i.role !== 'none' ? ' · ' + i.role.toUpperCase() : ''}`])) },
+      ...targetFields('s', 'Which sources?', 'Everyone there'), ...svcFields(['any', 'web', 'http', 'https', 'ssh'], 'ping')],
+    plan: v => {
+      const src = addrOf(v, 's'); need(v.sscope === 'all' || src, 'Choose a device or enter an address.');
+      return { items: svcSpec(v).map(s => ruleItem({ chain: 'input', action: 'accept', in: v.from, src, proto: s.proto, ports: s.ports,
+        description: descOf(`${src || (v.from ? segLabel(v.from) : 'anywhere')} to firewall - ${svcName(v)}`) })), notes: [] };
+    } }
+];
+
+// dialog body from any mix of nodes and (nested) arrays
+const setBody = (...kids) => $('#dlgBody').replaceChildren(h('div', {}, kids));
+function wizard(startId) {
+  let intent = null, vals = null, ui = null;
+  const names = ['What do you want to do?', 'Details', 'Review'];
+  const steps = n => h('div', { class: 'steps' }, names.map((s, i) => [i ? '  ›  ' : '', h('span', { class: i === n ? 'on' : '' }, `${i + 1}. ${s}`)]));
+  const back = $('#dlgBack'), next = $('#dlgApply');
+  const chooseIntent = () => {
+    dlgChrome('New rule');
+    next.classList.add('d-none'); dlgApply = null;
+    setBody(steps(0),
+      INTENTS.map(it => h('button', { type: 'button', class: 'intent', 'data-intent': it.id, onclick: () => { intent = it; vals = null; details(); } },
+        h('span', { class: 'ico' }, it.ico), h('span', {}, h('b', {}, it.title), h('span', { class: 'd' }, it.desc)))),
+      h('div', { class: 'small text-secondary mt-2' }, 'Need something else? Switch the Firewall page to Advanced to write rules by hand.'));
+  };
+  const details = () => {
+    dlgChrome('New rule — ' + intent.title, 'Next');
+    back.classList.remove('d-none'); back.onclick = chooseIntent;
+    const blocked = intent.pre && intent.pre();
+    if (blocked) {
+      next.classList.add('d-none'); dlgApply = null;
+      setBody(steps(1), h('div', { class: 'alert alert-warning' }, blocked));
+      return;
+    }
+    ui = buildFields(intent.fields(), vals);
+    setBody(steps(1), ui.body);
+    dlgApply = async () => { vals = ui.vals(); review(intent.plan(vals)); return KEEP; };
+  };
+  const review = p => {
+    dlgChrome('New rule — review', p.items.length > 1 ? `Create ${p.items.length} changes` : 'Create');
+    back.classList.remove('d-none'); back.onclick = details;
+    setBody(steps(2),
+      h('p', { class: 'mb-2' }, 'LiteFWM will apply these changes to the firewall now:'),
+      h('ol', { class: 'review' }, p.items.map(it => h('li', {}, it.text, h('div', {}, h('code', {}, `${it.op} ${JSON.stringify(it.body)}`))))),
+      p.notes.map(n => h('div', { class: 'alert alert-info py-2 small mb-2' }, n)));
+    dlgApply = async () => {
+      let n = 0;
+      try { for (const it of p.items) { await op(it.op, it.body); n++; } }
+      catch (e) { await load(); throw new Error((n ? `${n} of ${p.items.length} changes were applied, then: ` : '') + e.message); }
+      toast(p.items.length > 1 ? `${p.items.length} changes applied` : 'Applied', 'success');
+      await load();
+    };
+  };
+  const it = INTENTS.find(x => x.id === startId);
+  if (it) { intent = it; details(); } else chooseIntent();
+  showDlg();
+}
 
 // ---------- system
 views.system = () => {
@@ -468,11 +742,21 @@ views.system = () => {
 // ------------------------------------------------------------------ router
 function render() {
   if (!S) return;
-  const v = (location.hash || '#overview').slice(1);
-  const fn = views[v] || views.overview;
-  document.querySelectorAll('#navLinks .nav-link').forEach(a => a.classList.toggle('active', a.getAttribute('href') === '#' + v));
-  $('#view').replaceChildren(...[fn()].flat(Infinity));
+  let v = (location.hash || '#overview').slice(1);
+  v = ALIAS[v] || v;
+  if (!views[v]) v = 'overview';
+  document.querySelectorAll('#sideNav .nav-link, #mobileNavLinks .nav-link').forEach(a => a.classList.toggle('active', a.getAttribute('href') === '#' + v));
+  const link = document.querySelector(`#sideNav a[href="#${v}"]`);
+  $('#pageTitle').textContent = link ? link.textContent : '';
+  $('#view').replaceChildren(...[views[v]()].flat(Infinity));
 }
+const ALIAS = { forwards: 'firewall', rules: 'firewall' };
+// the offcanvas menu (small screens) carries the same links as the sidebar
+$('#mobileNavLinks').replaceChildren(...[...document.querySelectorAll('#sideNav .nav-link')].map(a => {
+  const c = a.cloneNode(true);
+  c.addEventListener('click', () => { const o = bootstrap.Offcanvas.getInstance($('#mobileNav')); if (o) o.hide(); });
+  return c;
+}));
 window.addEventListener('hashchange', load);
 $('#refresh').addEventListener('click', load);
 load();

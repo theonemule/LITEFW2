@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" data-bs-theme="light">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
@@ -9,27 +9,53 @@
   <link rel="stylesheet" href="/app.css">
 </head>
 <body>
-<nav class="navbar navbar-expand-lg navbar-dark bg-dark">
-  <div class="container-fluid">
-    <a class="navbar-brand fw-semibold" href="#overview">LiteFWM <span id="hostName" class="fw-normal text-secondary small"></span></a>
-    <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#nav"><span class="navbar-toggler-icon"></span></button>
-    <div class="collapse navbar-collapse" id="nav">
-      <ul class="navbar-nav me-auto" id="navLinks">
-        <li class="nav-item"><a class="nav-link" href="#overview">Overview</a></li>
-        <li class="nav-item"><a class="nav-link" href="#interfaces">Interfaces</a></li>
-        <li class="nav-item"><a class="nav-link" href="#segments">Segments</a></li>
-        <li class="nav-item"><a class="nav-link" href="#dhcp">DHCP</a></li>
-        <li class="nav-item"><a class="nav-link" href="#dns">DNS</a></li>
-        <li class="nav-item"><a class="nav-link" href="#firewall">Firewall</a></li>
-        <li class="nav-item"><a class="nav-link" href="#forwards">Port forwards</a></li>
-        <li class="nav-item"><a class="nav-link" href="#system">System</a></li>
-      </ul>
-      <span class="navbar-text small me-3" id="stamp"></span>
-      <button class="btn btn-sm btn-outline-light" id="refresh">Refresh</button>
+<div class="d-flex min-vh-100">
+  <aside class="sidebar d-none d-lg-flex flex-column p-3">
+    <a class="brand text-decoration-none" href="#overview">
+      <span class="brand-mark">F</span>
+      <span><strong>LiteFWM</strong><small class="d-block">Light Firewall Manager</small></span>
+    </a>
+    <nav class="nav nav-pills flex-column gap-1 mt-4" id="sideNav">
+      <a class="nav-link" href="#overview">Overview</a>
+      <a class="nav-link" href="#interfaces">Interfaces</a>
+      <a class="nav-link" href="#segments">Network segments</a>
+      <a class="nav-link" href="#firewall">Firewall &amp; port forwards</a>
+      <a class="nav-link" href="#dhcp">DHCP</a>
+      <a class="nav-link" href="#dns">DNS</a>
+      <a class="nav-link" href="#system">System</a>
+    </nav>
+    <div class="mt-auto small text-secondary">
+      <div><span id="statusDot" class="status-dot"></span><span id="statusText">Connecting</span></div>
+      <div class="mt-2" id="stamp">Live system state</div>
+      <div id="version"></div>
     </div>
+  </aside>
+
+  <main class="flex-grow-1 min-w-0">
+    <header class="topbar border-bottom sticky-top px-3 px-md-4 d-flex align-items-center gap-2">
+      <button class="btn btn-sm btn-outline-secondary d-lg-none" type="button" data-bs-toggle="offcanvas" data-bs-target="#mobileNav" id="menuBtn">Menu</button>
+      <div>
+        <div class="small text-uppercase text-secondary fw-semibold">LiteFWM</div>
+        <h1 id="pageTitle" class="h5 mb-0">Overview</h1>
+      </div>
+      <div class="ms-auto d-flex align-items-center gap-2">
+        <span id="hostName" class="small text-secondary d-none d-sm-inline"></span>
+        <button id="refresh" class="btn btn-sm btn-outline-secondary" type="button">Refresh</button>
+      </div>
+    </header>
+    <section id="view" class="content-wrap p-3 p-md-4"><div class="text-secondary">Reading live state…</div></section>
+  </main>
+</div>
+
+<div class="offcanvas offcanvas-start" tabindex="-1" id="mobileNav">
+  <div class="offcanvas-header">
+    <div><strong>LiteFWM</strong><div class="small text-secondary">Light Firewall Manager</div></div>
+    <button class="btn-close" type="button" data-bs-dismiss="offcanvas"></button>
   </div>
-</nav>
-<main class="container-fluid py-3" id="view"><div class="text-secondary">Reading live state…</div></main>
+  <div class="offcanvas-body">
+    <nav class="nav nav-pills flex-column gap-1" id="mobileNavLinks"></nav>
+  </div>
+</div>
 
 <div class="modal fade" id="dlg" tabindex="-1">
   <div class="modal-dialog modal-lg modal-dialog-scrollable">
@@ -38,6 +64,7 @@
       <div class="modal-body" id="dlgBody"></div>
       <div class="modal-footer">
         <div class="me-auto small text-danger" id="dlgErr"></div>
+        <button type="button" class="btn btn-outline-secondary d-none" id="dlgBack">Back</button>
         <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
         <button type="button" class="btn btn-primary" id="dlgApply">Apply</button>
       </div>
