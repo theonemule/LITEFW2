@@ -56,6 +56,7 @@ chmod 0640 /etc/litefwm/config.json
 if [ ! -s /etc/litefwm/htpasswd ]; then
   password=$(head -c 24 /dev/urandom | base64 | tr -dc 'A-Za-z0-9' | head -c 18)
   htpasswd -bc /etc/litefwm/htpasswd "$ADMIN" "$password" >/dev/null
+  chown root:lighttpd /etc/litefwm/htpasswd
   chmod 0640 /etc/litefwm/htpasswd
   cat <<TXT
 
@@ -68,6 +69,8 @@ Change it with:
 
 TXT
 fi
+chown root:lighttpd /etc/litefwm/htpasswd
+chmod 0640 /etc/litefwm/htpasswd
 
 cat > /etc/sudoers.d/litefwm-web <<'SUDOERS'
 lighttpd ALL=(root) NOPASSWD: /usr/local/sbin/apictl *
