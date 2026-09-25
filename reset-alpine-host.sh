@@ -1,6 +1,7 @@
 #!/bin/sh
-# Reset a dedicated Alpine LiteVMM test host to a near-fresh state.
-# Keeps the Alpine base system and OpenSSH. Git is kept by default.
+# Reset a dedicated Alpine LiteVMM/LiteFWM test host to a near-fresh state.
+# Keeps the Alpine base system, OpenSSH, the admin account, and one DHCP uplink.
+# Git is kept by default.
 # If invoked through sudo, sudo is also kept to avoid locking out the admin user.
 set -eu
 umask 022
@@ -13,16 +14,22 @@ usage() {
     cat <<'EOF'
 Usage: reset-alpine-host.sh [--yes] [--no-git] [--keep-sudo|--purge-sudo]
 
-Destructively removes the installed LiteVMM/VMAPI stack from an Alpine host:
-  - stops LiteVMM, VM, Docker, Lighttpd, NFS and tunnel processes
-  - removes LiteVMM bridges/TAPs, mounts, services, binaries, config and data
-  - removes Docker state, LiteVMM certificates and Let's Encrypt state
-  - removes the vmapi user/groups and LiteVMM cron entries
-  - purges packages installed by the LiteVMM Alpine installer
+Destructively resets a dedicated Alpine LiteVMM/LiteFWM development host:
+  - stops LiteVMM, LiteFWM, VM, Docker, Lighttpd, NFS and tunnel processes
+  - flushes appliance firewall/NAT rules back to permissive defaults
+  - removes every non-loopback, non-physical network link
+  - restores the primary physical NIC to DHCP and rewrites Alpine networking
+  - removes LiteVMM/LiteFWM services, binaries, configuration and state
+  - removes Docker/container state, certificates, VM state and generated data
+  - purges packages installed by LiteVMM/LiteFWM
   - leaves Alpine base + OpenSSH + CA certificates; Git is kept by default
-  - keeps sudo automatically when the script was invoked through sudo
+  - keeps sudo automatically when invoked through sudo
 
-This script is intended for disposable/dedicated LiteVMM development VMs.
+The primary physical NIC is selected from the current default-route device when
+possible, otherwise the first hardware-backed Ethernet device. The reset writes
+/etc/network/interfaces with loopback plus DHCP on that NIC.
+
+This script is intended for disposable/dedicated Alpine development hosts.
 EOF
 }
 
@@ -69,10 +76,10 @@ if [ "$ASSUME_YES" -ne 1 ]; then
     cat >&2 <<'EOF'
 This is DESTRUCTIVE.
 
-It deletes all LiteVMM VMs, disks, backups, replicas, peer state, Docker
-containers/images/volumes, certificates, generated web configuration and
-installed LiteVMM tooling from this host. It also purges the packages that
-LiteVMM installs through APK.
+It deletes all LiteVMM/LiteFWM state, VMs, disks, backups, replicas, peer
+state, Docker containers/images/volumes, certificates, generated web/network
+configuration and installed appliance tooling. It also removes non-physical
+network devices and restores the primary physical NIC to DHCP.
 
 The source checkout containing this script is NOT deleted.
 EOF
@@ -89,6 +96,134 @@ service_stop_disable() {
     if command -v rc-update >/dev/null 2>&1; then
         rc-update del "$svc" default >/dev/null 2>&1 || true
         rc-update del "$svc" boot >/dev/null 2>&1 || true
+    fi
+}
+
+
+is_physical_link() {
+    name=$1
+    [ "$name" != lo ] && [ -e "/sys/class/net/$name/device" ]
+}
+
+select_primary_nic() {
+    default_dev=''
+    if command -v ip >/dev/null 2>&1; then
+        default_dev=$(ip route show default 2>/dev/null | awk 'NR==1 {print $5}')
+    fi
+
+    if [ -n "$default_dev" ] && is_physical_link "$default_dev"; then
+        printf '%s
+' "$default_dev"
+        return 0
+    fi
+
+    # If the default route lives on a bridge, prefer a physical member.
+    if [ -n "$default_dev" ] && command -v ip >/dev/null 2>&1; then
+        for name in $(ip -o link show master "$default_dev" 2>/dev/null | awk -F': ' '{print $2}' | cut -d@ -f1); do
+            if is_physical_link "$name"; then
+                printf '%s
+' "$name"
+                return 0
+            fi
+        done
+    fi
+
+    for path in /sys/class/net/*; do
+        [ -e "$path" ] || continue
+        name=$(basename "$path")
+        if is_physical_link "$name"; then
+            printf '%s
+' "$name"
+            return 0
+        fi
+    done
+
+    return 1
+}
+
+flush_firewall_state() {
+    if command -v iptables >/dev/null 2>&1; then
+        iptables -P INPUT ACCEPT >/dev/null 2>&1 || true
+        iptables -P FORWARD ACCEPT >/dev/null 2>&1 || true
+        iptables -P OUTPUT ACCEPT >/dev/null 2>&1 || true
+        for table in filter nat mangle raw security; do
+            iptables -t "$table" -F >/dev/null 2>&1 || true
+            iptables -t "$table" -X >/dev/null 2>&1 || true
+        done
+    fi
+    if command -v nft >/dev/null 2>&1; then
+        nft flush ruleset >/dev/null 2>&1 || true
+    fi
+}
+
+delete_nonphysical_links() {
+    command -v ip >/dev/null 2>&1 || return 0
+
+    # Detach physical NICs from any old bridges first. Never delete hardware
+    # backed interfaces or loopback.
+    for path in /sys/class/net/*; do
+        [ -e "$path" ] || continue
+        name=$(basename "$path")
+        is_physical_link "$name" || continue
+        ip link set dev "$name" nomaster >/dev/null 2>&1 || true
+        ip link set dev "$name" up >/dev/null 2>&1 || true
+    done
+
+    # Delete deepest/ephemeral links first, then bridges. Repeating the pass
+    # handles dependencies such as VLAN-on-bridge and veth-on-bridge.
+    pass=0
+    while [ "$pass" -lt 3 ]; do
+        for path in /sys/class/net/*; do
+            [ -e "$path" ] || continue
+            name=$(basename "$path")
+            [ "$name" = lo ] && continue
+            is_physical_link "$name" && continue
+            ip link delete dev "$name" >/dev/null 2>&1 || true
+        done
+        pass=$((pass + 1))
+    done
+}
+
+restore_alpine_dhcp() {
+    nic=$1
+    [ -n "$nic" ] || die "Could not identify a physical NIC to restore to DHCP"
+
+    log "Restoring Alpine networking on $nic using DHCP"
+
+    mkdir -p /etc/network/interfaces.d
+    rm -f /etc/network/interfaces.d/* 2>/dev/null || true
+    cat > /etc/network/interfaces <<EOF
+auto lo
+iface lo inet loopback
+
+auto $nic
+iface $nic inet dhcp
+EOF
+
+    # Remove known appliance networking hooks/config fragments while leaving
+    # Alpine's stock ifup/down machinery intact.
+    rm -f         /etc/network/if-up.d/litevmm*         /etc/network/if-down.d/litevmm*         /etc/network/if-up.d/litefwm*         /etc/network/if-down.d/litefwm*         /etc/sysctl.d/litevmm*.conf         /etc/sysctl.d/litefwm*.conf         /etc/sysctl.d/vmapi*.conf         2>/dev/null || true
+
+    ip link set dev "$nic" nomaster >/dev/null 2>&1 || true
+    ip link set dev "$nic" up >/dev/null 2>&1 || true
+
+    # Clear stale addresses/routes from the physical NIC before asking the LAN
+    # DHCP server for a fresh lease. The host is expected to receive its normal
+    # reservation (10.0.1.184 in the current lab).
+    ip addr flush dev "$nic" scope global >/dev/null 2>&1 || true
+    ip route flush dev "$nic" >/dev/null 2>&1 || true
+
+    killall udhcpc >/dev/null 2>&1 || true
+    if command -v udhcpc >/dev/null 2>&1; then
+        udhcpc -i "$nic" -q -n -t 12 -T 2 >/dev/null 2>&1 ||
+            warn "Immediate DHCP renewal failed; Alpine networking service will retry."
+    fi
+
+    if command -v rc-update >/dev/null 2>&1; then
+        rc-update add networking boot >/dev/null 2>&1 || true
+    fi
+    if command -v rc-service >/dev/null 2>&1; then
+        rc-service networking restart >/dev/null 2>&1 || true
     fi
 }
 
@@ -188,6 +323,16 @@ docker-stop docker-restart docker-delete
     fi
 }
 
+remove_litefwm_state() {
+    for svc in litefwm lighttpd dnsmasq named squid snort haproxy openvpn tailscaled ddclient; do
+        service_stop_disable "$svc"
+    done
+
+    rm -f         /etc/init.d/litefwm         /etc/sudoers.d/litefwm-web         /usr/local/sbin/apictl         /usr/local/sbin/capturectl         /usr/local/sbin/configctl         /usr/local/sbin/ddnsctl         /usr/local/sbin/dhcpctl         /usr/local/sbin/diagctl         /usr/local/sbin/firewallctl         /usr/local/sbin/fwmctl         /usr/local/sbin/logctl         /usr/local/sbin/metricsctl         /usr/local/sbin/modulecfgctl         /usr/local/sbin/modulectl         /usr/local/sbin/netctl         /usr/local/sbin/setupctl         /usr/local/sbin/webctl         2>/dev/null || true
+
+    rm -rf         /etc/litefwm         /usr/share/litefwm         /usr/lib/litefwm         /var/lib/litefwm         /var/log/litefwm         /run/litefwm         2>/dev/null || true
+}
+
 remove_vmapi_account() {
     if command -v deluser >/dev/null 2>&1; then
         deluser vmapi >/dev/null 2>&1 || true
@@ -212,7 +357,9 @@ purge_litevmm_packages() {
 bash coreutils findutils gawk grep sed shadow util-linux iproute2 iputils curl
 openssl sudo tar gzip zip jq fcgiwrap spawn-fcgi lighttpd lighttpd-openrc
 lighttpd-mod_auth apache2-utils openssh-client-default
-iptables nftables socat kmod tcpdump qemu-img qemu-system-x86_64 ovmf novnc
+iptables nftables socat kmod tcpdump dnsmasq dnsmasq-openrc bind bind-openrc
+openvpn openvpn-openrc tailscale tailscale-openrc squid squid-openrc snort haproxy
+haproxy-openrc ddclient ddclient-openrc qemu-img qemu-system-x86_64 ovmf novnc
 ttyd xorriso nfs-utils docker docker-openrc docker-cli-compose certbot
 '
 
@@ -230,7 +377,10 @@ ttyd xorriso nfs-utils docker docker-openrc docker-cli-compose certbot
     fi
 }
 
-log "Stopping LiteVMM workloads and services"
+PRIMARY_NIC=$(select_primary_nic) || die "No physical Ethernet interface was detected"
+log "Primary physical NIC selected for DHCP restore: $PRIMARY_NIC"
+
+log "Stopping LiteVMM/LiteFWM workloads and services"
 
 if [ -x /usr/local/bin/vmapi-stopall ]; then
     /usr/local/bin/vmapi-stopall >/dev/null 2>&1 || true
@@ -249,7 +399,8 @@ for svc in \
     vmapi-replication vmapi-overlay vmapi-network vmapi-autostart \
     vmapi-console-gc ttyd-vmapi ttyd-host-vmapi \
     vmapi-backplane vmapi-backplane-server fcgiwrap-vmapi \
-    websockify-vmapi docker lighttpd nfs nfs-server
+    websockify-vmapi docker lighttpd litefwm dnsmasq named squid snort haproxy \
+    openvpn tailscaled ddclient nfs nfs-server
 do
     service_stop_disable "$svc"
 done
@@ -273,6 +424,12 @@ fi
 unmount_vmapi
 remove_cron_entries
 remove_tun_module_line
+remove_litefwm_state
+
+log "Resetting firewall and network devices"
+flush_firewall_state
+delete_nonphysical_links
+restore_alpine_dhcp "$PRIMARY_NIC"
 
 log "Removing LiteVMM OpenRC services, binaries and configuration"
 
@@ -321,7 +478,9 @@ rm -rf \
     /etc/letsencrypt \
     /var/lib/letsencrypt \
     /var/log/letsencrypt \
-    /var/lib/nfs
+    /var/lib/nfs \
+    /etc/cni \
+    /var/lib/cni
 
 remove_vmapi_account
 
@@ -356,5 +515,6 @@ printf 'Kept packages: Alpine base, OpenSSH, CA certificates'
 [ "$KEEP_GIT" -eq 1 ] && printf ', Git'
 [ "$KEEP_SUDO" -eq 1 ] && printf ', sudo'
 printf '.\n'
-printf 'LiteVMM installed state and package footprint have been removed.\n'
+printf 'LiteVMM/LiteFWM installed state and package footprint have been removed.\n'
+printf 'The primary NIC was restored to Alpine DHCP networking.\n'
 printf 'The source checkout was intentionally left in place so install.sh can be run again.\n'
