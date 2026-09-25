@@ -1,129 +1,106 @@
 #!/bin/sh
+# Install LiteFWM onto a dedicated Alpine Linux host and turn it into the
+# appliance: LiteFWM owns networking, the firewall, dnsmasq and the web server.
+# The current network configuration is kept exactly as it is running now.
 set -eu
-
-[ "$(id -u)" -eq 0 ] || { echo "Run as root: sudo ./install.sh" >&2; exit 1; }
-[ -r /etc/os-release ] || { echo "Unsupported host: /etc/os-release missing" >&2; exit 1; }
+usage() {
+  cat <<'TXT'
+Usage: sudo ./install.sh [--port 80] [--admin-user admin] [--no-start]
+TXT
+}
+[ "$(id -u)" -eq 0 ] || { echo "run as root" >&2; exit 1; }
 . /etc/os-release
-[ "$ID" = alpine ] || { echo "LiteFWM currently targets Alpine Linux only." >&2; exit 1; }
-
-BASE=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd -P)
-PORT=5187
-ADMIN=admin
-START_WEB=true
-
-while [ "$#" -gt 0 ]; do
+[ "${ID:-}" = alpine ] || { echo "LiteFWM is an Alpine Linux appliance" >&2; exit 1; }
+BASE=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd -P)
+PORT=80; ADMIN="admin"; START=yes
+while [ $# -gt 0 ]; do
   case "$1" in
     --port) PORT=$2; shift 2;;
     --admin-user) ADMIN=$2; shift 2;;
-    --no-start) START_WEB=false; shift;;
-    -h|--help)
-      cat <<'TXT'
-Usage: sudo ./install.sh [--port 5187] [--admin-user admin] [--no-start]
-
-Installs LiteFWM onto an Alpine Linux target. LiteFWM reads the running Linux
-network/firewall/service state directly. Changes made in the UI are applied
-immediately and persisted to the native Alpine/service configuration files.
-TXT
-      exit 0;;
-    *) echo "Unknown option: $1" >&2; exit 2;;
+    --no-start) START=no; shift;;
+    -h|--help) usage; exit 0;;
+    *) usage >&2; exit 2;;
   esac
 done
+case "$PORT" in ''|*[!0-9]*) echo "invalid port" >&2; exit 2;; esac
+printf '%s' "$ADMIN" | grep -Eq '^[A-Za-z0-9_.-]{1,32}$' || { echo "invalid admin user" >&2; exit 2; }
 
-case "$PORT" in *[!0-9]*|'') echo "Invalid management port" >&2; exit 2;; esac
-[ "$PORT" -ge 1 ] && [ "$PORT" -le 65535 ] || { echo "Invalid management port" >&2; exit 2; }
-printf '%s' "$ADMIN" | grep -Eq '^[A-Za-z0-9_.-]+$' || { echo "Invalid admin user" >&2; exit 2; }
+echo "==> packages"
+apk add --no-cache ifupdown-ng iproute2 iptables dnsmasq jq lighttpd lighttpd-mod_auth \
+  apache2-utils sudo busybox-openrc >/dev/null
 
-echo "Installing LiteFWM base dependencies..."
-apk update
-apk add --no-cache   bash jq iproute2 iptables dnsmasq tcpdump curl ca-certificates procps   lighttpd lighttpd-openrc lighttpd-mod_auth apache2-utils sudo
+echo "==> files"
+install -d -m 0755 /usr/lib/litefwm /usr/lib/litefwm/cgi /usr/share/litefwm/www /etc/litefwm \
+  /etc/dnsmasq.d /etc/dnsmasq.hosts.d /etc/iptables /var/lib/misc
+install -m 0755 "$BASE/bin/lfwctl" /usr/sbin/lfwctl
+install -m 0644 "$BASE"/lib/*.sh "$BASE"/lib/*.jq "$BASE"/lib/*.awk /usr/lib/litefwm/
+install -m 0755 "$BASE/lib/udhcpc.script" /usr/lib/litefwm/udhcpc.script
+install -m 0644 "$BASE/VERSION" /usr/lib/litefwm/VERSION
+install -m 0755 "$BASE/cgi/api.cgi" /usr/lib/litefwm/cgi/api.cgi
+rm -rf /usr/share/litefwm/www && cp -R "$BASE/www" /usr/share/litefwm/www
+find /usr/share/litefwm/www -type d -exec chmod 0755 {} + ; find /usr/share/litefwm/www -type f -exec chmod 0644 {} +
 
-install -d -m 0755   /usr/local/sbin /usr/lib/litefwm /usr/lib/litefwm/cgi   /usr/share/litefwm /usr/share/litefwm/www   /etc/litefwm /var/lib/litefwm/captures /var/log/litefwm
-
-install -m 0755 "$BASE"/bin/* /usr/local/sbin/
-install -m 0644 "$BASE/lib/common.sh" /usr/lib/litefwm/common.sh
-install -m 0755 "$BASE"/cgi/*.cgi /usr/lib/litefwm/cgi/
-cp -R "$BASE"/www/. /usr/share/litefwm/www/
-install -m 0644 "$BASE/lighttpd/litefwm.conf" /usr/share/litefwm/litefwm-lighttpd.conf
-
-# Remove every artifact from the retired staged/declarative configuration model.
-rc-service litefwm stop >/dev/null 2>&1 || true
-rc-update del litefwm default >/dev/null 2>&1 || true
-rm -f   /etc/init.d/litefwm   /etc/litefwm/config.json /etc/litefwm/config.json.tmp   /var/lib/litefwm/config.previous.json /var/lib/litefwm/last-apply   /var/lib/litefwm/applied-interfaces.json /var/lib/litefwm/applied-segments.json   2>/dev/null || true
-rm -rf /var/lib/litefwm/generated /etc/litefwm/modules 2>/dev/null || true
-
+echo "==> web server"
+install -m 0644 "$BASE/etc/lighttpd.conf" /etc/lighttpd/lighttpd.conf
+if [ -f /etc/lighttpd/litefwm.conf ]; then
+  old=$(sed -n 's/^server\.port *= *\([0-9]*\).*/\1/p' /etc/lighttpd/litefwm.conf | head -n 1)
+  [ -z "$old" ] || [ "$PORT" != 80 ] || PORT=$old
+fi
+sed "s/^server\.port = .*/server.port = $PORT/" "$BASE/etc/litefwm-lighttpd.conf" >/etc/lighttpd/litefwm.conf
+mkdir -p /var/log/lighttpd && chown lighttpd:lighttpd /var/log/lighttpd
 if [ ! -s /etc/litefwm/htpasswd ]; then
-  password=$(head -c 24 /dev/urandom | base64 | tr -dc 'A-Za-z0-9' | head -c 18)
-  htpasswd -bc /etc/litefwm/htpasswd "$ADMIN" "$password" >/dev/null
-  chown root:lighttpd /etc/litefwm/htpasswd
-  chmod 0640 /etc/litefwm/htpasswd
-  cat <<TXT
-
-Initial LiteFWM login
-  user:     $ADMIN
-  password: $password
-
-Change it with:
-  htpasswd /etc/litefwm/htpasswd $ADMIN
-
-TXT
+  PASS=$(head -c 32 /dev/urandom | base64 | tr -dc 'A-Za-z0-9' | head -c 16)
+  printf '%s\n' "$PASS" | htpasswd -ic /etc/litefwm/htpasswd "$ADMIN" >/dev/null 2>&1
+  echo "    admin login: $ADMIN / $PASS"
 fi
-chown root:lighttpd /etc/litefwm/htpasswd
-chmod 0640 /etc/litefwm/htpasswd
-
-cat > /etc/sudoers.d/litefwm-web <<'SUDOERS'
-lighttpd ALL=(root) NOPASSWD: /usr/local/sbin/apictl *
-SUDOERS
-chmod 0440 /etc/sudoers.d/litefwm-web
-visudo -cf /etc/sudoers.d/litefwm-web >/dev/null
-
-cat > /etc/sysctl.d/90-litefwm.conf <<'SYSCTL'
-net.ipv4.ip_forward=1
-net.ipv4.conf.all.rp_filter=1
-net.ipv4.conf.default.rp_filter=1
-SYSCTL
-sysctl -p /etc/sysctl.d/90-litefwm.conf >/dev/null || true
-
-mkdir -p /etc/dnsmasq.d
-cat > /etc/conf.d/dnsmasq <<'DNSMASQ'
-DNSMASQ_OPTS="--conf-file=/etc/dnsmasq.d/litefwm.conf"
-DNSMASQ
-
-# Alpine's stock lighttpd.conf already defines server.document-root. Update
-# that single global value instead of redefining it in the LiteFWM include,
-# which Lighttpd rejects as a duplicate global variable.
-if grep -Eq '^[[:space:]]*server[.]document-root[[:space:]]*=' /etc/lighttpd/lighttpd.conf; then
-  sed -i 's|^[[:space:]]*server[.]document-root[[:space:]]*=.*|server.document-root = "/usr/share/litefwm/www"|' /etc/lighttpd/lighttpd.conf
-else
-  printf '\nserver.document-root = "/usr/share/litefwm/www"\n' >> /etc/lighttpd/lighttpd.conf
-fi
-
-grep -q 'include "litefwm.conf"' /etc/lighttpd/lighttpd.conf 2>/dev/null || printf '\ninclude "litefwm.conf"\n' >> /etc/lighttpd/lighttpd.conf
-
-tmp_web=$(mktemp)
-jq -n --arg hostname "$(hostname)" --argjson port "$PORT" '{hostname:$hostname,management:{port:$port,sshPort:22,allowSsh:true,allowAny:true,allowedSegments:[]}}' > "$tmp_web"
-/usr/local/sbin/webctl reconcile "$tmp_web"
-rm -f "$tmp_web"
+chown root:lighttpd /etc/litefwm/htpasswd; chmod 0640 /etc/litefwm/htpasswd
 lighttpd -tt -f /etc/lighttpd/lighttpd.conf
+printf 'lighttpd ALL=(root) NOPASSWD: /usr/sbin/lfwctl\nDefaults:lighttpd !requiretty\n' >/etc/sudoers.d/litefwm
+chmod 0440 /etc/sudoers.d/litefwm
 
-rc-update add lighttpd default >/dev/null
+echo "==> routing"
+printf 'net.ipv4.ip_forward = 1\n' >/etc/sysctl.d/90-litefwm.conf
+sysctl -w net.ipv4.ip_forward=1 >/dev/null
 
-if [ "$START_WEB" = true ]; then
+echo "==> dnsmasq"
+install -m 0644 "$BASE/etc/dnsmasq.conf" /etc/dnsmasq.conf
+install -m 0644 "$BASE/etc/dnsmasq-base.conf" /etc/dnsmasq.d/00-litefwm.conf
+[ -f /etc/dnsmasq.d/10-dns.conf ] || printf '# LiteFWM DNS settings\ndomain=lan\nlocal=/lan/\nexpand-hosts\n' >/etc/dnsmasq.d/10-dns.conf
+
+echo "==> adopting the running network"
+# Hand any interface that is currently on dhcpcd over to udhcpc, keeping its address.
+for p in $(pgrep -x dhcpcd 2>/dev/null); do
+  for i in /sys/class/net/*; do
+    i=${i##*/}
+    tr '\0' ' ' </proc/"$p"/cmdline 2>/dev/null | grep -qw "$i" || continue
+    ip=$(ip -4 -o addr show dev "$i" scope global | awk '{print $4}' | head -n 1)
+    kill -KILL "$p" 2>/dev/null || true
+    mkdir -p /run/litefwm; : >/run/litefwm/keep."$i"
+    udhcpc -b -R -p /var/run/udhcpc."$i".pid -i "$i" -s /usr/lib/litefwm/udhcpc.script ${ip:+-r ${ip%/*}} >/dev/null 2>&1 || true
+  done
+done
+# Mark the interface holding the default route as WAN if no role is set yet.
+export LFW_LIB=/usr/lib/litefwm
+. /usr/lib/litefwm/common.sh; . /usr/lib/litefwm/net.sh; . /usr/lib/litefwm/fw.sh
+. /usr/lib/litefwm/dhcp.sh; . /usr/lib/litefwm/sys.sh
+if [ -z "$(wan_iface)" ]; then
+  dev=$(ip -4 route show default | awk '{for(i=1;i<=NF;i++) if($i=="dev") {print $(i+1); exit}}')
+  [ -z "$dev" ] || { ip link set dev "$dev" alias "lfw:role=wan;name=WAN"; echo "    WAN segment: $dev"; }
+fi
+dns_listen_sync
+net_persist
+echo "==> firewall"
+fw_snapshot
+if iptables -S INPUT 2>/dev/null | grep -q -- '-j LFW_MGMT'; then fw_commit; else fw_commit any; fi
+
+echo "==> services"
+rc-update add networking boot >/dev/null 2>&1 || true
+for s in iptables sysctl; do rc-update add "$s" boot >/dev/null 2>&1 || true; done
+for s in dnsmasq lighttpd; do rc-update add "$s" default >/dev/null 2>&1 || true; done
+sed -i 's/^IPFORWARD=.*/IPFORWARD="yes"/' /etc/conf.d/iptables 2>/dev/null || true
+if [ "$START" = yes ]; then
+  rc-service dnsmasq restart >/dev/null 2>&1 || rc-service dnsmasq start
   rc-service lighttpd restart >/dev/null 2>&1 || rc-service lighttpd start
 fi
-
-cat <<TXT
-LiteFWM installed on the Alpine target.
-
-Web console:
-  http://<appliance>:$PORT/
-
-LiteFWM is live-state based. It reads the current Linux network, routes,
-iptables, DHCP, and service state directly. UI changes take effect immediately
-and are persisted in native Alpine/service configuration.
-
-Next:
-  1. Sign in to the web console.
-  2. Configure physical, bridge, and VLAN interfaces as needed.
-  3. Configure interface IP/DHCP settings.
-  4. Configure firewall rules and NAT.
-TXT
+echo
+echo "LiteFWM $(cat "$BASE/VERSION") installed. Web UI: http://<this-host>:$PORT/"

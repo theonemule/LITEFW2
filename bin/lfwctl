@@ -1,0 +1,89 @@
+#!/bin/sh
+# lfwctl - LiteFWM control. Reads live state, applies changes immediately.
+#
+#   lfwctl state                     live system snapshot (JSON)
+#   lfwctl op NAME [JSON]            apply one change (JSON body from arg or stdin)
+#   lfwctl persist                   rewrite boot files from the live system
+#   lfwctl ops                       list operations
+set -u
+umask 022
+PATH=/usr/sbin:/usr/bin:/sbin:/bin
+
+if [ -z "${LFW_LIB:-}" ]; then
+  if [ -r /usr/lib/litefwm/common.sh ]; then LFW_LIB=/usr/lib/litefwm
+  else LFW_LIB=$(CDPATH='' cd -- "$(dirname -- "$0")/../lib" && pwd -P); fi
+fi
+export LFW_LIB
+for _m in common net fw dhcp sys; do
+  # shellcheck disable=SC1090
+  . "$LFW_LIB/$_m.sh"
+done
+
+LFW_CLIENT=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --client) LFW_CLIENT=${2:-}; is_ipv4 "$LFW_CLIENT" || LFW_CLIENT=""; shift 2;;
+    *) break;;
+  esac
+done
+
+[ "$(id -u)" = 0 ] || die "lfwctl must run as root"
+mkdir -p "$LFW_RUN"
+
+lfw_state() {
+  _ifs=$(net_inventory)
+  _dh=$(dhcpd_all)
+  jq -n --argjson ifs "$_ifs" --argjson dhcpd "$_dh" --argjson fw "$(fw_state)" \
+        --argjson leases "$(leases_json)" --argjson res "$(reservations_json)" \
+        --argjson dns "$(dns_read)" --argjson sys "$(system_json)" '
+    ($res | map({(.mac): .}) | add // {}) as $rm |
+    { system: $sys,
+      interfaces: [ $ifs[] | . + { dhcpServer: ($dhcpd[.name] // {enabled:false}) } ],
+      firewall: $fw,
+      dhcp: { leases: [ $leases[] | . + { reserved: ($rm[.mac] != null), reservedIp: ($rm[.mac].ip // null) } ],
+              reservations: $res },
+      dns: $dns }'
+}
+
+case "${1:-}" in
+  state)
+    lfw_state
+    ;;
+  op)
+    _name=${2:-}
+    printf '%s' "$_name" | grep -Eq '^[a-z]+\.[a-z]+$' || die "invalid operation name"
+    _fn="op_$(printf '%s' "$_name" | tr '.' '_')"
+    command -v "$_fn" >/dev/null 2>&1 || { jq -n --arg e "unknown operation $_name" '{ok:false,error:$e}'; exit 1; }
+    BODY=$(mktemp); RESULT=$(mktemp); ERR=$(mktemp); WARNF=$(mktemp)
+    trap 'rm -f "$BODY" "$RESULT" "$ERR" "$WARNF"' EXIT
+    if [ $# -ge 3 ]; then printf '%s' "$3" >"$BODY"; else head -c 1048576 >"$BODY"; fi
+    [ -s "$BODY" ] || echo '{}' >"$BODY"
+    jq -e 'type=="object"' "$BODY" >/dev/null 2>&1 || { jq -n '{ok:false,error:"request body must be a JSON object"}'; exit 1; }
+    # one change at a time
+    exec 9>"$LFW_RUN/lock"
+    timeout 60 flock -x 9 || { jq -n '{ok:false,error:"another change is in progress"}'; exit 1; }
+    ( warn() { printf '%s\n' "$*" >>"$WARNF"; }; "$_fn" ) >/dev/null 2>"$ERR"
+    _rc=$?
+    _w=$(jq -R . <"$WARNF" | jq -s .)
+    _res=$(cat "$RESULT"); [ -n "$_res" ] || _res=null
+    if [ $_rc -eq 0 ]; then
+      jq -n --argjson w "$_w" --argjson r "$_res" '{ok:true,warnings:$w,result:$r}'
+    else
+      _e=$(grep -v '^[[:space:]]*$' "$ERR" | tail -n 5)
+      [ -n "$_e" ] || _e="operation $_name failed"
+      log_op "FAILED $_name: $_e"
+      jq -n --arg e "$_e" --argjson w "$_w" '{ok:false,error:$e,warnings:$w}'
+      exit 1
+    fi
+    ;;
+  persist)
+    net_persist; fw_sync
+    ;;
+  ops)
+    grep -ho '^op_[a-z_]*' "$LFW_LIB"/*.sh | sed 's/^op_//; s/_/./' | sort
+    ;;
+  *)
+    sed -n '2,8p' "$0" | sed 's/^# \{0,1\}//'
+    exit 2
+    ;;
+esac

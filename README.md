@@ -1,117 +1,61 @@
-# LiteFWM
+# LiteFWM — Lite Firewall Manager
 
-LiteFWM is a lightweight Alpine Linux firewall/router management UI built with
-shell controllers, lighttpd CGI, Bootstrap, iproute2, iptables, dnsmasq, and
-OpenRC.
+A small firewall appliance for Alpine Linux, in the spirit of pfSense/IPFire but
+as light as possible: Bash, iproute2, iptables, dnsmasq, lighttpd and a static
+web UI. LiteFWM **owns** the host's networking — install it on a dedicated
+Alpine machine.
 
-## Live-state design
+## What it does
 
-LiteFWM does not keep a separate configuration database.
+* **Layer 2** — bridges (optionally VLAN-aware), 802.1Q VLAN interfaces on NICs
+  or bridges, per-port PVID/tagged VLANs, MTU. Putting an addressed NIC into a
+  bridge moves its IP identity (addresses, MAC, DHCP client, routes, role, DHCP
+  server, firewall references) onto the bridge without dropping the session;
+  deleting the bridge hands it back.
+* **Layer 3 segments** — static / DHCP-client / no address per interface, a name
+  (LAN, DMZ, IoT, …) and a role: exactly one **WAN** (default route, outbound
+  masquerade) and any number of **LAN** segments.
+* **DHCP & DNS** — a dnsmasq DHCP server per LAN segment (range, lease time,
+  gateway, DNS, domain, NTP), a live lease list with one-click **Make static**
+  (lease → MAC reservation, optional hostname), local domain, upstream servers
+  and host records.
+* **Firewall** — default deny. Built in: replies to allowed traffic, web UI/SSH
+  (optionally limited to chosen segments), DNS/DHCP/ping from LANs to the
+  firewall. Ordered allow/block/reject rules between segments, to the internet
+  or to the firewall, matching interface, IP/CIDR, protocol and ports.
+* **Port forwards** — destination NAT (tcp, udp or both, port ranges, optional
+  source restriction); forwarded traffic is allowed automatically. Outbound NAT
+  is implicit on the WAN.
 
-The running Linux host is the state. The web UI reads interfaces, addresses,
-routes, firewall/NAT rules, DHCP, and service status directly from Linux and
-the native services. Changes take effect immediately and are written to the
-native configuration files used on reboot.
+## State model
 
-There is no /etc/litefwm/config.json, no staged configuration, and no Apply
-Changes button.
+There is no LiteFWM configuration store. The UI shows what the kernel and the
+native service files say *now*; **Apply** changes the machine immediately and
+the UI re-reads it. After each change LiteFWM rewrites the native boot files
+(`/etc/network/interfaces`, `/etc/iptables/rules-save`, `/etc/dnsmasq.d`) from
+the live system so the same state comes back after a reboot. See ARCHITECTURE.md.
 
-## Networking
+## Install
 
-The Interfaces page shows the actual Linux links.
+    apk add git && git clone <repo> && cd litefwm
+    sudo ./install.sh [--port 80] [--admin-user admin]
 
-- Physical NICs are discovered automatically.
-- Bridges can be created empty or with selected members.
-- Adding an addressed NIC to a bridge migrates its IPv4/default route to the
-  bridge before enslaving the NIC.
-- DHCP follows the L3 endpoint when a NIC is moved into a bridge.
-- VLAN adapters can use a physical NIC or a bridge as their parent.
-- Bridge/VLAN persistence is written to /etc/network/interfaces.
-
-The Network Segments page is derived from live IPv4 assignments. For example,
-if eth0 currently has 10.0.1.187/24 from DHCP, that DHCP address appears as a
-segment automatically without first creating anything in LiteFWM.
-
-An interface may have multiple static IPv4 addresses.
-
-## DHCP
-
-DHCP-client state comes from the live interface and Alpine networking.
-
-DHCP-server state comes from dnsmasq. LiteFWM writes:
-
-    /etc/dnsmasq.d/litefwm.conf
-
-The DHCP page remains an operational lease/reservation view.
-
-## Firewall and NAT
-
-Firewall and NAT state comes from iptables-save.
-
-Changes are validated, loaded immediately, and persisted to:
-
-    /etc/iptables/rules-save
-
-## Management services
-
-Settings directly manage:
-
-- hostname
-- LiteFWM lighttpd port
-- SSH enabled/disabled state
-- SSH port
-
-The native Lighttpd and SSH configuration files remain authoritative.
-
-## Optional modules
-
-Optional modules are installed only when requested. Their configuration editor
-reads and writes the native module files directly, such as:
-
-    /etc/openvpn/openvpn.conf
-    /etc/bind/named.conf
-    /etc/squid/squid.conf
-    /etc/haproxy/haproxy.cfg
-    /etc/ddclient/ddclient.conf
-
-No module JSON sidecar is used.
+The running network is adopted as-is: the interface with the default route
+becomes the WAN, the firewall starts in default-deny with the web UI and SSH
+reachable. The generated admin password is printed once.
 
 ## CLI
 
-The CLI uses the same live model:
+    lfwctl state                 # live state as JSON
+    lfwctl ops                   # list operations
+    lfwctl op segment.set '{"interface":"eth1","role":"lan","label":"LAN","mode":"static","addresses":["192.168.10.1/24"]}'
 
-    configctl show
-    netctl inventory
-    netctl interfaces
-    netctl segments
-    setupctl show
-
-Examples:
-
-    setupctl bridge br0 br0 eth0 true
-    setupctl vlan eth0.100 eth0 100
-    setupctl segment-static lan br0 192.168.10.1/24
-    setupctl segment-dhcp wan eth0
-
-These commands mutate the live system immediately.
-
-## Installation
-
-On a dedicated Alpine host:
-
-    sudo ./install.sh --port 5187 --admin-user blaize
-
-An upgrade removes obsolete LiteFWM JSON/state files from earlier releases.
+The web UI is a thin client of the same operations (`POST /api/op/NAME`).
 
 ## Tests
 
-    ./tests/syntax-test.sh
-    ./tests/render-test.sh
-    ./tests/security-validation-test.sh
-    ./tests/migration-test.sh
-    ./tests/module-render-test.sh
-    ./tests/ddns-render-test.sh
-
-The render test uses mocked Linux live state and validates DHCP discovery,
-connectivity-preserving bridge migration, native persistence, and VLAN
-parenting without altering the test host.
+`tests/lab.sh up|test|ui|down` builds a Docker lab (ISP router, the appliance
+with three NICs, a LAN client and a VLAN-trunk client), then runs ~100 end-to-end
+checks through the HTTP API — including real DHCP, NAT, port forwards, a live
+NIC-into-bridge migration under ping, and a simulated reboot that must restore
+an identical state — plus a headless-Chrome run through the UI forms.

@@ -1,0 +1,11 @@
+#!/bin/sh
+# LiteFWM udhcpc hook. When LiteFWM moves a DHCP-assigned address onto a new
+# interface (e.g. a NIC into a bridge) it asks udhcpc to keep the copied address
+# during the initial "deconfig" so the host stays reachable while the same lease
+# is re-requested. Everything else is Alpine's stock script.
+# shellcheck disable=SC2154 # $interface is set by udhcpc
+if [ "$1" = deconfig ] && [ -e "/run/litefwm/keep.$interface" ]; then
+  rm -f "/run/litefwm/keep.$interface"
+  exit 0
+fi
+exec /usr/share/udhcpc/default.script "$@"

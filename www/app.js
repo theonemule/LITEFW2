@@ -1,311 +1,478 @@
 'use strict';
+// LiteFWM web UI. There is no client-side configuration: every view renders
+// the live system state from /api/state, and every Apply sends one operation
+// that changes the machine immediately, after which the state is re-read.
 
-const state={config:null,status:null,interfaces:[],leases:[],modules:[],metrics:null,captures:[]};
-const titles={overview:'Overview',interfaces:'Interfaces',segments:'Network segments',firewall:'Firewall rules',nat:'NAT & port forwards',dhcp:'DHCP',modules:'Modules',monitoring:'Monitoring',settings:'Settings'};
-
-function esc(v){return String(v==null?'':v).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
-function uid(p){return p+'-'+Date.now().toString(36)+'-'+Math.random().toString(36).slice(2,6);}
-function csv(v){return (v||[]).join(', ');}
-function splitCsv(v){return String(v||'').split(',').map(x=>x.trim()).filter(Boolean);}
-function toast(title,body){document.getElementById('toastTitle').textContent=title;document.getElementById('toastBody').textContent=body;bootstrap.Toast.getOrCreateInstance(document.getElementById('toast')).show();}
-async function api(path,options){
-  options=options||{}; options.headers=Object.assign({'Accept':'application/json'},options.headers||{});
-  if((options.method||'GET')!=='GET'){
-    options.headers['X-LiteFWM-Request']='1';
-    if(options.body&&!options.headers['Content-Type'])options.headers['Content-Type']='application/json';
+const $ = s => document.querySelector(s);
+function h(tag, attrs, ...kids) {
+  const e = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs || {})) {
+    if (v == null || v === false) continue;
+    if (k === 'class') e.className = v;
+    else if (k.startsWith('on')) e.addEventListener(k.slice(2), v);
+    else e.setAttribute(k, v === true ? '' : v);
   }
-  const r=await fetch('/api'+path,options),t=await r.text();let d={};
-  try{d=t?JSON.parse(t):{};}catch(e){d={error:t||r.statusText};}
-  if(!r.ok||d.ok===false)throw new Error(d.error||r.statusText);
-  return d;
-}
-async function loadAll(){
-  const x=await Promise.all([api('/config'),api('/status'),api('/interfaces'),api('/leases'),api('/modules'),api('/metrics'),api('/captures')]);
-  state.config=x[0];state.status=x[1];state.interfaces=x[2];state.leases=x[3];state.modules=x[4];state.metrics=x[5];state.captures=x[6];
-  document.getElementById('statusDot').classList.add('online');
-  document.getElementById('statusText').textContent='Connected to '+(state.status.hostname||'appliance');
-}
-async function refresh(){
-  try{await loadAll();render();}
-  catch(e){document.getElementById('statusText').textContent='Connection error';document.getElementById('view').innerHTML='<div class="alert alert-danger"><strong>Unable to read live state.</strong><div class="mt-2">'+esc(e.message)+'</div></div>';}
-}
-async function commitLive(message){
-  const result=await api('/config',{method:'PUT',body:JSON.stringify(state.config)});
-  if(result&&result.version)state.config=result;
-  await loadAll();
-  render();
-  toast('Live system updated',message||'The running system and native configuration were updated.');
-}
-function route(){const r=(location.hash||'#overview').slice(1);return titles[r]?r:'overview';}
-function render(){if(!state.config)return;const r=route();document.getElementById('pageTitle').textContent=titles[r];document.querySelectorAll('a[href^="#"]').forEach(a=>a.classList.toggle('active',a.getAttribute('href')==='#'+r));({overview:renderOverview,interfaces:renderInterfaces,segments:renderSegments,firewall:renderFirewall,nat:renderNat,dhcp:renderDhcp,modules:renderModules,monitoring:renderMonitoring,settings:renderSettings}[r])();}
-function card(label,value,sub){return '<div class="col-6 col-xl-3"><div class="card metric-card h-100"><div class="card-body"><div class="small text-secondary">'+esc(label)+'</div><div class="display-6">'+esc(value)+'</div><div class="small text-secondary">'+esc(sub||'')+'</div></div></div></div>';}
-function iface(id){return (state.config.interfaces||[]).find(x=>x.id===id||x.device===id);}
-function seg(id){return (state.config.segments||[]).find(x=>x.id===id);}
-function zoneName(z){return z==='external'?'External / default route':z==='internal'?'Internal':'Unclassified';}
-function shownAddress(s){return s.addressMode==='dhcp'?(s.currentAddress||'DHCP, no lease'):(s.address||s.currentAddress||'—');}
-function eligibleInterfaces(){return (state.config.interfaces||[]).filter(i=>i.managed!==false&&['physical','bridge','vlan'].includes(i.type));}
-function interfaceOptions(selected,types){
-  let h='<option value="">Select interface</option>';
-  eligibleInterfaces().filter(i=>!types||types.includes(i.type)).forEach(i=>h+='<option value="'+esc(i.id)+'"'+(i.id===selected?' selected':'')+'>'+esc(i.device)+' · '+esc(i.type)+(i.ipv4&&i.ipv4.length?' · '+esc(i.ipv4.map(a=>a.cidr).join(', ')):'')+'</option>');
-  return h;
-}
-function segmentOptions(selected,any){
-  let h=any?'<option value="any">Any</option>':'<option value="">Select network segment</option>';
-  (state.config.segments||[]).forEach(s=>h+='<option value="'+esc(s.id)+'"'+(s.id===selected?' selected':'')+'>'+esc(s.id)+' · '+esc(s.interface)+' · '+esc(shownAddress(s))+'</option>');
-  return h;
-}
-function cidrInfo(cidr){
-  const a=String(cidr||'').split('/'),p=a[0].split('.').map(Number),prefix=Number(a[1]);
-  if(a.length!==2||p.length!==4||p.some(x=>!Number.isInteger(x)||x<0||x>255)||!Number.isInteger(prefix)||prefix<0||prefix>32)return null;
-  const n=((((p[0]<<24)>>>0)+(p[1]<<16)+(p[2]<<8)+p[3])>>>0),mask=prefix===0?0:((0xffffffff<<(32-prefix))>>>0),net=(n&mask)>>>0,bc=(net|((~mask)>>>0))>>>0;
-  const ip=x=>[(x>>>24)&255,(x>>>16)&255,(x>>>8)&255,x&255].join('.');
-  return {network:ip(net)+'/'+prefix,first:ip(prefix>=31?net:(net+1)>>>0),last:ip(prefix>=31?bc:(bc-1)>>>0),broadcast:ip(bc)};
-}
-
-function renderOverview(){
-  const c=state.config,m=state.metrics||{},s=state.status||{};
-  let h='<div class="row g-3 mb-4">'+card('Interfaces',(c.interfaces||[]).filter(x=>x.name!=='lo').length,'Read from Linux')+card('IP segments',(c.segments||[]).length,'Current IPv4 assignments')+card('Firewall rules',(c.firewall&&c.firewall.rules||[]).length,'Current iptables rules')+card('DHCP leases',(state.leases||[]).length,'Current dnsmasq leases')+'</div>';
-  h+='<div class="alert alert-info"><strong>Live-state mode.</strong> LiteFWM reads Linux and service configuration directly. Changes take effect immediately and are persisted in native Alpine/service files. There is no LiteFWM network configuration database and no Apply step.</div>';
-  h+='<div class="card"><div class="card-header fw-semibold">Live network</div><div class="table-responsive"><table class="table table-sm mb-0"><thead><tr><th>Device</th><th>Type</th><th>State</th><th>IPv4</th><th>Master / parent</th></tr></thead><tbody>';
-  (c.interfaces||[]).forEach(i=>{h+='<tr><td><strong>'+esc(i.device)+'</strong></td><td>'+esc(i.type)+'</td><td>'+esc(i.state||'')+'</td><td><code>'+esc((i.ipv4||[]).map(a=>a.cidr).join(', ')||'—')+'</code></td><td>'+esc(i.master||i.parent||'—')+'</td></tr>';});
-  h+='</tbody></table></div></div>';
-  document.getElementById('view').innerHTML=h;
-}
-
-function renderInterfaces(){
-  const list=(state.config.interfaces||[]).filter(i=>i.name!=='lo');
-  let h='<div class="d-flex justify-content-between align-items-center mb-3"><div><p class="mb-0 text-secondary">This is the running Linux link state. Create bridges or VLANs here; physical NICs already exist and do not need to be pre-registered.</p></div><button id="addVirtual" class="btn btn-primary btn-sm">Add bridge or VLAN</button></div>';
-  h+='<div class="card"><div class="table-responsive"><table class="table mb-0"><thead><tr><th>Device</th><th>Type</th><th>State</th><th>Addresses</th><th>Topology</th><th>Persistence</th><th></th></tr></thead><tbody>';
-  list.forEach(i=>{
-    const ips=(i.ipv4||[]).map(a=>a.cidr).join(', ')||'—';
-    let top='—';
-    if(i.type==='bridge')top='members: '+((i.members||[]).join(', ')||'none');
-    else if(i.type==='vlan')top='parent: '+(i.parent||'?')+' · VLAN '+(i.vlanId==null?'?':i.vlanId);
-    else if(i.master)top='member of '+i.master;
-    const canEdit=['bridge','vlan'].includes(i.type),canDelete=canEdit;
-    h+='<tr><td><strong>'+esc(i.device)+'</strong><div class="small text-secondary">'+esc(i.mac||'')+'</div></td><td>'+esc(i.type)+'</td><td>'+esc(i.state||'')+'</td><td><code>'+esc(ips)+'</code>'+(i.defaultRoute?'<div class="small text-secondary">default via '+esc(i.defaultGateway||'')+'</div>':'')+'</td><td>'+esc(top)+'</td><td>'+(i.persistent?'<span class="badge text-bg-success">native</span>':'<span class="badge badge-soft">runtime only</span>')+'</td><td class="text-end"><div class="btn-group btn-group-sm"><button class="btn btn-outline-primary ip-settings" data-id="'+esc(i.id)+'">IP settings</button>'+(canEdit?'<button class="btn btn-outline-secondary edit-interface" data-id="'+esc(i.id)+'">Edit</button>':'')+(canDelete?'<button class="btn btn-outline-danger delete-interface" data-id="'+esc(i.id)+'">Delete</button>':'')+'</div></td></tr>';
-  });
-  h+='</tbody></table></div></div>';
-  document.getElementById('view').innerHTML=h;
-  document.getElementById('addVirtual').onclick=()=>editInterface(null);
-  document.querySelectorAll('.edit-interface').forEach(b=>b.onclick=()=>editInterface(iface(b.dataset.id)));
-  document.querySelectorAll('.ip-settings').forEach(b=>b.onclick=()=>editIpForInterface(b.dataset.id));
-  document.querySelectorAll('.delete-interface').forEach(b=>b.onclick=async()=>{
-    const i=iface(b.dataset.id),used=(state.config.segments||[]).filter(s=>s.interface===i.id);
-    if(used.length){toast('Cannot delete interface','Move or remove its IP configuration first.');return;}
-    if(i.type==='bridge'&&(i.members||[]).length){if(!confirm('Delete '+i.device+' and detach its members?'))return;}
-    else if(!confirm('Delete '+i.device+' now?'))return;
-    state.config.interfaces=state.config.interfaces.filter(x=>x.id!==i.id);
-    await commitLive(i.device+' removed from the running system.');
-  });
-}
-
-function editInterface(existing){
-  const old=existing||{id:'',name:'',device:'',type:'bridge',mtu:1500,enabled:true,vlanAware:true,members:[],parent:'',vlanId:null,managed:true,persistent:true};
-  document.getElementById('modalTitle').textContent=existing?'Edit '+old.device:'Create bridge or VLAN';
-  document.getElementById('modalBody').innerHTML='<div class="row g-3"><div class="col-md-4"><label class="form-label">Type</label><select id="liType" class="form-select"><option value="bridge">Linux bridge</option><option value="vlan">VLAN adapter</option></select></div><div class="col-md-4"><label class="form-label">Device name</label><input id="liDevice" class="form-control" value="'+esc(old.device||'')+'" placeholder="br0"></div><div class="col-md-4"><label class="form-label">MTU</label><input id="liMtu" type="number" class="form-control" value="'+esc(old.mtu||1500)+'"></div><div id="liFields" class="col-12"></div></div>';
-  const type=document.getElementById('liType');type.value=old.type==='vlan'?'vlan':'bridge';if(existing)type.disabled=true;
-  function fields(){
-    if(type.value==='bridge'){
-      const choices=(state.config.interfaces||[]).filter(i=>i.id!==old.id&&['physical','vlan'].includes(i.type)).map(i=>{
-        const checked=(old.members||[]).includes(i.id),hasIp=(i.ipv4||[]).length||i.defaultRoute;
-        return '<label class="form-check mb-2"><input class="form-check-input bridge-member" type="checkbox" value="'+esc(i.id)+'" '+(checked?'checked':'')+'><span class="form-check-label"><strong>'+esc(i.device)+'</strong> · '+esc(i.type)+(hasIp?' <span class="text-warning">· current IP/routes will migrate to the bridge</span>':'')+'</span></label>';
-      }).join('');
-      document.getElementById('liFields').innerHTML='<div class="row g-3"><div class="col-md-6"><label class="form-label">Member interfaces</label><div class="border rounded p-2">'+(choices||'<span class="text-secondary">No eligible member interfaces. A bridge may also be created empty.</span>')+'</div></div><div class="col-md-6"><div class="form-check mt-4"><input id="liVlanAware" class="form-check-input" type="checkbox" '+(old.vlanAware===false?'':'checked')+'><label class="form-check-label">VLAN-aware bridge</label></div><div class="form-text mt-2">When a member currently owns an IP address or default route, LiteFWM moves that L3 configuration to the bridge before enslaving the NIC.</div></div></div>';
-    }else{
-      document.getElementById('liFields').innerHTML='<div class="row g-3"><div class="col-md-7"><label class="form-label">Parent interface</label><select id="liParent" class="form-select">'+interfaceOptions(old.parent||'', ['physical','bridge'])+'</select></div><div class="col-md-5"><label class="form-label">VLAN ID</label><input id="liVid" type="number" min="1" max="4094" class="form-control" value="'+esc(old.vlanId==null?'':old.vlanId)+'"></div></div><div class="form-text mt-2">The parent can be a physical NIC or a Linux bridge. Leave the VLAN itself unnumbered or add its IP under IP settings after creation.</div>';
-    }
+  for (const c of kids.flat(Infinity)) {
+    if (c == null || c === false) continue;
+    e.append(c instanceof Node ? c : document.createTextNode(String(c)));
   }
-  type.onchange=fields;fields();
-  document.getElementById('modalFooter').innerHTML='<button class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button><button id="liSave" class="btn btn-primary">Apply live change</button>';
-  const modal=bootstrap.Modal.getOrCreateInstance(document.getElementById('formModal'));modal.show();
-  document.getElementById('liSave').onclick=async()=>{
-    const t=type.value,dev=document.getElementById('liDevice').value.trim();
-    if(!dev){toast('Interface','Device name is required.');return;}
-    let obj={id:existing?old.id:dev,name:dev,device:dev,type:t,kind:t,managed:true,persistent:true,enabled:true,mtu:Number(document.getElementById('liMtu').value||1500),ipv4:[]};
-    if(t==='bridge'){obj.vlanAware=document.getElementById('liVlanAware').checked;obj.members=Array.from(document.querySelectorAll('.bridge-member:checked')).map(x=>x.value);}
-    else{obj.parent=document.getElementById('liParent').value;obj.vlanId=Number(document.getElementById('liVid').value);obj.members=[];if(!obj.parent||!obj.vlanId){toast('VLAN','Parent and VLAN ID are required.');return;}}
-    if(existing){state.config.interfaces=state.config.interfaces.map(x=>x.id===old.id?obj:x);}
-    else state.config.interfaces.push(obj);
-    try{await commitLive(t==='bridge'?dev+' created/updated. Member IP configuration was migrated to the bridge where necessary.':dev+' VLAN created/updated.');modal.hide();}catch(e){toast('Interface change failed',e.message);}
-  };
+  return e;
 }
-function editIpForInterface(id){
-  const existing=(state.config.segments||[]).filter(s=>s.interface===id);
-  if(existing.length===1)editSegment(existing[0]);else if(existing.length>1){
-    location.hash='#segments';render();toast('Multiple IP configurations',id+' has multiple network segments. Edit the one you want from Network segments.');
-  }else editSegment(null,id);
-}
+const badge = (text, cls) => h('span', { class: 'badge ' + (cls || 'text-bg-secondary') }, text);
+const btn = (text, onclick, cls) => h('button', { type: 'button', class: 'btn btn-sm ' + (cls || 'btn-outline-secondary'), onclick }, text);
+const card = (title, actions, body) => h('div', { class: 'card mb-3' },
+  h('div', { class: 'card-header' }, title, h('div', { class: 'actions' }, actions || [])), body);
+const table = (heads, rows, empty) => h('div', { class: 'table-responsive' },
+  h('table', { class: 'table table-sm table-hover mb-0' },
+    h('thead', {}, h('tr', {}, heads.map(x => h('th', {}, x)))),
+    h('tbody', {}, rows.length ? rows : h('tr', {}, h('td', { colspan: heads.length, class: 'text-secondary' }, empty || 'None')))));
+const dash = v => (v === '' || v == null) ? '—' : v;
 
-function renderSegments(){
-  const list=state.config.segments||[];
-  let h='<div class="d-flex justify-content-between align-items-center mb-3"><div><p class="mb-0 text-secondary">These rows are derived from current interface addresses, DHCP state, routes, resolver state, and dnsmasq. They are not stored in a LiteFWM database.</p></div><button id="addSeg" class="btn btn-primary btn-sm">Add IP configuration</button></div>';
-  h+='<div class="card"><div class="table-responsive"><table class="table mb-0"><thead><tr><th>Interface</th><th>Current address</th><th>Assignment</th><th>Network role</th><th>Gateway / DNS</th><th>DHCP server</th><th></th></tr></thead><tbody>';
-  list.forEach(s=>{
-    const actions=s.managed===false?'<span class="small text-secondary">Observed only</span>':'<div class="btn-group btn-group-sm"><button class="btn btn-outline-secondary edit-segment" data-id="'+esc(s.id)+'">Edit</button><button class="btn btn-outline-danger delete-segment" data-id="'+esc(s.id)+'">Remove IP</button></div>';
-    h+='<tr><td><strong>'+esc(s.interface)+'</strong><div class="small text-secondary">'+esc(s.id)+'</div></td><td><code>'+esc(shownAddress(s))+'</code></td><td>'+(s.addressMode==='dhcp'?'<span class="badge text-bg-info">DHCP client</span>':'<span class="badge badge-soft">Static</span>')+'</td><td>'+esc(zoneName(s.zone))+'</td><td>'+esc(s.gateway||'—')+'<div class="small text-secondary">'+esc(csv(s.dns)||'—')+'</div></td><td>'+(s.dhcp&&s.dhcp.enabled?'<span class="badge text-bg-success">On</span><div class="small text-secondary">'+esc(s.dhcp.poolStart||'')+' – '+esc(s.dhcp.poolEnd||'')+'</div>':'Off')+'</td><td class="text-end">'+actions+'</td></tr>';
-  });
-  if(!list.length)h+='<tr><td colspan="7" class="text-secondary">No global IPv4 configuration is currently present.</td></tr>';
-  h+='</tbody></table></div></div>';
-  document.getElementById('view').innerHTML=h;
-  document.getElementById('addSeg').onclick=()=>editSegment(null);
-  document.querySelectorAll('.edit-segment').forEach(b=>b.onclick=()=>editSegment(seg(b.dataset.id)));
-  document.querySelectorAll('.delete-segment').forEach(b=>b.onclick=async()=>{
-    const s=seg(b.dataset.id);
-    if(s.zone==='external'&&!confirm('This segment carries the default route. Removing it can disconnect this browser. Continue?'))return;
-    if(s.zone!=='external'&&!confirm('Remove '+shownAddress(s)+' from '+s.interface+' now?'))return;
-    state.config.segments=state.config.segments.filter(x=>x.id!==s.id);
-    try{await commitLive('IP configuration removed from '+s.interface+'.');}catch(e){toast('IP removal',e.message);}
-  });
-}
-function editSegment(existing,forcedInterface){
-  const old=existing||{id:uid('segment'),name:'',interface:forcedInterface||'',addressMode:'static',address:'',currentAddress:'',gateway:'',dns:[],domain:'',dhcpClient:{hostname:''},dhcp:{enabled:false,dns:[],ntp:[],reservations:[]}};
-  const d=old.dhcp||{enabled:false,dns:[],ntp:[],reservations:[]};
-  document.getElementById('modalTitle').textContent=existing?'Edit IP configuration':'Add IP configuration';
-  document.getElementById('modalBody').innerHTML='<div class="row g-3"><div class="col-md-6"><label class="form-label">Interface</label><select id="sgIface" class="form-select">'+interfaceOptions(old.interface)+'</select></div><div class="col-md-6"><label class="form-label">Address assignment</label><select id="sgMode" class="form-select"><option value="static">Static IPv4</option><option value="dhcp">DHCP client</option></select></div><div id="sgAddressFields" class="col-12"></div><div id="sgDhcpFields" class="col-12"></div></div>';
-  document.getElementById('sgMode').value=old.addressMode||'static';
-  if(forcedInterface)document.getElementById('sgIface').value=forcedInterface;
-  function draw(){
-    const mode=document.getElementById('sgMode').value;
-    if(mode==='dhcp'){
-      document.getElementById('sgAddressFields').innerHTML='<div class="alert alert-light border mb-0"><strong>Current lease:</strong> <code>'+esc(old.currentAddress||'none')+'</code><br><span class="small text-secondary">Gateway and DNS are learned from the DHCP server. The current lease address is requested again on reboot when available.</span></div>';
-      document.getElementById('sgDhcpFields').innerHTML='';
-    }else{
-      document.getElementById('sgAddressFields').innerHTML='<div class="row g-3"><div class="col-md-4"><label class="form-label">Address / CIDR</label><input id="sgAddr" class="form-control" value="'+esc(old.address||old.currentAddress||'')+'" placeholder="192.168.10.1/24"><div id="sgCidr" class="form-text"></div></div><div class="col-md-4"><label class="form-label">Default gateway</label><input id="sgGw" class="form-control" value="'+esc(old.gateway||'')+'" placeholder="Only if this should be the default route"></div><div class="col-md-4"><label class="form-label">DNS servers</label><input id="sgDns" class="form-control" value="'+esc(csv(old.dns))+'" placeholder="1.1.1.1, 9.9.9.9"></div></div>';
-      const a=document.getElementById('sgAddr'),preview=()=>{const c=cidrInfo(a.value.trim());document.getElementById('sgCidr').textContent=c?'Network '+c.network+' · usable '+c.first+' – '+c.last+' · broadcast '+c.broadcast:'Enter IPv4/CIDR.';};a.oninput=preview;preview();
-      document.getElementById('sgDhcpFields').innerHTML='<hr><div class="form-check mb-3"><input id="sgDhcpEnable" class="form-check-input" type="checkbox" '+(d.enabled?'checked':'')+'><label class="form-check-label">Run DHCP server on this network</label></div><div class="row g-3"><div class="col-md-4"><label class="form-label">Pool start</label><input id="sgPoolStart" class="form-control" value="'+esc(d.poolStart||'')+'"></div><div class="col-md-4"><label class="form-label">Pool end</label><input id="sgPoolEnd" class="form-control" value="'+esc(d.poolEnd||'')+'"></div><div class="col-md-4"><label class="form-label">Lease time</label><input id="sgLease" class="form-control" value="'+esc(d.leaseTime||'12h')+'"></div><div class="col-md-4"><label class="form-label">Client gateway</label><input id="sgRouter" class="form-control" value="'+esc(d.gateway||'')+'"></div><div class="col-md-4"><label class="form-label">Client DNS</label><input id="sgDhcpDns" class="form-control" value="'+esc(csv(d.dns))+'"></div><div class="col-md-4"><label class="form-label">NTP</label><input id="sgNtp" class="form-control" value="'+esc(csv(d.ntp))+'"></div><div class="col-md-6"><label class="form-label">Domain</label><input id="sgDomain" class="form-control" value="'+esc(old.domain||'')+'"></div></div>';
-    }
+// ------------------------------------------------------------------ API
+let S = null;
+async function load() {
+  try {
+    const r = await fetch('/api/state', { cache: 'no-store', credentials: 'same-origin' });
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.error || r.statusText);
+    S = j;
+    $('#hostName').textContent = S.system.hostname;
+    $('#stamp').textContent = 'live state read ' + new Date().toLocaleTimeString();
+    render();
+  } catch (e) {
+    $('#view').replaceChildren(h('div', { class: 'alert alert-danger' }, 'Could not read the system state: ' + e.message));
   }
-  document.getElementById('sgMode').onchange=draw;draw();
-  document.getElementById('modalFooter').innerHTML='<button class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button><button id="sgSave" class="btn btn-primary">Apply live IP change</button>';
-  const modal=bootstrap.Modal.getOrCreateInstance(document.getElementById('formModal'));modal.show();
-  document.getElementById('sgSave').onclick=async()=>{
-    const mode=document.getElementById('sgMode').value,iid=document.getElementById('sgIface').value;
-    if(!iid){toast('IP configuration','Select an interface.');return;}
-    let x=Object.assign({},old,{interface:iid,addressMode:mode,managed:true,zone:old.zone||'internal'});
-    if(mode==='dhcp'){x.address='';x.gateway='';x.dns=[];x.dhcp={enabled:false,dns:[],ntp:[],reservations:[]};}
-    else{
-      x.address=document.getElementById('sgAddr').value.trim();x.currentAddress=x.address;x.gateway=document.getElementById('sgGw').value.trim();x.dns=splitCsv(document.getElementById('sgDns').value);x.domain=document.getElementById('sgDomain').value.trim();
-      x.dhcp={enabled:document.getElementById('sgDhcpEnable').checked,poolStart:document.getElementById('sgPoolStart').value.trim(),poolEnd:document.getElementById('sgPoolEnd').value.trim(),leaseTime:document.getElementById('sgLease').value.trim()||'12h',gateway:document.getElementById('sgRouter').value.trim(),dns:splitCsv(document.getElementById('sgDhcpDns').value),ntp:splitCsv(document.getElementById('sgNtp').value),reservations:d.reservations||[]};
+}
+async function op(name, body) {
+  const r = await fetch('/api/op/' + name, {
+    method: 'POST', credentials: 'same-origin',
+    headers: { 'Content-Type': 'application/json', 'X-LiteFWM': '1' },
+    body: JSON.stringify(body || {})
+  });
+  let j; try { j = await r.json(); } catch { throw new Error('HTTP ' + r.status); }
+  if (!j.ok) throw new Error(j.error || 'operation failed');
+  (j.warnings || []).forEach(w => toast(w, 'warning'));
+  return j;
+}
+async function apply(name, body, done) {
+  const j = await op(name, body);
+  toast(done || 'Applied', 'success');
+  await load();
+  return j;
+}
+function toast(msg, kind) {
+  const t = h('div', { class: 'toast align-items-center border-0 text-bg-' + (kind || 'secondary') },
+    h('div', { class: 'd-flex' }, h('div', { class: 'toast-body' }, msg),
+      h('button', { type: 'button', class: 'btn-close btn-close-white me-2 m-auto', 'data-bs-dismiss': 'toast' })));
+  $('#toasts').append(t);
+  const bt = new bootstrap.Toast(t, { delay: kind === 'warning' ? 9000 : 3000 });
+  t.addEventListener('hidden.bs.toast', () => t.remove());
+  bt.show();
+}
+
+// ------------------------------------------------------------------ dialog
+const dlg = () => bootstrap.Modal.getOrCreateInstance($('#dlg'));
+let dlgApply = null;
+$('#dlgApply').addEventListener('click', async () => {
+  if (!dlgApply) return;
+  const b = $('#dlgApply'); b.disabled = true; $('#dlgErr').textContent = '';
+  try { await dlgApply(); dlg().hide(); }
+  catch (e) { $('#dlgErr').textContent = e.message; }
+  finally { b.disabled = false; }
+});
+
+// form(title, fields, onApply(values), {note, applyText})
+// field: {k, label, type: text|number|select|check|multi|list|textarea|password|info, value,
+//         options: [[value,label]], help, placeholder, show: vals => bool}
+function form(title, fields, onApply, o = {}) {
+  const ctl = {};
+  const body = h('div', {});
+  if (o.note) body.append(h('div', { class: 'alert alert-' + (o.noteKind || 'info') + ' py-2 small' }, o.note));
+  const wraps = [];
+  for (const f of fields) {
+    const id = 'f_' + f.k;
+    let el;
+    if (f.type === 'select') {
+      el = h('select', { class: 'form-select', id }, f.options.map(([v, l]) => h('option', { value: v, selected: String(v) === String(f.value ?? '') }, l)));
+    } else if (f.type === 'check') {
+      el = h('input', { class: 'form-check-input', type: 'checkbox', id, checked: !!f.value });
+    } else if (f.type === 'multi') {
+      const sel = new Set((f.value || []).map(String));
+      el = h('div', { id }, f.options.length ? f.options.map(([v, l]) => h('div', { class: 'form-check form-check-inline' },
+        h('input', { class: 'form-check-input', type: 'checkbox', value: v, id: id + v, checked: sel.has(String(v)) }),
+        h('label', { class: 'form-check-label', for: id + v }, l))) : h('div', { class: 'text-secondary small' }, 'none available'));
+    } else if (f.type === 'textarea') {
+      el = h('textarea', { class: 'form-control mono', id, rows: f.rows || 5, placeholder: f.placeholder || '' });
+      el.value = f.value ?? '';
+    } else if (f.type === 'info') {
+      el = h('div', { class: 'form-control-plaintext mono', id }, f.value);
+    } else {
+      el = h('input', { class: 'form-control', id, type: f.type === 'password' ? 'password' : (f.type === 'number' ? 'number' : 'text'), placeholder: f.placeholder || '' });
+      el.value = f.type === 'list' ? (f.value || []).join(', ') : (f.value ?? '');
     }
-    if(existing)state.config.segments=state.config.segments.map(s=>s.id===old.id?x:s);else state.config.segments.push(x);
-    try{await commitLive('IP configuration on '+iid+' updated immediately.');modal.hide();}catch(e){toast('IP change failed',e.message);}
+    ctl[f.k] = { f, el };
+    const w = f.type === 'check'
+      ? h('div', { class: 'form-check mb-3' }, el, h('label', { class: 'form-check-label', for: id }, f.label), f.help && h('div', { class: 'form-text' }, f.help))
+      : h('div', { class: 'mb-3' }, h('label', { class: 'form-label small fw-semibold', for: id }, f.label), el, f.help && h('div', { class: 'form-text' }, f.help));
+    wraps.push([f, w]);
+    body.append(w);
+  }
+  const vals = () => {
+    const v = {};
+    for (const [k, { f, el }] of Object.entries(ctl)) {
+      if (f.type === 'info') continue;
+      if (f.type === 'check') v[k] = el.checked;
+      else if (f.type === 'multi') v[k] = [...el.querySelectorAll('input:checked')].map(i => i.value);
+      else if (f.type === 'list') v[k] = el.value.split(/[\s,]+/).filter(Boolean);
+      else v[k] = el.value.trim();
+    }
+    return v;
   };
-}
-
-function renderFirewall(){
-  const f=state.config.firewall||{defaults:{input:'accept',forward:'accept',output:'accept'},rules:[]};
-  let h='<div class="alert alert-light border">This is the current <code>iptables</code> filter table. Saving a policy or rule rewrites the live table immediately and persists it to Alpine’s native iptables rules file.</div>';
-  h+='<div class="card mb-3"><div class="card-body"><div class="row g-3 align-items-end">';
-  ['input','forward','output'].forEach(k=>h+='<div class="col-md-3"><label class="form-label">'+k.toUpperCase()+'</label><select id="pol-'+k+'" class="form-select"><option value="accept">ACCEPT</option><option value="drop">DROP</option></select></div>');
-  h+='<div class="col-md-3"><button id="savePolicies" class="btn btn-primary">Apply policies</button></div></div></div></div>';
-  h+='<div class="d-flex justify-content-between mb-2"><strong>Live rules</strong><button id="addRule" class="btn btn-sm btn-primary">Add rule</button></div><div class="card"><div class="table-responsive"><table class="table table-sm mb-0"><thead><tr><th>Chain</th><th>In</th><th>Out</th><th>Source</th><th>Destination</th><th>Protocol / port</th><th>Action</th><th></th></tr></thead><tbody>';
-  (f.rules||[]).forEach((r,n)=>{h+='<tr><td>'+esc((r.chain||'').toUpperCase())+'</td><td>'+esc(r.inSegment||'any')+'</td><td>'+esc(r.outSegment||'any')+'</td><td>'+esc(r.source||'any')+'</td><td>'+esc(r.destination||'any')+'</td><td>'+esc(r.protocol||'any')+(r.destinationPort&&r.destinationPort!=='any'?' / '+esc(r.destinationPort):'')+'</td><td>'+esc(r.action||'')+'</td><td class="text-end"><div class="btn-group btn-group-sm"><button class="btn btn-outline-secondary edit-rule" data-i="'+n+'">Edit</button><button class="btn btn-outline-danger del-rule" data-i="'+n+'">Delete</button></div></td></tr>';});
-  h+='</tbody></table></div></div>';
-  document.getElementById('view').innerHTML=h;
-  ['input','forward','output'].forEach(k=>document.getElementById('pol-'+k).value=f.defaults[k]||'accept');
-  document.getElementById('savePolicies').onclick=async()=>{f.defaults={input:document.getElementById('pol-input').value,forward:document.getElementById('pol-forward').value,output:document.getElementById('pol-output').value};try{await commitLive('iptables default policies updated.');}catch(e){toast('Firewall',e.message);}};
-  document.getElementById('addRule').onclick=()=>editRule(null);
-  document.querySelectorAll('.edit-rule').forEach(b=>b.onclick=()=>editRule(f.rules[Number(b.dataset.i)]));
-  document.querySelectorAll('.del-rule').forEach(b=>b.onclick=async()=>{f.rules.splice(Number(b.dataset.i),1);try{await commitLive('Firewall rule removed.');}catch(e){toast('Firewall',e.message);}});
-}
-function editRule(existing){
-  const r=existing||{id:uid('rule'),chain:'forward',protocol:'any',source:'any',destination:'any',sourcePort:'any',destinationPort:'any',action:'accept',inSegment:'any',outSegment:'any',enabled:true};
-  document.getElementById('modalTitle').textContent=existing?'Edit live firewall rule':'Add live firewall rule';
-  document.getElementById('modalBody').innerHTML='<div class="row g-3"><div class="col-md-4"><label class="form-label">Chain</label><select id="frChain" class="form-select"><option value="input">INPUT</option><option value="forward">FORWARD</option><option value="output">OUTPUT</option></select></div><div class="col-md-4"><label class="form-label">Inbound segment</label><select id="frIn" class="form-select">'+segmentOptions(r.inSegment||'any',true)+'</select></div><div class="col-md-4"><label class="form-label">Outbound segment</label><select id="frOut" class="form-select">'+segmentOptions(r.outSegment||'any',true)+'</select></div><div class="col-md-4"><label class="form-label">Protocol</label><select id="frProto" class="form-select"><option value="any">Any</option><option value="tcp">TCP</option><option value="udp">UDP</option><option value="icmp">ICMP</option></select></div><div class="col-md-4"><label class="form-label">Source</label><input id="frSrc" class="form-control" value="'+esc(r.source||'any')+'"></div><div class="col-md-4"><label class="form-label">Destination</label><input id="frDst" class="form-control" value="'+esc(r.destination||'any')+'"></div><div class="col-md-4"><label class="form-label">Source port</label><input id="frSport" class="form-control" value="'+esc(r.sourcePort||'any')+'"></div><div class="col-md-4"><label class="form-label">Destination port</label><input id="frDport" class="form-control" value="'+esc(r.destinationPort||'any')+'"></div><div class="col-md-4"><label class="form-label">Action</label><select id="frAction" class="form-select"><option value="accept">ACCEPT</option><option value="drop">DROP</option><option value="reject">REJECT</option><option value="log">LOG</option></select></div></div>';
-  ['Chain','Proto','Action'].forEach(k=>document.getElementById('fr'+k).value=r[k.toLowerCase()]||r.action);
-  document.getElementById('modalFooter').innerHTML='<button class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button><button id="frSave" class="btn btn-primary">Apply live rule</button>';
-  const modal=bootstrap.Modal.getOrCreateInstance(document.getElementById('formModal'));modal.show();
-  document.getElementById('frSave').onclick=async()=>{
-    const nr={id:r.id||uid('rule'),enabled:true,chain:document.getElementById('frChain').value,protocol:document.getElementById('frProto').value,inSegment:document.getElementById('frIn').value,outSegment:document.getElementById('frOut').value,source:document.getElementById('frSrc').value.trim()||'any',destination:document.getElementById('frDst').value.trim()||'any',sourcePort:document.getElementById('frSport').value.trim()||'any',destinationPort:document.getElementById('frDport').value.trim()||'any',action:document.getElementById('frAction').value,description:''};
-    const rules=state.config.firewall.rules||[],idx=existing?rules.indexOf(existing):-1;if(idx>=0)rules[idx]=nr;else rules.push(nr);delete nr.raw;
-    try{await commitLive('Firewall rule applied immediately.');modal.hide();}catch(e){toast('Firewall rule',e.message);}
+  const refresh = () => { const v = vals(); for (const [f, w] of wraps) w.classList.toggle('d-none', !!f.show && !f.show(v)); };
+  body.addEventListener('change', refresh); body.addEventListener('input', refresh);
+  refresh();
+  $('#dlgTitle').textContent = title;
+  $('#dlgBody').replaceChildren(body);
+  $('#dlgErr').textContent = '';
+  $('#dlgApply').textContent = o.applyText || 'Apply';
+  $('#dlgApply').className = 'btn ' + (o.danger ? 'btn-danger' : 'btn-primary');
+  dlgApply = () => {
+    const v = vals();
+    for (const [f] of wraps) if (f.show && !f.show(v)) delete v[f.k];
+    return onApply(v);
   };
+  dlg().show();
 }
+const confirmDo = (title, msg, fn, text) => form(title, [], fn, { note: msg, noteKind: 'warning', applyText: text || 'Apply', danger: true });
 
-function renderNat(){
-  const n=(state.config.firewall||{}).nat||{masquerade:[],snat:[],dnat:[]};
-  let h='<div class="alert alert-light border">These rows are read from the live <code>nat</code> table. Changes are applied immediately.</div>';
-  h+='<div class="card mb-3"><div class="card-header d-flex"><strong>Outbound NAT</strong><button id="addMasq" class="btn btn-sm btn-primary ms-auto">Add outbound NAT</button></div><div class="table-responsive"><table class="table table-sm mb-0"><thead><tr><th>Type</th><th>Source</th><th>Outbound</th><th>Translation</th><th></th></tr></thead><tbody>';
-  const out=[];(n.masquerade||[]).forEach((x,i)=>out.push({kind:'masquerade',i,x}));(n.snat||[]).forEach((x,i)=>out.push({kind:'snat',i,x}));
-  out.forEach(o=>h+='<tr><td>'+esc(o.kind)+'</td><td>'+esc(o.x.sourceSegment||o.x.source||'any')+'</td><td>'+esc(o.x.outSegment||'')+'</td><td>'+esc(o.kind==='snat'?o.x.toSource:'outbound address')+'</td><td class="text-end"><button class="btn btn-sm btn-outline-danger del-nat" data-kind="'+o.kind+'" data-i="'+o.i+'">Delete</button></td></tr>');
-  h+='</tbody></table></div></div>';
-  h+='<div class="card"><div class="card-header d-flex"><strong>Port forwards</strong><button id="addDnat" class="btn btn-sm btn-primary ms-auto">Add port forward</button></div><div class="table-responsive"><table class="table table-sm mb-0"><thead><tr><th>Inbound</th><th>Protocol</th><th>Port</th><th>Destination</th><th></th></tr></thead><tbody>';
-  (n.dnat||[]).forEach((x,i)=>h+='<tr><td>'+esc(x.inSegment||'')+'</td><td>'+esc(x.protocol||'tcp')+'</td><td>'+esc(x.destinationPort||'')+'</td><td>'+esc(x.toDestination||'')+'</td><td class="text-end"><button class="btn btn-sm btn-outline-danger del-dnat" data-i="'+i+'">Delete</button></td></tr>');
-  h+='</tbody></table></div></div>';
-  document.getElementById('view').innerHTML=h;
-  document.getElementById('addMasq').onclick=editOutboundNat;document.getElementById('addDnat').onclick=editDnat;
-  document.querySelectorAll('.del-nat').forEach(b=>b.onclick=async()=>{n[b.dataset.kind].splice(Number(b.dataset.i),1);try{await commitLive('NAT rule removed.');}catch(e){toast('NAT',e.message);}});
-  document.querySelectorAll('.del-dnat').forEach(b=>b.onclick=async()=>{n.dnat.splice(Number(b.dataset.i),1);try{await commitLive('Port forward removed.');}catch(e){toast('NAT',e.message);}});
-}
-function editOutboundNat(){
-  document.getElementById('modalTitle').textContent='Add outbound NAT';
-  document.getElementById('modalBody').innerHTML='<div class="row g-3"><div class="col-md-4"><label class="form-label">Source segment</label><select id="natSrc" class="form-select">'+segmentOptions('',false)+'</select></div><div class="col-md-4"><label class="form-label">Outbound segment</label><select id="natOut" class="form-select">'+segmentOptions('',false)+'</select></div><div class="col-md-4"><label class="form-label">Translation</label><select id="natMode" class="form-select"><option value="masquerade">Outbound address</option><option value="snat">Fixed source IP</option></select></div><div id="natFixed" class="col-md-4"></div></div>';
-  const draw=()=>document.getElementById('natFixed').innerHTML=document.getElementById('natMode').value==='snat'?'<label class="form-label">Fixed source IP</label><input id="natIp" class="form-control">':'';document.getElementById('natMode').onchange=draw;draw();
-  document.getElementById('modalFooter').innerHTML='<button class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button><button id="natSave" class="btn btn-primary">Apply live NAT</button>';
-  const modal=bootstrap.Modal.getOrCreateInstance(document.getElementById('formModal'));modal.show();
-  document.getElementById('natSave').onclick=async()=>{const mode=document.getElementById('natMode').value,x={id:uid(mode),enabled:true,sourceSegment:document.getElementById('natSrc').value,source:'any',outSegment:document.getElementById('natOut').value};if(mode==='snat'){x.toSource=document.getElementById('natIp').value.trim();state.config.firewall.nat.snat.push(x);}else state.config.firewall.nat.masquerade.push(x);try{await commitLive('Outbound NAT applied.');modal.hide();}catch(e){toast('NAT',e.message);}};
-}
-function editDnat(){
-  document.getElementById('modalTitle').textContent='Add port forward';
-  document.getElementById('modalBody').innerHTML='<div class="row g-3"><div class="col-md-4"><label class="form-label">Inbound segment</label><select id="dnIn" class="form-select">'+segmentOptions('',false)+'</select></div><div class="col-md-2"><label class="form-label">Protocol</label><select id="dnProto" class="form-select"><option value="tcp">TCP</option><option value="udp">UDP</option></select></div><div class="col-md-2"><label class="form-label">Port</label><input id="dnPort" class="form-control"></div><div class="col-md-4"><label class="form-label">Destination IP[:port]</label><input id="dnTo" class="form-control"></div></div>';
-  document.getElementById('modalFooter').innerHTML='<button class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button><button id="dnSave" class="btn btn-primary">Apply port forward</button>';
-  const modal=bootstrap.Modal.getOrCreateInstance(document.getElementById('formModal'));modal.show();
-  document.getElementById('dnSave').onclick=async()=>{state.config.firewall.nat.dnat.push({id:uid('dnat'),enabled:true,inSegment:document.getElementById('dnIn').value,protocol:document.getElementById('dnProto').value,destinationPort:document.getElementById('dnPort').value.trim(),toDestination:document.getElementById('dnTo').value.trim()});try{await commitLive('Port forward applied.');modal.hide();}catch(e){toast('NAT',e.message);}};
-}
+// ------------------------------------------------------------------ helpers
+const ip2int = ip => ip.split('.').reduce((a, o) => a * 256 + (+o), 0);
+const inCidr = (ip, cidr) => { const [n, p] = cidr.split('/'); const s = 2 ** (32 - +p); return Math.floor(ip2int(ip) / s) === Math.floor(ip2int(n) / s); };
+const int2ip = n => [24, 16, 8, 0].map(b => Math.floor(n / 2 ** b) % 256).join('.');
+const I = n => S.interfaces.find(i => i.name === n);
+const disp = n => { if (!n) return 'any'; const i = I(n); return i && i.label ? `${n} (${i.label})` : n; };
+const l3 = () => S.interfaces.filter(i => ['physical', 'bridge', 'vlan'].includes(i.kind) && !i.master);
+const ifOpts = anyLabel => [['', anyLabel || 'any']].concat(l3().map(i => [i.name, disp(i.name) + (i.role !== 'none' ? ' · ' + i.role.toUpperCase() : '')]));
+const wan = () => S.interfaces.find(i => i.role === 'wan');
+const segOf = ip => S.interfaces.find(i => i.role === 'lan' && i.addresses.some(c => inCidr(ip, c)));
+const roleBadge = r => badge(r === 'none' ? 'unassigned' : r.toUpperCase(), 'role-' + r);
+const rel = t => { if (!t) return 'never'; const d = t - Date.now() / 1000; if (d <= 0) return 'expired';
+  return d > 86400 ? Math.round(d / 86400) + 'd' : d > 3600 ? Math.round(d / 3600) + 'h' : Math.round(d / 60) + 'm'; };
+const clientWarn = n => S.system.management.clientInterface === n
+  ? `Your browser session reaches the firewall through ${n}. A wrong change here can disconnect you.` : null;
 
-function renderDhcp(){
-  let h='<div class="alert alert-light border">DHCP policy is configured with each static network segment. This page is the live lease view.</div><div class="card"><div class="table-responsive"><table class="table table-sm mb-0"><thead><tr><th>IP</th><th>MAC</th><th>Hostname</th><th>Interface</th><th></th></tr></thead><tbody>';
-  (state.leases||[]).forEach((l,i)=>h+='<tr><td><code>'+esc(l.ip)+'</code></td><td><code>'+esc(l.mac)+'</code></td><td>'+esc(l.hostname||'')+'</td><td>'+esc(l.segment||'')+'</td><td class="text-end"><button class="btn btn-sm btn-outline-primary reserve-lease" data-i="'+i+'">Reserve</button></td></tr>');
-  if(!(state.leases||[]).length)h+='<tr><td colspan="5" class="text-secondary">No active dnsmasq leases.</td></tr>';h+='</tbody></table></div></div>';
-  document.getElementById('view').innerHTML=h;
-  document.querySelectorAll('.reserve-lease').forEach(b=>b.onclick=async()=>{const l=state.leases[Number(b.dataset.i)],host=prompt('Hostname for this reservation',l.hostname||'')||'';try{await api('/reserve',{method:'POST',body:JSON.stringify({segment:l.segment||'',mac:l.mac,hostname:host,publishDns:false})});await refresh();toast('DHCP reservation','Reservation written to native dnsmasq configuration.');}catch(e){toast('DHCP',e.message);}});
-}
+// ------------------------------------------------------------------ views
+const views = {};
 
-function moduleLabel(n){return {openvpn:'OpenVPN',tailscale:'Tailscale',bind:'BIND 9',squid:'Squid',snort:'Snort',haproxy:'HAProxy',ddns:'Dynamic DNS'}[n]||n;}
-function renderModules(){
-  let h='<div class="alert alert-light border">Module status is read from installed packages, OpenRC, and each service’s native configuration file. LiteFWM does not maintain module JSON state.</div><div class="row g-3">';
-  (state.modules||[]).forEach(m=>{h+='<div class="col-md-6 col-xl-4"><div class="card h-100"><div class="card-body"><div class="d-flex"><h2 class="h6">'+esc(moduleLabel(m.name))+'</h2><span class="badge ms-auto '+(m.running?'text-bg-success':'badge-soft')+'">'+(m.running?'Running':m.installed?'Installed':'Not installed')+'</span></div><div class="small text-secondary mb-3">'+esc(m.configPath||'')+'</div>'+(m.installed?'<div class="d-flex gap-2"><button class="btn btn-sm btn-outline-primary configure-module" data-name="'+esc(m.name)+'">Configure native file</button><button class="btn btn-sm btn-outline-danger remove-module" data-name="'+esc(m.name)+'">Remove</button></div>':'<button class="btn btn-sm btn-primary install-module" data-name="'+esc(m.name)+'">Install</button>')+'</div></div></div>';});h+='</div>';
-  document.getElementById('view').innerHTML=h;
-  document.querySelectorAll('.install-module').forEach(b=>b.onclick=async()=>{try{const r=await api('/module/install',{method:'POST',body:JSON.stringify({module:b.dataset.name})});await refresh();toast('Module',r.message||'Installed.');}catch(e){toast('Module',e.message);}});
-  document.querySelectorAll('.remove-module').forEach(b=>b.onclick=async()=>{if(!confirm('Remove '+moduleLabel(b.dataset.name)+' package/service?'))return;try{const r=await api('/module/remove',{method:'POST',body:JSON.stringify({module:b.dataset.name})});await refresh();toast('Module',r.message||'Removed.');}catch(e){toast('Module',e.message);}});
-  document.querySelectorAll('.configure-module').forEach(b=>b.onclick=()=>configureModule(b.dataset.name));
-}
-async function configureModule(name){
-  try{
-    const [cfg,st]=await Promise.all([api('/module/config/'+encodeURIComponent(name)),api('/module/status/'+encodeURIComponent(name))]);
-    document.getElementById('modalTitle').textContent=moduleLabel(name)+' native configuration';
-    document.getElementById('modalBody').innerHTML='<div class="mb-3"><strong>Path:</strong> <code>'+esc(cfg.path||st.path||'')+'</code><span class="badge ms-2 '+(st.running?'text-bg-success':'badge-soft')+'">'+(st.running?'Running':'Stopped')+'</span></div><textarea id="modRaw" class="form-control font-monospace" rows="20">'+esc(cfg.raw||'')+'</textarea><div class="form-check mt-3"><input id="modEnable" class="form-check-input" type="checkbox" '+(cfg.enabled?'checked':'')+'><label class="form-check-label">Enable service at boot and run it now</label></div>';
-    document.getElementById('modalFooter').innerHTML='<button class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button><button id="modSave" class="btn btn-primary">Write native file & restart</button>';
-    const modal=bootstrap.Modal.getOrCreateInstance(document.getElementById('formModal'));modal.show();
-    document.getElementById('modSave').onclick=async()=>{try{await api('/module/config/'+encodeURIComponent(name),{method:'PUT',body:JSON.stringify({raw:document.getElementById('modRaw').value,enabled:document.getElementById('modEnable').checked})});await refresh();modal.hide();toast(moduleLabel(name),'Native configuration written and service state updated.');}catch(e){toast(moduleLabel(name),e.message);}};
-  }catch(e){toast(moduleLabel(name),e.message);}
-}
+views.overview = () => {
+  const s = S.system;
+  const up = s.uptime, upt = `${Math.floor(up / 86400)}d ${Math.floor(up % 86400 / 3600)}h ${Math.floor(up % 3600 / 60)}m`;
+  const memPct = Math.round(100 * (1 - s.memory.availableKb / s.memory.totalKb));
+  const stat = (label, value, href) => h('div', { class: 'col-6 col-md-3' }, h('a', { class: 'card card-body text-decoration-none text-body', href },
+    h('div', { class: 'small text-secondary' }, label), h('div', { class: 'stat' }, value)));
+  const w = wan();
+  return [
+    h('div', { class: 'row g-3 mb-3' },
+      stat('Segments', l3().filter(i => i.role !== 'none').length, '#segments'),
+      stat('Active leases', S.dhcp.leases.filter(l => !l.expires || l.expires > Date.now() / 1000).length, '#dhcp'),
+      stat('Firewall rules', S.firewall.rules.length, '#firewall'),
+      stat('Port forwards', S.firewall.forwards.length, '#forwards')),
+    h('div', { class: 'row g-3' },
+      h('div', { class: 'col-lg-5' }, card('System', null, h('div', { class: 'card-body' }, h('dl', { class: 'row mb-0 small' },
+        [['Hostname', s.hostname], ['LiteFWM', s.version], ['Alpine', s.alpine], ['Kernel', s.kernel], ['Uptime', upt],
+         ['Load', s.load], ['Memory used', memPct + '%'], ['Resolvers', s.resolvers.join(', ') || '—'],
+         ['IP forwarding', s.ipForward ? 'on' : 'OFF'], ['DNS/DHCP (dnsmasq)', s.services.dnsmasq ? 'running' : 'STOPPED'],
+         ['Web UI', 'port ' + s.management.port + ' · ' + (s.management.access[0] === 'any' ? 'all interfaces' : s.management.access.join(', '))],
+         ['SSH', s.ssh.enabled ? 'on, port ' + s.ssh.port : 'off']]
+          .map(([k, v]) => [h('dt', { class: 'col-5 text-secondary fw-normal' }, k), h('dd', { class: 'col-7 mb-1' }, v)]))))),
+      h('div', { class: 'col-lg-7' }, card('Network segments', [btn('Manage', () => location.hash = '#segments')],
+        table(['Segment', 'Interface', 'Role', 'Addresses', 'DHCP server'],
+          l3().filter(i => i.role !== 'none').map(i => h('tr', {},
+            h('td', {}, i.label || '—'), h('td', { class: 'mono' }, h('span', { class: 'dot ' + (i.carrier ? 'up' : 'down') }), i.name),
+            h('td', {}, roleBadge(i.role)), h('td', { class: 'mono' }, i.addresses.join(' ') || (i.mode === 'dhcp' ? 'DHCP…' : '—')),
+            h('td', {}, i.dhcpServer.enabled ? `${i.dhcpServer.start} – ${i.dhcpServer.end}` : '—'))),
+          'No segments yet. Assign a WAN and LAN on the Segments page.'),
+        !w && h('div', { class: 'card-body pt-0' }, h('div', { class: 'alert alert-warning mb-0 small' }, 'No WAN segment is defined: there is no internet access or outbound NAT until one interface has the WAN role.')))))
+  ];
+};
 
-function renderMonitoring(){
-  const m=state.metrics||{},ifs=m.interfaces||[];
-  let h='<div class="row g-3 mb-3">'+card('Conntrack',m.conntrack||0,'Tracked flows')+card('Load',m.load1||0,'1 minute')+card('Memory available',Math.round(((m.memory||{}).available||0)/1048576)+' MB','Live host')+card('Captures',(state.captures||[]).length,'Saved pcaps')+'</div>';
-  h+='<div class="card mb-3"><div class="card-header fw-semibold">Interface counters</div><div class="table-responsive"><table class="table table-sm mb-0"><thead><tr><th>Device</th><th>RX bytes</th><th>TX bytes</th></tr></thead><tbody>';
-  ifs.forEach(i=>h+='<tr><td>'+esc(i.name||i.interface||'')+'</td><td>'+esc(i.rxBytes||i.rx_bytes||0)+'</td><td>'+esc(i.txBytes||i.tx_bytes||0)+'</td></tr>');h+='</tbody></table></div></div>';
-  h+='<button id="newCapture" class="btn btn-sm btn-outline-primary">Packet capture</button>';
-  document.getElementById('view').innerHTML=h;document.getElementById('newCapture').onclick=startCapture;
+// ---------- interfaces (layer 2)
+function bridgeCandidates(b) { return S.interfaces.filter(i => ['physical', 'vlan'].includes(i.kind) && !i.master && i.name !== b && i.parent !== b); }
+function newBridge() {
+  form('New bridge', [
+    { k: 'name', label: 'Bridge name', value: 'br' + [0, 1, 2, 3, 4, 5, 6, 7, 8, 9].find(n => !I('br' + n)), help: 'Up to 15 characters, e.g. br0.' },
+    { k: 'vlanFiltering', label: 'VLAN-aware bridge (802.1Q filtering)', type: 'check', help: 'Required to carry several tagged VLANs over the bridge ports.' },
+    { k: 'members', label: 'Ports', type: 'multi', options: bridgeCandidates('').map(i => [i.name, disp(i.name) + (i.addresses.length ? ' · ' + i.addresses.join(' ') : '')]),
+      help: 'A port that already has an IP keeps it: the bridge takes over its address, MAC, DHCP client, role, DHCP server and firewall rules.' }
+  ], v => apply('bridge.create', v, 'Bridge created'));
 }
-function startCapture(){
-  document.getElementById('modalTitle').textContent='Packet capture';
-  document.getElementById('modalBody').innerHTML='<div class="row g-3"><div class="col-md-8"><label class="form-label">Network segment / interface</label><select id="capSeg" class="form-select">'+segmentOptions('',false)+'</select></div><div class="col-md-4"><label class="form-label">Seconds</label><input id="capSeconds" type="number" min="1" max="300" class="form-control" value="30"></div></div>';
-  document.getElementById('modalFooter').innerHTML='<button class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button><button id="capStart" class="btn btn-primary">Capture</button>';
-  const modal=bootstrap.Modal.getOrCreateInstance(document.getElementById('formModal'));modal.show();
-  document.getElementById('capStart').onclick=async()=>{try{await api('/capture',{method:'POST',body:JSON.stringify({segment:document.getElementById('capSeg').value,seconds:Number(document.getElementById('capSeconds').value||30)})});modal.hide();await refresh();toast('Capture','Packet capture completed.');}catch(e){toast('Capture',e.message);}};
+function newVlan() {
+  const parents = S.interfaces.filter(i => ['physical', 'bridge'].includes(i.kind) && !i.master);
+  form('New VLAN interface', [
+    { k: 'parent', label: 'Parent interface', type: 'select', options: parents.map(i => [i.name, disp(i.name) + (i.kind === 'bridge' ? (i.vlanFiltering ? ' · VLAN-aware bridge' : ' · bridge') : '')]) },
+    { k: 'vid', label: 'VLAN ID', type: 'number', placeholder: '1-4094' },
+    { k: 'name', label: 'Interface name (optional)', placeholder: 'default: parent.vid' }
+  ], v => apply('vlan.create', v, 'VLAN created'), { note: 'On a VLAN-aware bridge the VLAN is added to the bridge and trunked on all its ports automatically.' });
 }
+function addPort(b) {
+  const c = bridgeCandidates(b.name);
+  form('Add port to ' + b.name, [
+    { k: 'member', label: 'Interface', type: 'select', options: c.map(i => [i.name, disp(i.name) + (i.addresses.length ? ' · ' + i.addresses.join(' ') : '')]) }
+  ], v => apply('bridge.addmember', { bridge: b.name, member: v.member }, 'Port added'),
+  { note: 'If the interface has an IP configuration and the bridge has none, the bridge takes it over (address, MAC, DHCP client, role, rules).' });
+}
+function portVlans(b, p) {
+  const vl = p.vlans; const pv = vl.find(v => v.pvid);
+  form(`VLANs on ${p.port}${p.self ? ' (bridge itself)' : ''}`, [
+    { k: 'pvid', label: 'Untagged / PVID', type: 'number', value: pv ? pv.vid : '', help: 'Untagged frames on this port belong to this VLAN. Empty = drop untagged.' },
+    { k: 'tagged', label: 'Tagged VLANs', type: 'list', value: vl.filter(v => !v.pvid).map(v => v.vid), placeholder: '20, 30' }
+  ], v => apply('bridge.portvlans', { bridge: b.name, port: p.port, pvid: v.pvid, tagged: v.tagged }, 'Port VLANs applied'));
+}
+views.interfaces = () => {
+  const rows = S.interfaces.map(i => {
+    let relation = '';
+    if (i.master) relation = h('span', {}, 'port of ', h('b', { class: 'mono' }, i.master));
+    else if (i.kind === 'vlan') relation = h('span', {}, 'VLAN ', h('b', {}, i.vid), ' on ', h('span', { class: 'mono' }, i.parent));
+    else if (i.kind === 'bridge') relation = h('span', {}, i.members.length ? i.members.map(m => h('span', { class: 'badge text-bg-light border me-1 mono' }, m,
+      h('a', { href: '#', class: 'ms-1 text-danger text-decoration-none', title: 'remove port', onclick: e => { e.preventDefault();
+        confirmDo('Remove port', `Remove ${m} from ${i.name}?`, () => apply('bridge.delmember', { bridge: i.name, member: m }, 'Port removed'), 'Remove'); } }, '×'))) : h('span', { class: 'text-secondary' }, 'no ports'),
+      i.vlanFiltering && badge('VLAN-aware', 'text-bg-info'));
+    const acts = [btn('MTU', () => form('MTU of ' + i.name, [{ k: 'mtu', label: 'MTU', type: 'number', value: i.mtu }], v => apply('iface.set', { name: i.name, mtu: v.mtu })))];
+    if (i.kind === 'bridge') acts.push(btn('+ Port', () => addPort(i)),
+      btn(i.vlanFiltering ? 'VLAN filter off' : 'VLAN filter on', () => apply('bridge.set', { name: i.name, vlanFiltering: !i.vlanFiltering })),
+      btn('Delete', () => confirmDo('Delete bridge', `Delete ${i.name}? If it has an IP configuration it is handed back to its first Ethernet port.`, () => apply('bridge.delete', { name: i.name }, 'Bridge deleted'), 'Delete'), 'btn-outline-danger'));
+    if (i.kind === 'vlan') acts.push(btn('Delete', () => confirmDo('Delete VLAN', `Delete ${i.name}?`, () => apply('vlan.delete', { name: i.name }, 'VLAN deleted'), 'Delete'), 'btn-outline-danger'));
+    return h('tr', {},
+      h('td', { class: 'mono text-nowrap' }, h('span', { class: 'dot ' + (i.carrier ? 'up' : 'down'), title: i.oper }), i.name),
+      h('td', {}, i.kind), h('td', { class: 'mono small' }, i.mac), h('td', {}, i.mtu), h('td', {}, relation),
+      h('td', { class: 'mono small' }, i.addresses.join(' ') || '—'), h('td', { class: 'text-end text-nowrap' }, acts));
+  });
+  const vcards = S.interfaces.filter(i => i.kind === 'bridge' && i.vlanFiltering).map(b =>
+    card(`VLAN membership — ${b.name}`, null, table(['Port', 'Untagged (PVID)', 'Tagged', ''],
+      b.bridgeVlans.map(p => h('tr', {}, h('td', { class: 'mono' }, p.port, p.self ? ' (bridge / VLAN interfaces)' : ''),
+        h('td', {}, dash((p.vlans.find(v => v.pvid) || {}).vid)), h('td', {}, p.vlans.filter(v => !v.pvid).map(v => v.vid).join(', ') || '—'),
+        h('td', { class: 'text-end' }, btn('Edit', () => portVlans(b, p))))))));
+  return [card('Interfaces (layer 2)', [btn('New bridge', newBridge, 'btn-primary'), btn('New VLAN', newVlan, 'btn-primary')],
+    table(['Name', 'Type', 'MAC', 'MTU', 'Bridge / VLAN', 'IPv4', ''], rows)), vcards];
+};
 
-function renderSettings(){
-  const m=state.config.management||{};
-  let h='<div class="row g-3"><div class="col-lg-6"><div class="card"><div class="card-body"><h2 class="h6">Management</h2><label class="form-label">Hostname</label><input id="setHost" class="form-control mb-3" value="'+esc(state.config.hostname||'')+'"><label class="form-label">LiteFWM port</label><input id="setPort" type="number" class="form-control mb-3" value="'+esc(m.port||5187)+'"><hr><div class="form-check mb-3"><input id="setSsh" class="form-check-input" type="checkbox" '+(m.allowSsh?'checked':'')+'><label class="form-check-label">Run SSH service</label></div><label class="form-label">SSH port</label><input id="setSshPort" type="number" class="form-control mb-3" value="'+esc(m.sshPort||22)+'"><button id="saveSettings" class="btn btn-primary">Apply live settings</button></div></div></div><div class="col-lg-6"><div class="card"><div class="card-body"><h2 class="h6">Persistence model</h2><p>LiteFWM has no network JSON database. It reads and writes the host’s native configuration.</p><dl class="row mb-0"><dt class="col-5">Network</dt><dd class="col-7"><code>/etc/network/interfaces</code></dd><dt class="col-5">Firewall</dt><dd class="col-7"><code>/etc/iptables/rules-save</code></dd><dt class="col-5">DHCP</dt><dd class="col-7"><code>/etc/dnsmasq.d/litefwm.conf</code></dd><dt class="col-5">Web</dt><dd class="col-7"><code>/etc/lighttpd/litefwm.conf</code></dd><dt class="col-5">Modules</dt><dd class="col-7">Each service’s native file</dd></dl></div></div></div></div>';
-  document.getElementById('view').innerHTML=h;
-  document.getElementById('saveSettings').onclick=async()=>{state.config.hostname=document.getElementById('setHost').value.trim();state.config.management.port=Number(document.getElementById('setPort').value);state.config.management.allowSsh=document.getElementById('setSsh').checked;state.config.management.sshPort=Number(document.getElementById('setSshPort').value);try{await commitLive('Management settings changed immediately.');}catch(e){toast('Settings',e.message);}};
+// ---------- segments (layer 3)
+function editSegment(i) {
+  const w = wan();
+  form('Segment on ' + i.name, [
+    { k: 'label', label: 'Segment name', value: i.label, placeholder: 'e.g. LAN, DMZ, IoT' },
+    { k: 'role', label: 'Role', type: 'select', value: i.role, options: [['lan', 'LAN — internal segment'], ['wan', 'WAN — internet uplink (default route, outbound NAT)'], ['none', 'Unassigned']],
+      help: w && w.name !== i.name ? `${w.name} is the WAN; there can only be one.` : null },
+    { k: 'mode', label: 'Addressing', type: 'select', value: i.mode, options: [['static', 'Static'], ['dhcp', 'DHCP client'], ['none', 'No address']] },
+    { k: 'addresses', label: 'Addresses (CIDR)', type: 'list', value: i.mode === 'static' ? i.addresses : [], placeholder: '192.168.10.1/24', show: v => v.mode === 'static' },
+    { k: 'gateway', label: 'Default gateway', value: i.mode === 'static' ? i.gateway : '', show: v => v.mode === 'static' && v.role === 'wan' },
+    { k: 'dns', label: 'Upstream DNS servers for the firewall', type: 'list', value: i.role === 'wan' && i.mode === 'static' ? S.system.resolvers : [], show: v => v.mode === 'static' && v.role === 'wan',
+      help: 'Written to /etc/resolv.conf. With DHCP the provider\'s servers are used.' }
+  ], v => apply('segment.set', Object.assign({ interface: i.name }, v), 'Segment applied'),
+  { note: clientWarn(i.name), noteKind: 'warning' });
 }
+views.segments = () => [
+  card('Network segments (layer 3)', null, table(['Interface', 'Name', 'Role', 'Addressing', 'Addresses', 'Gateway', 'DHCP server', ''],
+    l3().map(i => h('tr', {},
+      h('td', { class: 'mono' }, h('span', { class: 'dot ' + (i.carrier ? 'up' : 'down') }), i.name, h('div', { class: 'small text-secondary' }, i.kind)),
+      h('td', {}, dash(i.label)), h('td', {}, roleBadge(i.role)), h('td', {}, i.mode),
+      h('td', { class: 'mono small' }, i.addresses.join(' ') || '—'), h('td', { class: 'mono small' }, dash(i.gateway)),
+      h('td', {}, i.dhcpServer.enabled ? `${i.dhcpServer.start} – ${i.dhcpServer.end}` : '—'),
+      h('td', { class: 'text-end' }, btn('Edit', () => editSegment(i))))))),
+  h('p', { class: 'small text-secondary' }, 'Bridge ports are configured through their bridge. Every LAN segment is isolated from the others and from the internet until a firewall rule allows the traffic.')
+];
 
-window.addEventListener('hashchange',render);
-document.getElementById('validateBtn').onclick=async()=>{try{const r=await api('/validate',{method:'POST'});toast('Live-state check',r.message||'Live configuration is valid.');}catch(e){toast('Validation failed',e.message);}};
-const rb=document.getElementById('refreshBtn');if(rb)rb.onclick=refresh;
-refresh();
+// ---------- DHCP
+function editDhcpd(i) {
+  const d = i.dhcpServer, c = i.addresses[0];
+  let s = d.start, e = d.end;
+  if (!d.enabled && c) { const [n, p] = c.split('/'); if (+p <= 24) { const b = ip2int(n) - ip2int(n) % 256; s = int2ip(b + 100); e = int2ip(b + 199); } }
+  const own = c ? c.split('/')[0] : '';
+  form('DHCP server on ' + disp(i.name), [
+    { k: 'enabled', label: 'Enable DHCP server', type: 'check', value: d.enabled || !d.start },
+    { k: 'start', label: 'Range start', value: s, show: v => v.enabled },
+    { k: 'end', label: 'Range end', value: e, show: v => v.enabled },
+    { k: 'leaseTime', label: 'Lease time', value: d.leaseTime || '12h', help: 'e.g. 3600, 30m, 12h, 7d', show: v => v.enabled },
+    { k: 'router', label: 'Gateway handed to clients', value: d.router === own ? '' : d.router, placeholder: own + ' (this firewall)', show: v => v.enabled },
+    { k: 'dns', label: 'DNS servers handed to clients', type: 'list', value: (d.dns || []).join() === own ? [] : d.dns, placeholder: own + ' (this firewall)', show: v => v.enabled },
+    { k: 'domain', label: 'Domain name', value: d.domain, placeholder: S.dns.domain || 'lan', show: v => v.enabled },
+    { k: 'ntp', label: 'NTP servers', type: 'list', value: d.ntp, show: v => v.enabled }
+  ], v => apply('dhcpd.set', Object.assign({ interface: i.name }, v), 'DHCP server applied'));
+}
+function reserve(mac, ip, hostname, isEdit) {
+  form(isEdit ? 'Edit reservation' : 'Make this address static', [
+    { k: 'mac', label: 'MAC address', type: isEdit === 'new' ? 'text' : 'info', value: mac },
+    { k: 'ip', label: 'Reserved IP address', value: ip, help: 'Always handed to this MAC. Must be inside a segment with a DHCP server; may be inside or outside the dynamic range.' },
+    { k: 'hostname', label: 'Hostname', value: hostname, help: 'Optional. Resolves as hostname.' + (S.dns.domain || 'lan') + ' on the firewall DNS.' }
+  ], v => apply('reservation.add', { mac: v.mac || mac, ip: v.ip, hostname: v.hostname }, 'Reservation applied'),
+  { note: isEdit ? null : 'The device keeps its current address. If you choose a different IP it moves when it next renews its lease (or reconnects).' });
+}
+views.dhcp = () => {
+  const now = Date.now() / 1000;
+  const lans = l3().filter(i => i.role === 'lan');
+  const leaseByMac = Object.fromEntries(S.dhcp.leases.map(l => [l.mac, l]));
+  return [
+    card('DHCP servers', null, table(['Segment', 'Subnet', 'Range', 'Lease', 'Gateway / DNS', ''],
+      lans.map(i => { const d = i.dhcpServer; return h('tr', {},
+        h('td', {}, disp(i.name)), h('td', { class: 'mono small' }, i.addresses.join(' ') || '—'),
+        h('td', { class: 'mono small' }, d.enabled ? `${d.start} – ${d.end}` : badge('off')), h('td', {}, d.enabled ? d.leaseTime : ''),
+        h('td', { class: 'mono small' }, d.enabled ? `${d.router} / ${(d.dns || []).join(', ')}` : ''),
+        h('td', { class: 'text-end' }, i.mode === 'static' && i.addresses.length ? btn('Configure', () => editDhcpd(i)) : h('span', { class: 'small text-secondary' }, 'needs a static address'))); }),
+      'No LAN segments. Give an interface the LAN role first.')),
+    card('Leases', [btn('Refresh', load)], table(['IP', 'MAC', 'Hostname', 'Segment', 'Expires', 'Status', ''],
+      S.dhcp.leases.slice().sort((a, b) => ip2int(a.ip) - ip2int(b.ip)).map(l => { const seg = segOf(l.ip); return h('tr', { class: l.expires && l.expires < now ? 'text-secondary' : '' },
+        h('td', { class: 'mono' }, l.ip), h('td', { class: 'mono small' }, l.mac), h('td', {}, dash(l.hostname)),
+        h('td', {}, seg ? disp(seg.name) : '—'), h('td', {}, rel(l.expires)),
+        h('td', {}, l.reserved ? badge('static → ' + l.reservedIp, 'text-bg-success') : badge('dynamic', 'text-bg-light border')),
+        h('td', { class: 'text-end' }, l.reserved ? btn('Edit', () => reserve(l.mac, l.reservedIp, (S.dhcp.reservations.find(r => r.mac === l.mac) || {}).hostname, true))
+          : btn('Make static', () => reserve(l.mac, l.ip, l.hostname), 'btn-outline-primary'))); }), 'No leases yet.')),
+    card('Static reservations', [btn('Add reservation', () => reserve('', '', '', 'new'), 'btn-primary')],
+      table(['MAC', 'IP', 'Hostname', 'Current lease', ''], S.dhcp.reservations.map(r => { const l = leaseByMac[r.mac]; return h('tr', {},
+        h('td', { class: 'mono small' }, r.mac), h('td', { class: 'mono' }, r.ip), h('td', {}, dash(r.hostname)),
+        h('td', { class: 'small' }, l ? (l.ip === r.ip ? 'on reserved address' : `still on ${l.ip} until renewal`) : '—'),
+        h('td', { class: 'text-end text-nowrap' }, btn('Edit', () => reserve(r.mac, r.ip, r.hostname, true)), ' ',
+          btn('Delete', () => confirmDo('Delete reservation', `Delete the reservation of ${r.ip} for ${r.mac}?`, () => apply('reservation.delete', { mac: r.mac }, 'Reservation deleted'), 'Delete'), 'btn-outline-danger'))); })))
+  ];
+};
+
+// ---------- DNS
+views.dns = () => {
+  const d = S.dns;
+  const edit = () => form('DNS settings', [
+    { k: 'domain', label: 'Local domain', value: d.domain || 'lan', help: 'DHCP clients and reservations resolve as name.domain.' },
+    { k: 'upstream', label: 'Upstream DNS servers', type: 'list', value: d.upstream, placeholder: 'empty = the WAN\'s resolvers (' + S.system.resolvers.join(', ') + ')' },
+    { k: 'hosts', label: 'Local host records (one per line: name ip)', type: 'textarea', value: d.hosts.map(x => `${x.name} ${x.ip}`).join('\n'), placeholder: 'nas 192.168.10.5' }
+  ], v => apply('dns.set', { domain: v.domain, upstream: v.upstream, hosts: v.hosts.split('\n').map(l => l.trim().split(/\s+/)).filter(x => x[0]).map(([name, ip]) => ({ name, ip })) }, 'DNS applied'));
+  return card('DNS resolver (dnsmasq)', [btn('Edit', edit, 'btn-primary')], h('div', { class: 'card-body' },
+    h('dl', { class: 'row mb-0' },
+      h('dt', { class: 'col-sm-3' }, 'Local domain'), h('dd', { class: 'col-sm-9 mono' }, dash(d.domain)),
+      h('dt', { class: 'col-sm-3' }, 'Upstream servers'), h('dd', { class: 'col-sm-9 mono' }, d.upstream.join(', ') || `WAN resolvers (${S.system.resolvers.join(', ') || 'none'})`),
+      h('dt', { class: 'col-sm-3' }, 'Serves'), h('dd', { class: 'col-sm-9' }, l3().filter(i => i.role === 'lan').map(i => disp(i.name)).join(', ') || 'no LAN segments'),
+      h('dt', { class: 'col-sm-3' }, 'Host records'), h('dd', { class: 'col-sm-9 mono' }, d.hosts.length ? d.hosts.map(x => h('div', {}, `${x.name} → ${x.ip}`)) : '—'))));
+};
+
+// ---------- firewall
+function editRule(r, chain) {
+  const isNew = !r; r = r || { chain, action: 'accept', in: '', out: '', src: '', dst: '', proto: 'any', ports: '', description: '' };
+  const fields = [
+    { k: 'chain', label: 'Traffic', type: 'select', value: r.chain, options: [['forward', 'Through the firewall (between segments / to the internet)'], ['input', 'To the firewall itself']] },
+    { k: 'action', label: 'Action', type: 'select', value: r.action, options: [['accept', 'Allow'], ['drop', 'Block (drop silently)'], ['reject', 'Block (reject)']] },
+    { k: 'in', label: 'From segment / interface', type: 'select', value: r.in, options: ifOpts('any segment') },
+    { k: 'src', label: 'Source address', value: r.src, placeholder: 'any — or 192.168.10.20 or 192.168.10.0/24' },
+    { k: 'out', label: 'To segment / interface', type: 'select', value: r.out, options: ifOpts('any segment'), show: v => v.chain === 'forward', help: 'Choose the WAN segment for internet access.' },
+    { k: 'dst', label: 'Destination address', value: r.dst, placeholder: 'any — or a host or CIDR' },
+    { k: 'proto', label: 'Protocol', type: 'select', value: r.proto, options: [['any', 'any'], ['tcp', 'TCP'], ['udp', 'UDP'], ['icmp', 'ICMP']] },
+    { k: 'ports', label: 'Destination ports', value: r.ports, placeholder: '443 or 8000-8100 or 80,443', show: v => v.proto === 'tcp' || v.proto === 'udp' },
+    { k: 'description', label: 'Description', value: r.description }
+  ];
+  if (isNew) fields.push({ k: 'position', label: 'Position', type: 'select', value: '', options: [['', 'Bottom of the list'], ['0', 'Top of the list']] });
+  form(isNew ? 'New firewall rule' : 'Edit firewall rule', fields, v => {
+    if (v.chain === 'input') delete v.out;
+    return isNew ? apply('rule.add', v, 'Rule added') : apply('rule.update', Object.assign({ id: r.id }, v), 'Rule updated');
+  }, { note: 'Rules are evaluated top to bottom; the first match wins. Anything not allowed is dropped. Replies to allowed traffic are allowed automatically.' });
+}
+function ruleTable(chain) {
+  const rs = S.firewall.rules.filter(r => r.chain === chain);
+  const acts = { accept: 'text-bg-success', drop: 'text-bg-danger', reject: 'text-bg-warning' };
+  const ep = (i, a) => [h('div', {}, disp(i)), a && h('div', { class: 'mono small' }, a)];
+  return table(['#', 'Action', 'From', chain === 'forward' ? 'To' : 'Destination', 'Service', 'Description', ''],
+    rs.map((r, n) => h('tr', {},
+      h('td', { class: 'text-secondary' }, n + 1), h('td', {}, badge(r.action === 'accept' ? 'allow' : r.action, acts[r.action])),
+      h('td', {}, ep(r.in, r.src)), h('td', {}, chain === 'forward' ? ep(r.out, r.dst) : (r.dst || 'this firewall')),
+      h('td', { class: 'mono small' }, r.proto === 'any' ? 'any' : r.proto + (r.ports ? ' ' + r.ports : '')),
+      h('td', {}, r.managed ? dash(r.description) : h('span', { class: 'mono small text-secondary', title: 'not created by LiteFWM; read-only' }, r.raw)),
+      h('td', { class: 'text-end text-nowrap' }, r.managed && [
+        btn('↑', () => apply('rule.move', { id: r.id, position: Math.max(0, n - 1) }, 'Moved'), n === 0 ? 'btn-outline-secondary disabled' : null), ' ',
+        btn('↓', () => apply('rule.move', { id: r.id, position: n + 1 }, 'Moved'), n === rs.length - 1 ? 'btn-outline-secondary disabled' : null), ' ',
+        btn('Edit', () => editRule(r)), ' ',
+        btn('Delete', () => confirmDo('Delete rule', `Delete rule ${n + 1}${r.description ? ' "' + r.description + '"' : ''}?`, () => apply('rule.delete', { id: r.id }, 'Rule deleted'), 'Delete'), 'btn-outline-danger')]))),
+    chain === 'forward' ? 'No rules: all traffic between segments and to the internet is blocked.' : 'No rules.');
+}
+views.firewall = () => {
+  const w = wan(), s = S.system;
+  const lans = l3().filter(i => i.role === 'lan').map(i => disp(i.name)).join(', ') || 'none';
+  const implicit = [
+    ['allow', 'Replies to allowed connections (established / related)'],
+    ['allow', `Web UI tcp/${s.management.port}` + (s.ssh.enabled ? ` and SSH tcp/${s.ssh.port}` : '') + ' to this firewall from ' + (s.management.access[0] === 'any' ? 'any interface' : s.management.access.join(', '))],
+    ['allow', `DNS, DHCP and ping to this firewall from LAN segments (${lans})`],
+    ['allow', 'Port forwards (see Port forwards)'],
+    ['nat', w ? `Outbound NAT (masquerade) on the WAN ${disp(w.name)}` : 'Outbound NAT: no WAN segment defined'],
+    ['drop', `Everything else (policy INPUT ${S.firewall.policies.INPUT || '?'}, FORWARD ${S.firewall.policies.FORWARD || '?'})`]
+  ];
+  return [
+    card('Forwarding rules — between segments and to the internet', [btn('Add rule', () => editRule(null, 'forward'), 'btn-primary')], ruleTable('forward')),
+    card('Input rules — traffic to this firewall', [btn('Add rule', () => editRule(null, 'input'), 'btn-primary')], ruleTable('input')),
+    card('Built-in behaviour', [btn('Management access', () => location.hash = '#system')], table(['', 'Rule'],
+      implicit.map(([a, t]) => h('tr', { class: 'implicit' }, h('td', {}, badge(a, a === 'drop' ? 'text-bg-danger' : a === 'nat' ? 'text-bg-info' : 'text-bg-success')), h('td', {}, t)))))
+  ];
+};
+
+// ---------- port forwards
+function editForward(f) {
+  const isNew = !f; f = f || { in: '', src: '', proto: 'tcp', port: '', to: '', toPort: '', description: '' };
+  const w = wan();
+  form(isNew ? 'New port forward' : 'Edit port forward', [
+    { k: 'in', label: 'Incoming interface', type: 'select', value: f.in === (w && w.name) ? '' : f.in, options: ifOpts(w ? `WAN (${disp(w.name)})` : 'WAN') },
+    { k: 'proto', label: 'Protocol', type: 'select', value: f.proto, options: [['tcp', 'TCP'], ['udp', 'UDP'], ['both', 'TCP + UDP']] },
+    { k: 'port', label: 'External port', value: f.port, placeholder: '443 or 10000-10100' },
+    { k: 'to', label: 'Internal host', value: f.to, placeholder: '192.168.10.20' },
+    { k: 'toPort', label: 'Internal port', value: f.toPort, placeholder: 'same as external' },
+    { k: 'src', label: 'Allowed sources', value: f.src, placeholder: 'anyone — or an IP / CIDR' },
+    { k: 'description', label: 'Description', value: f.description }
+  ], v => isNew ? apply('forward.add', v, 'Port forward added') : apply('forward.update', Object.assign({ id: f.id }, v), 'Port forward updated'),
+  { note: 'Forwarded traffic is allowed through the firewall automatically; no extra rule is needed.' });
+}
+views.forwards = () => card('Port forwards (destination NAT)', [btn('Add port forward', () => editForward(null), 'btn-primary')],
+  table(['Interface', 'Protocol', 'External port', 'Internal host', 'Sources', 'Description', ''],
+    S.firewall.forwards.map(f => h('tr', {},
+      h('td', {}, disp(f.in)), h('td', {}, f.proto === 'both' ? 'tcp+udp' : f.proto), h('td', { class: 'mono' }, f.port),
+      h('td', { class: 'mono' }, f.to + (f.toPort ? ':' + f.toPort : '')), h('td', { class: 'mono small' }, f.src || 'anyone'),
+      h('td', {}, f.managed ? dash(f.description) : h('span', { class: 'mono small text-secondary' }, f.raw)),
+      h('td', { class: 'text-end text-nowrap' }, f.managed && [btn('Edit', () => editForward(f)), ' ',
+        btn('Delete', () => confirmDo('Delete port forward', `Delete the forward of port ${f.port}?`, () => apply('forward.delete', { id: f.id }, 'Port forward deleted'), 'Delete'), 'btn-outline-danger')]))),
+    'No port forwards.'));
+
+// ---------- system
+views.system = () => {
+  const s = S.system, m = s.management;
+  const out = h('pre', { class: 'mono small bg-light p-2 mb-0 d-none' });
+  const host = h('input', { class: 'form-control', placeholder: 'host or IP' });
+  const diag = async kind => {
+    out.classList.remove('d-none'); out.textContent = 'running…';
+    try { const j = await op('diag.' + kind, { host: host.value.trim() }); out.textContent = j.result.output; }
+    catch (e) { out.textContent = e.message; }
+  };
+  return h('div', { class: 'row g-3' },
+    h('div', { class: 'col-lg-6' },
+      card('General', [btn('Edit', () => form('General', [{ k: 'hostname', label: 'Hostname', value: s.hostname }], v => apply('system.set', v)))],
+        h('div', { class: 'card-body' }, 'Hostname: ', h('b', {}, s.hostname))),
+      card('Management access', [btn('Edit', () => form('Management access', [
+        { k: 'port', label: 'Web UI port', type: 'number', value: m.port },
+        { k: 'mode', label: 'Allow the web UI' + (s.ssh.enabled ? ' and SSH' : '') + ' from', type: 'select', value: m.access[0] === 'any' ? 'any' : 'list', options: [['any', 'any interface'], ['list', 'selected segments only']] },
+        { k: 'ifs', label: 'Segments', type: 'multi', value: m.access[0] === 'any' ? [] : m.access, options: l3().map(i => [i.name, disp(i.name)]), show: v => v.mode === 'list' },
+        { k: 'sshEnabled', label: 'SSH server enabled', type: 'check', value: s.ssh.enabled },
+        { k: 'sshPort', label: 'SSH port', type: 'number', value: s.ssh.port, show: v => v.sshEnabled }
+      ], v => apply('mgmt.set', { port: v.port, sshEnabled: v.sshEnabled, sshPort: v.sshPort, access: v.mode === 'any' ? 'any' : v.ifs }),
+      { note: `Your session arrives on ${m.clientInterface || 'an unknown interface'} (${m.clientIp || '?'}); LiteFWM refuses changes that would lock it out.` }), 'btn-primary')],
+        h('div', { class: 'card-body' }, h('dl', { class: 'row mb-0' },
+          h('dt', { class: 'col-5' }, 'Web UI'), h('dd', { class: 'col-7' }, 'port ' + m.port),
+          h('dt', { class: 'col-5' }, 'Allowed from'), h('dd', { class: 'col-7' }, m.access[0] === 'any' ? 'any interface' : m.access.map(disp).join(', ')),
+          h('dt', { class: 'col-5' }, 'SSH'), h('dd', { class: 'col-7' }, s.ssh.enabled ? 'enabled, port ' + s.ssh.port : 'disabled')))),
+      card('Admin password', [btn('Change', () => form('Change password', [
+        { k: 'user', label: 'User', value: 'admin' }, { k: 'password', label: 'New password', type: 'password', help: 'At least 8 characters.' }
+      ], v => apply('password.set', v, 'Password changed')))], h('div', { class: 'card-body small text-secondary' }, 'The browser will ask for the new password on the next request.'))),
+    h('div', { class: 'col-lg-6' }, card('Diagnostics', null, h('div', { class: 'card-body' },
+      h('div', { class: 'input-group mb-2' }, host, btn('Ping', () => diag('ping'), 'btn-outline-primary'), btn('DNS lookup', () => diag('lookup'), 'btn-outline-primary')), out))));
+};
+
+// ------------------------------------------------------------------ router
+function render() {
+  if (!S) return;
+  const v = (location.hash || '#overview').slice(1);
+  const fn = views[v] || views.overview;
+  document.querySelectorAll('#navLinks .nav-link').forEach(a => a.classList.toggle('active', a.getAttribute('href') === '#' + v));
+  $('#view').replaceChildren(...[fn()].flat(Infinity));
+}
+window.addEventListener('hashchange', load);
+$('#refresh').addEventListener('click', load);
+load();
