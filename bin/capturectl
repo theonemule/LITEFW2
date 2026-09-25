@@ -5,10 +5,10 @@ if [ -r "$SELF_DIR/../lib/common.sh" ]; then . "$SELF_DIR/../lib/common.sh"; els
 
 case "$1" in
   list)
-    mkdir -p "$LITEFWM_STATE/captures"
+    mkdir -p "$LITEFWM_CAPTURE_DIR"
     first=true
     printf '['
-    for f in "$LITEFWM_STATE"/captures/*.pcap; do
+    for f in "$LITEFWM_CAPTURE_DIR"/*.pcap; do
       [ -f "$f" ] || continue
       name=$(basename "$f")
       bytes=$(stat -c %s "$f" 2>/dev/null || echo 0)
@@ -26,9 +26,10 @@ case "$1" in
     [ "$#" -lt 3 ] || seconds=$3
     case "$seconds" in *[!0-9]*|'') die "Capture duration must be seconds";; esac
     [ "$seconds" -le 300 ] || die "Maximum capture duration is 300 seconds."
-    dev=$(segment_device "$seg")
-    mkdir -p "$LITEFWM_STATE/captures"
-    out="$LITEFWM_STATE/captures/$seg-$(date +%Y%m%d-%H%M%S).pcap"
+    dev=$("$SELF_DIR/netctl" segments | jq -r --arg s "$seg" '[.[]|select(.id==$s)|.interface][0] // $s')
+    ip link show dev "$dev" >/dev/null 2>&1 || die "Unknown live segment/interface: $seg"
+    mkdir -p "$LITEFWM_CAPTURE_DIR"
+    out="$LITEFWM_CAPTURE_DIR/$seg-$(date +%Y%m%d-%H%M%S).pcap"
     timeout "$seconds" tcpdump -i "$dev" -s 0 -w "$out" >/dev/null 2>&1 || true
     echo "$out"
     ;;
@@ -36,7 +37,7 @@ case "$1" in
     require_root
     name=$2
     case "$name" in */*|..*|'') die "Invalid capture name";; esac
-    rm -f "$LITEFWM_STATE/captures/$name"
+    rm -f "$LITEFWM_CAPTURE_DIR/$name"
     ;;
   *) echo "Usage: capturectl list|start SEGMENT [SECONDS]|delete NAME" >&2; exit 2;;
 esac

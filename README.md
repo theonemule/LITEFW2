@@ -1,211 +1,109 @@
 # LiteFWM
 
-LiteFWM is a lightweight Alpine Linux firewall and router appliance manager. It
-uses iproute2, iptables, dnsmasq, lighttpd, OpenRC, shell controllers, and a
-Bootstrap SPA. Python, Node.js, an application server, and a database are not
-required on the target.
+LiteFWM is a lightweight Alpine Linux firewall/router management UI built with
+shell controllers, lighttpd CGI, Bootstrap, iproute2, iptables, dnsmasq, and
+OpenRC.
 
-## Network model
+## Live-state design
 
-LiteFWM separates link configuration from L3 network configuration.
+LiteFWM does not keep a separate configuration database.
 
-### Interfaces
+The running Linux host is the state. The web UI reads interfaces, addresses,
+routes, firewall/NAT rules, DHCP, and service status directly from Linux and
+the native services. Changes take effect immediately and are written to the
+native configuration files used on reboot.
 
-The Interfaces page manages reusable network endpoints.
+There is no /etc/litefwm/config.json, no staged configuration, and no Apply
+Changes button.
 
-- Physical NICs
-- VLAN-aware Linux bridges
-- 802.1Q VLAN adapters
-- WAN, LAN, or unassigned role metadata
-- MTU and enabled state
+## Networking
 
-A bridge can contain physical or VLAN interfaces. A VLAN can use a physical NIC
-or a bridge as its parent. For example, bridge br0 can be the parent of
-br0.100, and either endpoint can then be bound to a network segment.
+The Interfaces page shows the actual Linux links.
 
-A typical routed firewall uses at least two configured endpoints, normally WAN
-and LAN. LiteFWM does not enforce that minimum so first-time and lab
-configuration can be completed safely.
+- Physical NICs are discovered automatically.
+- Bridges can be created empty or with selected members.
+- Adding an addressed NIC to a bridge migrates its IPv4/default route to the
+  bridge before enslaving the NIC.
+- DHCP follows the L3 endpoint when a NIC is moved into a bridge.
+- VLAN adapters can use a physical NIC or a bridge as their parent.
+- Bridge/VLAN persistence is written to /etc/network/interfaces.
 
-### Network segments
+The Network Segments page is derived from live IPv4 assignments. For example,
+if eth0 currently has 10.0.1.187/24 from DHCP, that DHCP address appears as a
+segment automatically without first creating anything in LiteFWM.
 
-A network segment is an L3/IP configuration bound to a managed interface.
-Multiple static segments may share one interface, which gives that interface
-multiple IPv4 addresses/networks. A single DHCP-client segment may also obtain
-its address, gateway, and DNS settings from an upstream DHCP server.
+An interface may have multiple static IPv4 addresses.
 
-Per-segment settings include internal/external firewall classification, static
-or DHCP-client addressing, optional default gateway, DNS and local domain,
-DHCP-server enablement, pool and lease time, client router/DNS/NTP options,
-static reservations, and management access.
+## DHCP
+
+DHCP-client state comes from the live interface and Alpine networking.
+
+DHCP-server state comes from dnsmasq. LiteFWM writes:
+
+    /etc/dnsmasq.d/litefwm.conf
+
+The DHCP page remains an operational lease/reservation view.
 
 ## Firewall and NAT
 
-The default policy is INPUT DROP, FORWARD DROP, OUTPUT ACCEPT.
+Firewall and NAT state comes from iptables-save.
 
-Built-in appliance rules are evaluated before user rules:
+Changes are validated, loaded immediately, and persisted to:
 
-- loopback
-- established and related traffic
-- ICMP to the appliance
-- SSH when enabled, default TCP 22
-- LiteFWM management, default TCP 5187
+    /etc/iptables/rules-save
 
-Management starts in allowAny mode to avoid first-install lockout. It can be
-restricted to selected network segments later.
+## Management services
 
-User firewall rules are ordered explicitly and expressed in network segments.
-Internal static segments automatically contribute their subnet match when a
-rule does not specify a narrower address.
+Settings directly manage:
 
-Outbound NAT is configured as a source segment to an outbound segment. It can
-use the outbound address dynamically or a fixed SNAT address. Port forwarding
-uses destination NAT on an inbound/external segment. DNAT does not implicitly
-create a FORWARD allow rule.
+- hostname
+- LiteFWM lighttpd port
+- SSH enabled/disabled state
+- SSH port
 
-## DHCP and local DNS
-
-DHCP policy is configured on Network Segments. The DHCP page is an operational
-view for active leases and reservations.
-
-An active lease can be promoted to a reservation while retaining its current
-MAC and IP. If BIND 9 is installed and configured, the reservation dialog can
-also publish the hostname as an A record in the configured local zone.
+The native Lighttpd and SSH configuration files remain authoritative.
 
 ## Optional modules
 
-Optional packages are installed only when requested. Each installed module has
-a Configure action in the web UI.
+Optional modules are installed only when requested. Their configuration editor
+reads and writes the native module files directly, such as:
 
-- OpenVPN: server protocol, port, tunnel network, DNS/routes, certificate paths
-- Tailscale: enrollment key, hostname, advertised routes, exit node, SSH
-- BIND 9: local zone, listeners, recursion networks, forwarders, A records
-- Squid: listener, allowed segments, cache size, blocked domains
-- Snort: monitored interface, HOME_NET, IDS/IPS mode, config and arguments
-- HAProxy: mode, listener, balancing, backend servers
-- Dynamic DNS: provider, address source, hostname list, provider credentials
+    /etc/openvpn/openvpn.conf
+    /etc/bind/named.conf
+    /etc/squid/squid.conf
+    /etc/haproxy/haproxy.cfg
+    /etc/ddclient/ddclient.conf
 
-Module configuration is stored separately under:
+No module JSON sidecar is used.
 
-    /etc/litefwm/modules/<module>/config.json
+## CLI
 
-Secrets such as Tailscale and Dynamic DNS credentials are redacted when read
-through the API.
+The CLI uses the same live model:
 
-## First-time CLI setup
+    configctl show
+    netctl inventory
+    netctl interfaces
+    netctl segments
+    setupctl show
 
-setupctl exposes the same interface/segment model without requiring the web UI.
+Examples:
 
-Inspect physical links:
+    setupctl bridge br0 br0 eth0 true
+    setupctl vlan eth0.100 eth0 100
+    setupctl segment-static lan br0 192.168.10.1/24
+    setupctl segment-dhcp wan eth0
 
-    setupctl inventory
-
-Create a simple physical WAN and LAN:
-
-    setupctl physical wan0 eth0 WAN
-    setupctl physical lan0 eth1 LAN
-    setupctl segment-static lan lan0 192.168.10.1/24 internal "" 192.168.10.1 home.arpa
-    setupctl dhcp lan true 192.168.10.100 192.168.10.200 12h
-
-Create a VLAN-aware bridge:
-
-    setupctl physical lanp1 eth1 lan-port-1
-    setupctl physical lanp2 eth2 lan-port-2
-    setupctl bridge lan br0 lanp1,lanp2 true
-    setupctl segment-static lan lan 192.168.10.1/24 internal
-
-Create a VLAN adapter on that bridge:
-
-    setupctl vlan iot-vlan lan 20 br0.20
-    setupctl segment-static iot iot-vlan 192.168.20.1/24 internal
-    setupctl dhcp iot true 192.168.20.100 192.168.20.199 8h
-
-Restrict the management listener to a segment:
-
-    setupctl management lan 5187
-    setupctl ssh true 22
-
-Validate before applying:
-
-    fwmctl validate
-    setupctl apply
-
-Topology changes are staged until apply.
+These commands mutate the live system immediately.
 
 ## Installation
 
-On a dedicated Alpine target:
+On a dedicated Alpine host:
 
-    sudo ./install.sh
+    sudo ./install.sh --port 5187 --admin-user blaize
 
-The default web port is 5187. Options include:
-
-    sudo ./install.sh --port 5187 --admin-user admin
-    sudo ./install.sh --no-start
-
-The installer does not invent WAN/LAN addressing or apply a firewall topology.
-Configure it through the UI or setupctl, validate it, then apply it.
-
-## Main commands
-
-    configctl show
-    configctl validate
-    configctl migrate legacy.json
-
-    setupctl inventory
-    setupctl show
-
-    netctl inventory
-    netctl render
-
-    dhcpctl leases
-    dhcpctl reserve-lease SEGMENT MAC HOSTNAME
-
-    firewallctl render
-    firewallctl check
-    firewallctl rollback
-
-    modulectl list
-    modulectl install bind
-    modulecfgctl show bind
-    modulecfgctl validate bind
-    modulecfgctl apply bind
-
-    ddnsctl show
-    ddnsctl validate
-    ddnsctl apply
-    ddnsctl query
-
-    fwmctl validate
-    fwmctl render
-    fwmctl apply
-    fwmctl rollback
-
-## Configuration and apply flow
-
-The canonical desired state is:
-
-    /etc/litefwm/config.json
-
-Saving through the UI only stages configuration. fwmctl apply coordinates
-schema validation, previous-config snapshot, network apply, DHCP apply, atomic
-iptables load, lighttpd update, and optional-module apply.
-
-Generated files live under /var/lib/litefwm/generated.
-
-## Security notes
-
-The management UI uses HTTP Basic Authentication through lighttpd. CGI remains
-unprivileged and reaches a fixed root command broker through a constrained sudo
-rule. Mutating browser requests require X-LiteFWM-Request: 1.
-
-The current release is IPv4-first. TLS for the management UI, IPv6,
-DHCPv6/router advertisements, multi-WAN policy routing, HA, and transactional
-network rollback remain future work.
+An upgrade removes obsolete LiteFWM JSON/state files from earlier releases.
 
 ## Tests
-
-Source tests do not apply host networking or firewall state.
 
     ./tests/syntax-test.sh
     ./tests/render-test.sh
@@ -213,3 +111,7 @@ Source tests do not apply host networking or firewall state.
     ./tests/migration-test.sh
     ./tests/module-render-test.sh
     ./tests/ddns-render-test.sh
+
+The render test uses mocked Linux live state and validates DHCP discovery,
+connectivity-preserving bridge migration, native persistence, and VLAN
+parenting without altering the test host.

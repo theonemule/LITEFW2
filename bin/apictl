@@ -12,15 +12,12 @@ safe_module() {
 
 case "$cmd" in
   status) "$bindir/fwmctl" status;;
-  config-get) config_exists; cat "$LITEFWM_CONFIG";;
+  config-get) "$bindir/configctl" show;;
   config-set)
-    ensure_dirs
     tmp=$(mktemp); cat > "$tmp"
     "$bindir/configctl" validate "$tmp" >/dev/null
-    cp "$LITEFWM_CONFIG" "$LITEFWM_STATE/config.previous.json" 2>/dev/null || true
-    install -m 0640 "$tmp" "$LITEFWM_CONFIG"
+    "$bindir/configctl" set "$tmp"
     rm -f "$tmp"
-    jq -n '{ok:true}'
     ;;
   interfaces) "$bindir/netctl" inventory;;
   leases) "$bindir/dhcpctl" leases;;
@@ -38,12 +35,10 @@ case "$cmd" in
     jq -n --arg message "$out" '{ok:true,message:$message}'
     ;;
   apply)
-    out=$("$bindir/fwmctl" apply 2>&1)
-    jq -n --arg message "$out" '{ok:true,message:$message}'
+    jq -n '{ok:true,message:"LiteFWM is live-state based; there are no staged changes to apply."}'
     ;;
   rollback)
-    out=$("$bindir/fwmctl" rollback 2>&1)
-    jq -n --arg message "$out" '{ok:true,message:$message}'
+    die "Rollback is not available in live-state mode. Change the live setting directly."
     ;;
   reserve)
     seg=${2:-}; mac=${3:?MAC}; host=${4:-}; publish=${5:-false}

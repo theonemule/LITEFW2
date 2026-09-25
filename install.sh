@@ -20,9 +20,9 @@ while [ "$#" -gt 0 ]; do
       cat <<'TXT'
 Usage: sudo ./install.sh [--port 5187] [--admin-user admin] [--no-start]
 
-Installs LiteFWM onto an Alpine Linux target. The installer does not create
-network segments or apply custom firewall/NAT policy. Configure the appliance
-through the web UI or /etc/litefwm/config.json, then apply the staged config.
+Installs LiteFWM onto an Alpine Linux target. LiteFWM reads the running Linux
+network/firewall/service state directly. Changes made in the UI are applied
+immediately and persisted to the native Alpine/service configuration files.
 TXT
       exit 0;;
     *) echo "Unknown option: $1" >&2; exit 2;;
@@ -37,24 +37,19 @@ echo "Installing LiteFWM base dependencies..."
 apk update
 apk add --no-cache   bash jq iproute2 iptables dnsmasq tcpdump curl ca-certificates procps   lighttpd lighttpd-openrc lighttpd-mod_auth apache2-utils sudo
 
-install -d -m 0755   /usr/local/sbin /usr/lib/litefwm /usr/lib/litefwm/cgi   /usr/share/litefwm /usr/share/litefwm/www   /etc/litefwm /var/lib/litefwm/generated /var/lib/litefwm/captures   /var/log/litefwm
+install -d -m 0755   /usr/local/sbin /usr/lib/litefwm /usr/lib/litefwm/cgi   /usr/share/litefwm /usr/share/litefwm/www   /etc/litefwm /var/lib/litefwm/captures /var/log/litefwm
 
 install -m 0755 "$BASE"/bin/* /usr/local/sbin/
 install -m 0644 "$BASE/lib/common.sh" /usr/lib/litefwm/common.sh
 install -m 0755 "$BASE"/cgi/*.cgi /usr/lib/litefwm/cgi/
 cp -R "$BASE"/www/. /usr/share/litefwm/www/
 install -m 0644 "$BASE/lighttpd/litefwm.conf" /usr/share/litefwm/litefwm-lighttpd.conf
-install -m 0755 "$BASE/openrc/litefwm" /etc/init.d/litefwm
 
-if [ ! -r /etc/litefwm/config.json ]; then
-  install -m 0640 "$BASE/etc/config.json" /etc/litefwm/config.json
-fi
-if [ "$(jq -r '.version // 1' /etc/litefwm/config.json)" -lt 3 ]; then
-  /usr/local/sbin/configctl migrate
-fi
-jq --argjson port "$PORT" '.management.port=$port' /etc/litefwm/config.json > /etc/litefwm/config.json.tmp
-mv /etc/litefwm/config.json.tmp /etc/litefwm/config.json
-chmod 0640 /etc/litefwm/config.json
+# Remove every artifact from the retired staged/declarative configuration model.
+rc-service litefwm stop >/dev/null 2>&1 || true
+rc-update del litefwm default >/dev/null 2>&1 || true
+rm -f   /etc/init.d/litefwm   /etc/litefwm/config.json /etc/litefwm/config.json.tmp   /var/lib/litefwm/config.previous.json /var/lib/litefwm/last-apply   /var/lib/litefwm/applied-interfaces.json /var/lib/litefwm/applied-segments.json   2>/dev/null || true
+rm -rf /var/lib/litefwm/generated /etc/litefwm/modules 2>/dev/null || true
 
 if [ ! -s /etc/litefwm/htpasswd ]; then
   password=$(head -c 24 /dev/urandom | base64 | tr -dc 'A-Za-z0-9' | head -c 18)
@@ -88,8 +83,9 @@ net.ipv4.conf.default.rp_filter=1
 SYSCTL
 sysctl -p /etc/sysctl.d/90-litefwm.conf >/dev/null || true
 
+mkdir -p /etc/dnsmasq.d
 cat > /etc/conf.d/dnsmasq <<'DNSMASQ'
-DNSMASQ_OPTS="--conf-file=/var/lib/litefwm/generated/dnsmasq.conf"
+DNSMASQ_OPTS="--conf-file=/etc/dnsmasq.d/litefwm.conf"
 DNSMASQ
 
 # Alpine's stock lighttpd.conf already defines server.document-root. Update
@@ -103,13 +99,13 @@ fi
 
 grep -q 'include "litefwm.conf"' /etc/lighttpd/lighttpd.conf 2>/dev/null || printf '\ninclude "litefwm.conf"\n' >> /etc/lighttpd/lighttpd.conf
 
-/usr/local/sbin/configctl validate
-/usr/local/sbin/webctl render >/dev/null
-install -m 0644 /var/lib/litefwm/generated/lighttpd-litefwm.conf /etc/lighttpd/litefwm.conf
+tmp_web=$(mktemp)
+jq -n --arg hostname "$(hostname)" --argjson port "$PORT" '{hostname:$hostname,management:{port:$port,sshPort:22,allowSsh:true,allowAny:true,allowedSegments:[]}}' > "$tmp_web"
+/usr/local/sbin/webctl reconcile "$tmp_web"
+rm -f "$tmp_web"
 lighttpd -tt -f /etc/lighttpd/lighttpd.conf
 
 rc-update add lighttpd default >/dev/null
-rc-update add litefwm default >/dev/null
 
 if [ "$START_WEB" = true ]; then
   rc-service lighttpd restart >/dev/null 2>&1 || rc-service lighttpd start
@@ -121,14 +117,13 @@ LiteFWM installed on the Alpine target.
 Web console:
   http://<appliance>:$PORT/
 
-The installer has not created network segments or applied staged firewall/NAT
-rules. The current configuration keeps the management port open on any
-interface until you restrict management to specific segments.
+LiteFWM is live-state based. It reads the current Linux network, routes,
+iptables, DHCP, and service state directly. UI changes take effect immediately
+and are persisted in native Alpine/service configuration.
 
 Next:
   1. Sign in to the web console.
-  2. Configure physical, bridge, and VLAN interfaces.
-  3. Create network segments and DHCP settings.
+  2. Configure physical, bridge, and VLAN interfaces as needed.
+  3. Configure interface IP/DHCP settings.
   4. Configure firewall rules and NAT.
-  5. Validate and apply changes.
 TXT

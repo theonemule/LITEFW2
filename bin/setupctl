@@ -3,112 +3,110 @@ set -eu
 SELF_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd -P)
 if [ -r "$SELF_DIR/../lib/common.sh" ]; then . "$SELF_DIR/../lib/common.sh"; else . /usr/lib/litefwm/common.sh; fi
 require_root
-config_exists
 
-write_cfg() {
+with_live() {
+  tmp=$(mktemp)
+  "$SELF_DIR/configctl" show > "$tmp"
+  printf '%s\n' "$tmp"
+}
+
+commit_live() {
   tmp=$1
   "$SELF_DIR/configctl" validate "$tmp" >/dev/null
-  cp "$LITEFWM_CONFIG" "$LITEFWM_STATE/config.previous.json" 2>/dev/null || true
-  install -m 0640 "$tmp" "$LITEFWM_CONFIG"
+  "$SELF_DIR/configctl" set "$tmp" >/dev/null
   rm -f "$tmp"
 }
-upsert_interface() {
-  obj=$1
-  tmp=$(mktemp)
-  jq --argjson o "$obj" '.interfaces = ((.interfaces // []) | map(select(.id != $o.id)) + [$o])' "$LITEFWM_CONFIG" > "$tmp"
-  write_cfg "$tmp"
-}
-upsert_segment() {
-  obj=$1
-  tmp=$(mktemp)
-  jq --argjson o "$obj" '.segments = ((.segments // []) | map(select(.id != $o.id)) + [$o])' "$LITEFWM_CONFIG" > "$tmp"
-  write_cfg "$tmp"
-}
+
 case "${1:-}" in
-  show) jq . "$LITEFWM_CONFIG";;
+  show) "$SELF_DIR/configctl" show;;
   inventory) "$SELF_DIR/netctl" inventory;;
-  physical)
-    id=${2:?ID}; dev=${3:?DEVICE}; name=${4:-$id}
-    obj=$(jq -n --arg id "$id" --arg name "$name" --arg dev "$dev" \
-      '{id:$id,name:$name,type:"physical",device:$dev,role:"none",mtu:1500,enabled:true}')
-    upsert_interface "$obj"
-    ;;
   bridge)
     id=${2:?ID}; dev=${3:?DEVICE}; members=${4:-}; aware=${5:-true}
-    obj=$(jq -n --arg id "$id" --arg dev "$dev" --arg members "$members" --argjson aware "$aware" \
-      '{id:$id,name:$id,type:"bridge",device:$dev,role:"none",mtu:1500,enabled:true,vlanAware:$aware,members:($members|split(",")|map(select(length>0)))}')
-    upsert_interface "$obj"
+    tmp=$(with_live); out=$(mktemp)
+    jq --arg id "$id" --arg dev "$dev" --arg members "$members" --argjson aware "$aware" '
+      .interfaces = ([.interfaces[] | select(.id!=$id)] + [{
+        id:$id,name:$id,type:"bridge",kind:"bridge",device:$dev,managed:true,persistent:true,
+        enabled:true,mtu:1500,vlanAware:$aware,members:($members|split(",")|map(select(length>0)))
+      }])
+    ' "$tmp" > "$out"; rm -f "$tmp"; commit_live "$out"
     ;;
   vlan)
-    id=${2:?ID}; parent=${3:?PARENT_ID}; vid=${4:?VLAN_ID}; dev=${5:-}
-    [ -n "$dev" ] || dev="$(interface_device "$parent").$vid"
-    obj=$(jq -n --arg id "$id" --arg parent "$parent" --arg dev "$dev" --argjson vid "$vid" \
-      '{id:$id,name:$id,type:"vlan",device:$dev,parent:$parent,vlanId:$vid,role:"none",mtu:1500,enabled:true}')
-    upsert_interface "$obj"
+    id=${2:?ID}; parent=${3:?PARENT}; vid=${4:?VLAN_ID}; dev=${5:-}
+    [ -n "$dev" ] || dev="$parent.$vid"
+    tmp=$(with_live); out=$(mktemp)
+    jq --arg id "$id" --arg parent "$parent" --arg dev "$dev" --argjson vid "$vid" '
+      .interfaces = ([.interfaces[] | select(.id!=$id)] + [{
+        id:$id,name:$id,type:"vlan",kind:"vlan",device:$dev,parent:$parent,vlanId:$vid,
+        managed:true,persistent:true,enabled:true,mtu:1500,members:[]
+      }])
+    ' "$tmp" > "$out"; rm -f "$tmp"; commit_live "$out"
     ;;
-  segment|segment-static)
-    id=${2:?ID}; iid=${3:?INTERFACE_ID}; cidr=${4:?CIDR}; zone=${5:-internal}; gateway=${6:-}; dns=${7:-}; domain=${8:-}
-    if [ "${1:-}" = segment ] && [ "$zone" != internal ] && [ "$zone" != external ] && [ "$zone" != none ]; then
-      domain=$dns; dns=$gateway; gateway=$zone
-      if [ -n "$gateway" ]; then zone=external; else zone=internal; fi
-    fi
-    obj=$(jq -n --arg id "$id" --arg iid "$iid" --arg cidr "$cidr" --arg zone "$zone" --arg gateway "$gateway" --arg dns "$dns" --arg domain "$domain" \
-      '{id:$id,name:$id,interface:$iid,zone:$zone,addressMode:"static",address:$cidr,gateway:$gateway,dns:($dns|split(",")|map(select(length>0))),domain:$domain,dhcpClient:{hostname:""},dhcp:{enabled:false,dns:[],ntp:[],reservations:[]}}')
-    upsert_segment "$obj"
+  segment-static)
+    id=${2:?ID}; iface=${3:?INTERFACE}; cidr=${4:?CIDR}; gateway=${5:-}; dns=${6:-}; domain=${7:-}
+    tmp=$(with_live); out=$(mktemp)
+    jq --arg id "$id" --arg iface "$iface" --arg cidr "$cidr" --arg gateway "$gateway" --arg dns "$dns" --arg domain "$domain" '
+      .segments = ([.segments[] | select(.id!=$id)] + [{
+        id:$id,name:$id,interface:$iface,zone:(if $gateway=="" then "internal" else "external" end),
+        addressMode:"static",address:$cidr,currentAddress:$cidr,gateway:$gateway,
+        dns:($dns|split(",")|map(select(length>0))),domain:$domain,dhcpClient:{hostname:""},
+        dhcp:{enabled:false,dns:[],ntp:[],reservations:[]},managed:true
+      }])
+    ' "$tmp" > "$out"; rm -f "$tmp"; commit_live "$out"
     ;;
   segment-dhcp)
-    id=${2:?ID}; iid=${3:?INTERFACE_ID}; zone=${4:-external}; host=${5:-}
-    obj=$(jq -n --arg id "$id" --arg iid "$iid" --arg zone "$zone" --arg host "$host" \
-      '{id:$id,name:$id,interface:$iid,zone:$zone,addressMode:"dhcp",address:"",gateway:"",dns:[],domain:"",dhcpClient:{hostname:$host},dhcp:{enabled:false,dns:[],ntp:[],reservations:[]}}')
-    upsert_segment "$obj"
+    id=${2:?ID}; iface=${3:?INTERFACE}
+    tmp=$(with_live); out=$(mktemp)
+    jq --arg id "$id" --arg iface "$iface" '
+      .segments = ([.segments[] | select(.id!=$id)] + [{
+        id:$id,name:$id,interface:$iface,zone:"external",addressMode:"dhcp",address:"",
+        currentAddress:"",gateway:"",dns:[],domain:"",dhcpClient:{hostname:""},
+        dhcp:{enabled:false,dns:[],ntp:[],reservations:[]},managed:true
+      }])
+    ' "$tmp" > "$out"; rm -f "$tmp"; commit_live "$out"
     ;;
   dhcp)
-    id=${2:?SEGMENT}; enabled=${3:?true_or_false}; start=${4:-}; end=${5:-}; lease=${6:-12h}; gateway=${7:-}; dns=${8:-}; domain=${9:-}; ntp=${10:-}
-    tmp=$(mktemp)
-    jq --arg id "$id" --argjson enabled "$enabled" --arg start "$start" --arg end "$end" --arg lease "$lease" --arg gateway "$gateway" --arg dns "$dns" --arg domain "$domain" --arg ntp "$ntp" '
+    id=${2:?SEGMENT}; enabled=${3:?true_or_false}; start=${4:-}; end=${5:-}; lease=${6:-12h}
+    router=${7:-}; dns=${8:-}; domain=${9:-}; ntp=${10:-}
+    tmp=$(with_live); out=$(mktemp)
+    jq --arg id "$id" --argjson enabled "$enabled" --arg start "$start" --arg end "$end" \
+       --arg lease "$lease" --arg router "$router" --arg dns "$dns" --arg domain "$domain" --arg ntp "$ntp" '
       .segments |= map(if .id==$id then
-        .domain=(if ($domain|length)>0 then $domain else .domain end) |
-        .dhcp = ((.dhcp // {reservations:[]}) + {
-          enabled:$enabled,poolStart:$start,poolEnd:$end,leaseTime:$lease,gateway:$gateway,
+        .domain=$domain |
+        .dhcp={enabled:$enabled,poolStart:$start,poolEnd:$end,leaseTime:$lease,gateway:$router,
           dns:($dns|split(",")|map(select(length>0))),
           ntp:($ntp|split(",")|map(select(length>0))),
-          reservations:(.dhcp.reservations // [])
-        })
+          reservations:(.dhcp.reservations // [])}
       else . end)
-    ' "$LITEFWM_CONFIG" > "$tmp"
-    write_cfg "$tmp"
+    ' "$tmp" > "$out"; rm -f "$tmp"; commit_live "$out"
     ;;
   management)
-    scope=${2:-any}; port=${3:-5187}
-    tmp=$(mktemp)
-    if [ "$scope" = any ]; then
-      jq --argjson port "$port" '.management.port=$port | .management.allowAny=true | .management.allowedSegments=[]' "$LITEFWM_CONFIG" > "$tmp"
-    else
-      jq --argjson port "$port" --arg seg "$scope" '.management.port=$port | .management.allowAny=false | .management.allowedSegments=[$seg]' "$LITEFWM_CONFIG" > "$tmp"
-    fi
-    write_cfg "$tmp"
+    port=${2:-5187}
+    tmp=$(with_live); out=$(mktemp)
+    jq --argjson port "$port" '.management.port=$port' "$tmp" > "$out"
+    rm -f "$tmp"; commit_live "$out"
     ;;
   ssh)
     enabled=${2:?true_or_false}; port=${3:-22}
-    tmp=$(mktemp)
-    jq --argjson enabled "$enabled" --argjson port "$port" '.management.allowSsh=$enabled | .management.sshPort=$port' "$LITEFWM_CONFIG" > "$tmp"
-    write_cfg "$tmp"
+    tmp=$(with_live); out=$(mktemp)
+    jq --argjson enabled "$enabled" --argjson port "$port" \
+       '.management.allowSsh=$enabled | .management.sshPort=$port' "$tmp" > "$out"
+    rm -f "$tmp"; commit_live "$out"
     ;;
-  apply) "$SELF_DIR/fwmctl" apply;;
+  apply)
+    echo "Nothing is staged. LiteFWM changes the live system immediately."
+    ;;
   *)
     cat >&2 <<'TXT'
 Usage:
   setupctl inventory
-  setupctl physical ID DEVICE [NAME]
+  setupctl show
   setupctl bridge ID DEVICE [MEMBER_IDS_CSV] [true|false]
   setupctl vlan ID PARENT_ID VLAN_ID [DEVICE]
-  setupctl segment-static ID INTERFACE_ID CIDR [internal|external|none] [GATEWAY] [DNS_CSV] [DOMAIN]
-  setupctl segment-dhcp ID INTERFACE_ID [internal|external|none] [HOSTNAME]
+  setupctl segment-static ID INTERFACE CIDR [GATEWAY] [DNS_CSV] [DOMAIN]
+  setupctl segment-dhcp ID INTERFACE
   setupctl dhcp SEGMENT true|false [POOL_START] [POOL_END] [LEASE] [ROUTER] [DNS_CSV] [DOMAIN] [NTP_CSV]
-  setupctl management any|SEGMENT [PORT]
+  setupctl management [PORT]
   setupctl ssh true|false [PORT]
-  setupctl show
-  setupctl apply
 TXT
     exit 2;;
 esac

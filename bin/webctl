@@ -6,29 +6,75 @@ if [ -r "$SELF_DIR/../lib/common.sh" ]; then . "$SELF_DIR/../lib/common.sh"; els
 template=/usr/share/litefwm/litefwm-lighttpd.conf
 [ -r "$template" ] || template="$(dirname "$0")/../lighttpd/litefwm.conf"
 
-render() {
-  config_exists
-  ensure_dirs
-  port=$(jq -r '.management.port' "$LITEFWM_CONFIG")
-  out="$LITEFWM_GENERATED/lighttpd-litefwm.conf"
-  sed "s/@LITEFWM_PORT@/$port/g" "$template" > "$out"
-  echo "$out"
+current_port() {
+  [ -r "$LITEFWM_LIGHTTPD_CONF" ] || { echo 5187; return 0; }
+  awk -F= '/^[[:space:]]*server.port[[:space:]]*=/{gsub(/[[:space:]]/,"",$2);print $2;found=1;exit} END{if(!found) print 5187}' "$LITEFWM_LIGHTTPD_CONF" 2>/dev/null || echo 5187
+}
+ssh_port() {
+  if command -v sshd >/dev/null 2>&1; then
+    sshd -T 2>/dev/null | awk '$1=="port"{print $2;found=1;exit} END{if(!found) print 22}' || echo 22
+  else
+    echo 22
+  fi
+}
+snapshot() {
+  port=$(current_port); [ -n "$port" ] || port=5187
+  sp=$(ssh_port); [ -n "$sp" ] || sp=22
+  ssh_running=false; rc-service sshd status >/dev/null 2>&1 && ssh_running=true
+  jq -n --argjson port "$port" --argjson sshPort "$sp" --argjson allowSsh "$ssh_running"     '{port:$port,sshPort:$sshPort,allowSsh:$allowSsh,allowAny:true,allowedSegments:[]}'
+}
+set_ssh_port() {
+  port=$1
+  file=/etc/ssh/sshd_config
+  if grep -Eq '^[[:space:]]*Port[[:space:]]+' "$file" 2>/dev/null; then
+    sed -i -E "s/^[[:space:]]*Port[[:space:]]+.*/Port $port/" "$file"
+  else
+    printf '\nPort %s\n' "$port" >> "$file"
+  fi
+  sshd -t
+  rc-service sshd restart >/dev/null
+}
+reconcile() {
+  require_root
+  file=$1
+  port=$(jq -r '.management.port // 5187' "$file")
+  sp=$(jq -r '.management.sshPort // 22' "$file")
+  allow=$(jq -r 'if .management.allowSsh==null then true else .management.allowSsh end' "$file")
+  hostname_new=$(jq -r '.hostname // empty' "$file")
+
+  case "$port" in ''|*[!0-9]*) die "Invalid management port";; esac
+  [ "$port" -ge 1 ] && [ "$port" -le 65535 ] || die "Invalid management port"
+  case "$sp" in ''|*[!0-9]*) die "Invalid SSH port";; esac
+  [ "$sp" -ge 1 ] && [ "$sp" -le 65535 ] || die "Invalid SSH port"
+
+  if [ -n "$hostname_new" ] && [ "$hostname_new" != "$(hostname)" ]; then
+    printf '%s\n' "$hostname_new" > /etc/hostname
+    hostname "$hostname_new"
+  fi
+
+  old=$(current_port); [ -n "$old" ] || old=5187
+  if [ "$old" != "$port" ] || [ ! -r "$LITEFWM_LIGHTTPD_CONF" ]; then
+    tmp=$(mktemp)
+    sed "s/@LITEFWM_PORT@/$port/g" "$template" > "$tmp"
+    install -m 0644 "$tmp" "$LITEFWM_LIGHTTPD_CONF"
+    rm -f "$tmp"
+    lighttpd -tt -f /etc/lighttpd/lighttpd.conf
+    rc-service lighttpd restart >/dev/null
+  fi
+
+  oldsp=$(ssh_port); [ -n "$oldsp" ] || oldsp=22
+  [ "$oldsp" = "$sp" ] || set_ssh_port "$sp"
+  if [ "$allow" = true ]; then
+    rc-update add sshd default >/dev/null 2>&1 || true
+    rc-service sshd status >/dev/null 2>&1 || rc-service sshd start >/dev/null
+  else
+    rc-service sshd stop >/dev/null 2>&1 || true
+    rc-update del sshd default >/dev/null 2>&1 || true
+  fi
 }
 
-case "$1" in
-  render) render;;
-  apply)
-    require_root
-    f=$(render)
-    changed=true
-    if [ -r /etc/lighttpd/litefwm.conf ] && cmp -s "$f" /etc/lighttpd/litefwm.conf; then
-      changed=false
-    fi
-    install -m 0644 "$f" /etc/lighttpd/litefwm.conf
-    lighttpd -tt -f /etc/lighttpd/lighttpd.conf
-    if [ "$changed" = true ] && rc-service lighttpd status >/dev/null 2>&1; then
-      rc-service lighttpd restart
-    fi
-    ;;
-  *) echo "Usage: webctl render|apply" >&2; exit 2;;
+case "${1:-}" in
+  snapshot) snapshot;;
+  reconcile) reconcile "${2:?live snapshot file}";;
+  *) echo "Usage: webctl snapshot|reconcile FILE" >&2; exit 2;;
 esac

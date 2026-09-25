@@ -3,47 +3,128 @@ set -eu
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd -P)
 TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT INT TERM
-export LITEFWM_ETC="$TMP/etc"
-export LITEFWM_CONFIG="$ROOT/tests/fixtures/full.json"
-export LITEFWM_STATE="$TMP/state"
+mkdir -p "$TMP/bin"
+
+cat > "$TMP/interfaces" <<'NET'
+auto lo
+iface lo inet loopback
+
+auto eth0
+iface eth0 inet dhcp
+    udhcpc_opts -r 10.0.1.187
+NET
+
+cat > "$TMP/bin/ip" <<'MOCK'
+#!/bin/sh
+case "$*" in
+  "-d -j link show")
+    cat <<'JSON'
+[
+ {"ifindex":1,"ifname":"lo","flags":["LOOPBACK","UP"],"mtu":65536,"operstate":"UNKNOWN","link_type":"loopback","address":"00:00:00:00:00:00"},
+ {"ifindex":2,"ifname":"eth0","flags":["BROADCAST","UP","LOWER_UP"],"mtu":1500,"operstate":"UP","link_type":"ether","address":"00:15:5d:01:33:29"}
+]
+JSON
+    ;;
+  "-4 -j addr show")
+    cat <<'JSON'
+[
+ {"ifindex":1,"ifname":"lo","addr_info":[{"family":"inet","local":"127.0.0.1","prefixlen":8,"scope":"host"}]},
+ {"ifindex":2,"ifname":"eth0","addr_info":[{"family":"inet","local":"10.0.1.187","prefixlen":24,"scope":"global","dynamic":true}]}
+]
+JSON
+    ;;
+  "-4 -j route show table main")
+    echo '[{"dst":"default","gateway":"10.0.1.1","dev":"eth0"},{"dst":"10.0.1.0/24","dev":"eth0"}]'
+    ;;
+  "-4 -j addr show dev eth0")
+    echo '[{"ifindex":2,"ifname":"eth0","addr_info":[{"family":"inet","local":"10.0.1.187","prefixlen":24,"scope":"global","dynamic":true}]}]'
+    ;;
+  "-4 -j addr show dev br0"|"-4 -j addr show dev eth0.100")
+    echo '[]'
+    ;;
+  "-4 -j route show default dev eth0")
+    echo '[{"dst":"default","gateway":"10.0.1.1","dev":"eth0"}]'
+    ;;
+  "-4 -j route show default dev br0"|"-4 -j route show default dev eth0.100")
+    echo '[]'
+    ;;
+  "-j link show dev eth0")
+    echo '[{"ifindex":2,"ifname":"eth0"}]'
+    ;;
+  "-j link show dev br0"|"-j link show dev eth0.100")
+    echo '[]'
+    ;;
+  "-j link show")
+    echo '[{"ifindex":1,"ifname":"lo"},{"ifindex":2,"ifname":"eth0"}]'
+    ;;
+  "link show dev eth0") exit 0;;
+  "link show dev br0"|"link show dev eth0.100") exit 1;;
+  *) echo "unexpected ip call: $*" >&2; exit 1;;
+esac
+MOCK
+chmod +x "$TMP/bin/ip"
+
+export PATH="$TMP/bin:$PATH"
+export LITEFWM_INTERFACES="$TMP/interfaces"
 export LITEFWM_RUN="$TMP/run"
-export LITEFWM_LOG="$TMP/log"
-export LITEFWM_GENERATED="$TMP/state/generated"
+export LITEFWM_DRY_RUN=1
 
-"$ROOT/bin/configctl" validate "$LITEFWM_CONFIG" >/dev/null
-net=$("$ROOT/bin/netctl" render)
-fw=$("$ROOT/bin/firewallctl" render)
-dhcp=$("$ROOT/bin/dhcpctl" render)
-web=$("$ROOT/bin/webctl" render)
+segments=$("$ROOT/bin/netctl" segments)
+printf '%s' "$segments" | jq -e '
+  length==1 and
+  .[0].interface=="eth0" and
+  .[0].addressMode=="dhcp" and
+  .[0].currentAddress=="10.0.1.187/24" and
+  .[0].gateway=="10.0.1.1"
+' >/dev/null
 
-grep -Fq "ip route replace default via '203.0.113.1' dev 'eth0'" "$net"
-grep -Fq "ip link add name 'br0' type bridge" "$net"
-grep -Fq "ip link set dev 'br0' type bridge vlan_filtering '1'" "$net"
-grep -Fq "ip link set dev 'eth1' master 'br0'" "$net"
-grep -Fq "ip link set dev 'eth2' master 'br0'" "$net"
-grep -Fq "ip link add link 'br0' name 'br0.20' type vlan id '20'" "$net"
-grep -Fq "bridge vlan add dev 'br0' vid '20' self" "$net"
-grep -Fq "bridge vlan add dev 'eth1' vid '20'" "$net"
-grep -Fq "bridge vlan add dev 'eth2' vid '20'" "$net"
-grep -Fq "ip addr replace '192.168.10.1/24' dev 'br0'" "$net"
-grep -Fq "ip addr replace '192.168.11.1/24' dev 'br0'" "$net"
-grep -Fq "udhcpc -i 'eth3'" "$net"
-grep -Fq "hostname:edge-fw-01" "$net"
+interfaces=$("$ROOT/bin/netctl" interfaces)
 
-grep -Fq ':INPUT DROP [0:0]' "$fw"
-grep -Fq ':FORWARD DROP [0:0]' "$fw"
-grep -Fq ':OUTPUT ACCEPT [0:0]' "$fw"
-grep -Fq -- "-A INPUT -p tcp --dport 22 -j ACCEPT" "$fw"
-grep -Fq -- "-A INPUT -i br0 -s 192.168.10.0/24 -p tcp --dport 5187 -j ACCEPT" "$fw"
-grep -Fq -- "-A FORWARD -i br0 -s 192.168.10.0/24 -o eth0 -j ACCEPT" "$fw"
-grep -Fq -- "-A POSTROUTING -o eth0 -s 192.168.10.0/24 -j MASQUERADE" "$fw"
-grep -Fq -- "-A PREROUTING -i eth0 -d 203.0.113.2 -p tcp --dport 443 -j DNAT --to-destination 192.168.10.50:443" "$fw"
+jq -n --argjson i "$interfaces" --argjson s "$segments" '
+  {
+    interfaces:($i + [{
+      id:"br0",name:"br0",device:"br0",type:"bridge",kind:"bridge",
+      managed:true,persistent:true,enabled:true,mtu:1500,
+      vlanAware:true,members:["eth0"]
+    }]),
+    segments:$s
+  }
+' > "$TMP/bridge.json"
 
-grep -Fq "dhcp-range=set:lan,192.168.10.100,192.168.10.200,12h" "$dhcp"
-grep -Fq "dhcp-option=tag:lan,option:router,192.168.10.1" "$dhcp"
-grep -Fq "dhcp-option=tag:lan,option:dns-server,1.1.1.1,9.9.9.9" "$dhcp"
-grep -Fq "dhcp-option=tag:lan,option:ntp-server,192.168.10.1" "$dhcp"
-grep -Fq "dhcp-host=02:00:00:00:00:50,192.168.10.50,server" "$dhcp"
-grep -Fq "server.port = 5187" "$web"
+bridge=$("$ROOT/bin/netctl" reconcile "$TMP/bridge.json")
+printf '%s
+' "$bridge" | grep -Fq '+ ip addr add 10.0.1.187/24 dev br0'
+printf '%s
+' "$bridge" | grep -Fq '+ ip route replace default via 10.0.1.1 dev br0'
+printf '%s
+' "$bridge" | grep -Fq '+ ip link set dev eth0 master br0'
+printf '%s
+' "$bridge" | grep -Fq '+ ip addr del 10.0.1.187/24 dev eth0'
+printf '%s
+' "$bridge" | grep -Fq '+ udhcpc -i br0 -b -q -r 10.0.1.187'
+printf '%s
+' "$bridge" | grep -Fq 'iface eth0 inet manual'
+printf '%s
+' "$bridge" | grep -Fq 'iface br0 inet dhcp'
+printf '%s
+' "$bridge" | grep -Fq 'udhcpc_opts -r 10.0.1.187'
+
+jq -n --argjson i "$interfaces" --argjson s "$segments" '
+  {
+    interfaces:($i + [{
+      id:"eth0.100",name:"eth0.100",device:"eth0.100",type:"vlan",kind:"vlan",
+      managed:true,persistent:true,enabled:true,mtu:1500,parent:"eth0",vlanId:100,members:[]
+    }]),
+    segments:$s
+  }
+' > "$TMP/vlan.json"
+
+vlan=$("$ROOT/bin/netctl" reconcile "$TMP/vlan.json")
+printf '%s
+' "$vlan" | grep -Fq '+ ip link add link eth0 name eth0.100 type vlan id 100'
+printf '%s
+' "$vlan" | grep -Fq 'iface eth0.100 inet manual'
+printf '%s
+' "$vlan" | grep -Fq 'ip link add link eth0 name eth0.100 type vlan id 100'
 
 echo "render-test: PASS"

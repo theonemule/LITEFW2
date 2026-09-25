@@ -3,154 +3,219 @@ set -eu
 SELF_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd -P)
 if [ -r "$SELF_DIR/../lib/common.sh" ]; then . "$SELF_DIR/../lib/common.sh"; else . /usr/lib/litefwm/common.sh; fi
 
-policy_word() {
-  case "$1" in accept) echo ACCEPT;; drop) echo DROP;; *) die "Invalid firewall policy: $1";; esac
+norm_addr() {
+  case "$1" in 0.0.0.0/0|0.0.0.0) echo any;; *) echo "$1";; esac
 }
-iface_clause() {
-  direction=$1
-  seg=$2
-  explicit=$3
-  if [ -z "$seg" ] || [ "$seg" = any ]; then return 0; fi
-  dev=$(segment_device "$seg") || die "Unknown segment: $seg"
-  mode=$(jq -r --arg id "$seg" '.segments[] | select(.id==$id) | .addressMode' "$LITEFWM_CONFIG")
-  zone=$(jq -r --arg id "$seg" '.segments[] | select(.id==$id) | .zone' "$LITEFWM_CONFIG")
-  if [ "$direction" = in ]; then
-    printf -- '-i %s ' "$dev"
-    if [ "$mode" = static ] && [ "$zone" = internal ] && [ "$explicit" = any ]; then printf -- '-s %s ' "$(segment_network_cidr "$seg")"; fi
-  else
-    printf -- '-o %s ' "$dev"
-    if [ "$mode" = static ] && [ "$zone" = internal ] && [ "$explicit" = any ]; then printf -- '-d %s ' "$(segment_network_cidr "$seg")"; fi
-  fi
+segment_iface() {
+  file=$1; sid=$2
+  [ -n "$sid" ] && [ "$sid" != any ] || { echo ''; return; }
+  jq -r --arg id "$sid" '[.segments[] | select(.id==$id) | .interface][0] // $id' "$file"
 }
-render_rule() {
-  rule=$1
-  chain=$(printf '%s' "$rule" | jq -r '.chain // "forward"' | tr '[:lower:]' '[:upper:]')
-  proto=$(printf '%s' "$rule" | jq -r '.protocol // "any"')
-  src=$(printf '%s' "$rule" | jq -r '.source // "any"')
-  dst=$(printf '%s' "$rule" | jq -r '.destination // "any"')
-  sport=$(printf '%s' "$rule" | jq -r '.sourcePort // "any"')
-  dport=$(printf '%s' "$rule" | jq -r '.destinationPort // "any"')
-  action=$(printf '%s' "$rule" | jq -r .action | tr '[:lower:]' '[:upper:]')
-  inseg=$(printf '%s' "$rule" | jq -r '.inSegment // "any"')
-  outseg=$(printf '%s' "$rule" | jq -r '.outSegment // "any"')
+segment_network() {
+  file=$1; sid=$2
+  jq -r --arg id "$sid" '
+    [.segments[] | select(.id==$id) |
+      if .addressMode=="static" then .address
+      elif (.currentAddress // "")!="" then .currentAddress
+      else "" end][0] // ""
+  ' "$file"
+}
+
+parse_rule() {
+  line=$1; idx=$2
+  set -- $line
+  [ "$1" = -A ] || return 0
+  chain=$2; shift 2
+  proto=any; src=any; dst=any; sport=any; dport=any; action=''; indev=''; outdev=''
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      -p) proto=${2:-any}; shift 2;;
+      -s) src=$(norm_addr "${2:-any}"); shift 2;;
+      -d) dst=$(norm_addr "${2:-any}"); shift 2;;
+      -i) indev=${2:-}; shift 2;;
+      -o) outdev=${2:-}; shift 2;;
+      --sport|--sports) sport=${2:-any}; shift 2;;
+      --dport|--dports) dport=${2:-any}; shift 2;;
+      -j) action=$(printf '%s' "${2:-}" | tr '[:upper:]' '[:lower:]'); shift 2;;
+      *) shift;;
+    esac
+  done
+  case "$action" in accept|drop|reject|log) :;; *) action=${action:-accept};; esac
+  jq -n --arg id "live-$idx" --arg chain "$(printf '%s' "$chain"|tr '[:upper:]' '[:lower:]')" \
+    --arg proto "$proto" --arg src "$src" --arg dst "$dst" --arg sport "$sport" --arg dport "$dport" \
+    --arg action "$action" --arg inSeg "${indev:-any}" --arg outSeg "${outdev:-any}" --arg raw "$line" \
+    --arg desc "$line" --argjson pos "$((idx*10))" \
+    '{id:$id,enabled:true,chain:$chain,protocol:$proto,source:$src,destination:$dst,
+      sourcePort:$sport,destinationPort:$dport,action:$action,inSegment:$inSeg,outSegment:$outSeg,
+      description:$desc,position:$pos,raw:$raw}'
+}
+
+snapshot_filter() {
+  save=$(iptables-save -t filter 2>/dev/null || printf '*filter\n:INPUT ACCEPT [0:0]\n:FORWARD ACCEPT [0:0]\n:OUTPUT ACCEPT [0:0]\nCOMMIT\n')
+  input=$(printf '%s\n' "$save"|awk '$1==":INPUT"{print tolower($2);exit}')
+  forward=$(printf '%s\n' "$save"|awk '$1==":FORWARD"{print tolower($2);exit}')
+  output=$(printf '%s\n' "$save"|awk '$1==":OUTPUT"{print tolower($2);exit}')
+  [ -n "$input" ] || input=accept; [ -n "$forward" ] || forward=accept; [ -n "$output" ] || output=accept
+  tmp=$(mktemp); idx=0
+  printf '%s\n' "$save" | while IFS= read -r line; do
+    case "$line" in
+      "-A "*) idx=$((idx+1)); parse_rule "$line" "$idx";;
+    esac
+  done > "$tmp"
+  rules=$(jq -s . "$tmp"); rm -f "$tmp"
+  jq -n --arg input "$input" --arg forward "$forward" --arg output "$output" --argjson rules "$rules" \
+    '{defaults:{input:$input,forward:$forward,output:$output},rules:$rules}'
+}
+
+parse_nat_line() {
+  line=$1; idx=$2
+  set -- $line
+  [ "$1" = -A ] || return 0
+  chain=$2; shift 2
+  proto=any; src=any; dst=any; dport=any; indev=''; outdev=''; action=''; tosrc=''; todst=''
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      -p) proto=${2:-any}; shift 2;;
+      -s) src=$(norm_addr "${2:-any}"); shift 2;;
+      -d) dst=$(norm_addr "${2:-any}"); shift 2;;
+      -i) indev=${2:-}; shift 2;;
+      -o) outdev=${2:-}; shift 2;;
+      --dport|--dports) dport=${2:-any}; shift 2;;
+      --to-source) tosrc=${2:-}; shift 2;;
+      --to-destination) todst=${2:-}; shift 2;;
+      -j) action=${2:-}; shift 2;;
+      *) shift;;
+    esac
+  done
+  case "$action" in
+    MASQUERADE)
+      jq -n --arg id "masq-$idx" --arg source "$src" --arg out "${outdev:-}" --arg raw "$line" \
+        '{kind:"masquerade",value:{id:$id,enabled:true,sourceSegment:"",source:$source,outSegment:$out,raw:$raw}}'
+      ;;
+    SNAT)
+      jq -n --arg id "snat-$idx" --arg source "$src" --arg out "${outdev:-}" --arg to "$tosrc" --arg raw "$line" \
+        '{kind:"snat",value:{id:$id,enabled:true,sourceSegment:"",source:$source,outSegment:$out,toSource:$to,raw:$raw}}'
+      ;;
+    DNAT)
+      jq -n --arg id "dnat-$idx" --arg inSeg "${indev:-}" --arg proto "$proto" --arg port "$dport" --arg to "$todst" --arg raw "$line" \
+        '{kind:"dnat",value:{id:$id,enabled:true,inSegment:$inSeg,protocol:$proto,destinationPort:$port,toDestination:$to,raw:$raw}}'
+      ;;
+  esac
+}
+
+snapshot_nat() {
+  tmp=$(mktemp); idx=0
+  iptables-save -t nat 2>/dev/null | while IFS= read -r line; do
+    case "$line" in "-A "*) idx=$((idx+1)); parse_nat_line "$line" "$idx";; esac
+  done > "$tmp"
+  jq -s '{
+    masquerade:[.[]|select(.kind=="masquerade")|.value],
+    snat:[.[]|select(.kind=="snat")|.value],
+    dnat:[.[]|select(.kind=="dnat")|.value]
+  }' "$tmp"
+  rm -f "$tmp"
+}
+
+snapshot() {
+  f=$(snapshot_filter); n=$(snapshot_nat)
+  jq -n --argjson f "$f" --argjson n "$n" '$f + {nat:$n}'
+}
+
+render_structured_rule() {
+  file=$1; rule=$2
+  chain=$(printf '%s' "$rule"|jq -r '.chain // "forward"'|tr '[:lower:]' '[:upper:]')
+  proto=$(printf '%s' "$rule"|jq -r '.protocol // "any"')
+  src=$(printf '%s' "$rule"|jq -r '.source // "any"')
+  dst=$(printf '%s' "$rule"|jq -r '.destination // "any"')
+  sport=$(printf '%s' "$rule"|jq -r '.sourcePort // "any"')
+  dport=$(printf '%s' "$rule"|jq -r '.destinationPort // "any"')
+  action=$(printf '%s' "$rule"|jq -r '.action // "accept"'|tr '[:lower:]' '[:upper:]')
+  inseg=$(printf '%s' "$rule"|jq -r '.inSegment // "any"')
+  outseg=$(printf '%s' "$rule"|jq -r '.outSegment // "any"')
   printf -- '-A %s ' "$chain"
-  [ "$chain" = OUTPUT ] || iface_clause in "$inseg" "$src"
-  [ "$chain" = INPUT ] || iface_clause out "$outseg" "$dst"
+  if [ "$chain" != OUTPUT ] && [ "$inseg" != any ] && [ -n "$inseg" ]; then
+    idev=$(segment_iface "$file" "$inseg"); [ -z "$idev" ] || printf -- '-i %s ' "$idev"
+    if [ "$src" = any ]; then subnet=$(segment_network "$file" "$inseg"); [ -z "$subnet" ] || src=$subnet; fi
+  fi
+  if [ "$chain" != INPUT ] && [ "$outseg" != any ] && [ -n "$outseg" ]; then
+    odev=$(segment_iface "$file" "$outseg"); [ -z "$odev" ] || printf -- '-o %s ' "$odev"
+  fi
   [ "$proto" = any ] || printf -- '-p %s ' "$proto"
   [ "$src" = any ] || printf -- '-s %s ' "$src"
   [ "$dst" = any ] || printf -- '-d %s ' "$dst"
   [ "$sport" = any ] || printf -- '--sport %s ' "$sport"
   [ "$dport" = any ] || printf -- '--dport %s ' "$dport"
-  case "$action" in
-    LOG) printf -- '-j LOG --log-prefix "LiteFWM " --log-level 6\n';;
-    ACCEPT|DROP|REJECT) printf -- '-j %s\n' "$action";;
-    *) die "Invalid action: $action";;
-  esac
-}
-nat_source() {
-  nat=$1
-  srcseg=$(printf '%s' "$nat" | jq -r '.sourceSegment // empty')
-  if [ -n "$srcseg" ]; then
-    mode=$(jq -r --arg id "$srcseg" '.segments[] | select(.id==$id) | .addressMode' "$LITEFWM_CONFIG")
-    if [ "$mode" = static ]; then segment_network_cidr "$srcseg"; else echo any; fi
-  else
-    printf '%s' "$nat" | jq -r '.source // "any"'
-  fi
+  case "$action" in ACCEPT|DROP|REJECT) printf -- '-j %s\n' "$action";; LOG) printf -- '-j LOG --log-prefix "LiteFWM "\n';; *) die "Invalid firewall action: $action";; esac
 }
 
 render() {
-  config_exists
-  ensure_dirs
-  need jq
-  out="$LITEFWM_GENERATED/iptables.rules"
-  input=$(policy_word "$(jq -r '.firewall.defaults.input' "$LITEFWM_CONFIG")")
-  forward=$(policy_word "$(jq -r '.firewall.defaults.forward' "$LITEFWM_CONFIG")")
-  output=$(policy_word "$(jq -r '.firewall.defaults.output' "$LITEFWM_CONFIG")")
-  mgmt=$(jq -r '.management.port' "$LITEFWM_CONFIG")
-  ssh_port=$(jq -r '.management.sshPort // 22' "$LITEFWM_CONFIG")
-  allow_ssh=$(jq -r 'if .management.allowSsh == null then true else .management.allowSsh end' "$LITEFWM_CONFIG")
-  allow_any=$(jq -r 'if .management.allowAny == null then true else .management.allowAny end' "$LITEFWM_CONFIG")
+  file=$1
+  input=$(jq -r '.firewall.defaults.input // "accept"' "$file"|tr '[:lower:]' '[:upper:]')
+  forward=$(jq -r '.firewall.defaults.forward // "accept"' "$file"|tr '[:lower:]' '[:upper:]')
+  output=$(jq -r '.firewall.defaults.output // "accept"' "$file"|tr '[:lower:]' '[:upper:]')
   {
     echo '*filter'
     echo ":INPUT $input [0:0]"
     echo ":FORWARD $forward [0:0]"
     echo ":OUTPUT $output [0:0]"
-    echo '-A INPUT -i lo -j ACCEPT'
-    echo '-A INPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT'
-    echo '-A FORWARD -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT'
-    echo '-A INPUT -p icmp -j ACCEPT'
-    if [ "$allow_ssh" = true ]; then printf -- '-A INPUT -p tcp --dport %s -j ACCEPT\n' "$ssh_port"; fi
-    if [ "$allow_any" = true ]; then
-      printf -- '-A INPUT -p tcp --dport %s -j ACCEPT\n' "$mgmt"
-    else
-      jq -r '.management.allowedSegments[]?' "$LITEFWM_CONFIG" | while IFS= read -r seg; do
-        dev=$(segment_device "$seg")
-        mode=$(jq -r --arg id "$seg" '.segments[] | select(.id==$id) | .addressMode' "$LITEFWM_CONFIG")
-        zone=$(jq -r --arg id "$seg" '.segments[] | select(.id==$id) | .zone' "$LITEFWM_CONFIG")
-        printf -- '-A INPUT -i %s ' "$dev"
-        if [ "$mode" = static ] && [ "$zone" = internal ]; then printf -- '-s %s ' "$(segment_network_cidr "$seg")"; fi
-        printf -- '-p tcp --dport %s -j ACCEPT\n' "$mgmt"
-      done
-    fi
-    jq -c '.firewall.rules | sort_by(.position // 999999)[] | select(.enabled != false)' "$LITEFWM_CONFIG" |
-      while IFS= read -r rule; do render_rule "$rule"; done
-    echo 'COMMIT'
-
+    jq -c '.firewall.rules[]? | select(.enabled!=false)' "$file" |
+    while IFS= read -r rule; do
+      raw=$(printf '%s' "$rule"|jq -r '.raw // empty')
+      if [ -n "$raw" ]; then echo "$raw"; else render_structured_rule "$file" "$rule"; fi
+    done
+    echo COMMIT
     echo '*nat'
     echo ':PREROUTING ACCEPT [0:0]'
     echo ':INPUT ACCEPT [0:0]'
     echo ':OUTPUT ACCEPT [0:0]'
     echo ':POSTROUTING ACCEPT [0:0]'
-    jq -c '.firewall.nat.masquerade[]? | select(.enabled != false)' "$LITEFWM_CONFIG" |
-    while IFS= read -r nat; do
-      outseg=$(printf '%s' "$nat" | jq -r .outSegment)
-      src=$(nat_source "$nat")
-      dev=$(segment_device "$outseg")
-      printf -- '-A POSTROUTING -o %s ' "$dev"
-      [ "$src" = any ] || printf -- '-s %s ' "$src"
-      echo '-j MASQUERADE'
+    for kind in masquerade snat dnat; do
+      jq -c --arg k "$kind" '.firewall.nat[$k][]? | select(.enabled!=false)' "$file" |
+      while IFS= read -r rule; do
+        raw=$(printf '%s' "$rule"|jq -r '.raw // empty')
+        if [ -n "$raw" ]; then echo "$raw"; continue; fi
+        case "$kind" in
+          masquerade)
+            out=$(printf '%s' "$rule"|jq -r .outSegment); dev=$(segment_iface "$file" "$out")
+            src=$(printf '%s' "$rule"|jq -r '.source // "any"')
+            ss=$(printf '%s' "$rule"|jq -r '.sourceSegment // empty')
+            [ -z "$ss" ] || src=$(segment_network "$file" "$ss")
+            printf -- '-A POSTROUTING -o %s ' "$dev"; [ "$src" = any ] || [ -z "$src" ] || printf -- '-s %s ' "$src"; echo '-j MASQUERADE'
+            ;;
+          snat)
+            out=$(printf '%s' "$rule"|jq -r .outSegment); dev=$(segment_iface "$file" "$out")
+            src=$(printf '%s' "$rule"|jq -r '.source // "any"'); ss=$(printf '%s' "$rule"|jq -r '.sourceSegment // empty')
+            [ -z "$ss" ] || src=$(segment_network "$file" "$ss")
+            to=$(printf '%s' "$rule"|jq -r .toSource)
+            printf -- '-A POSTROUTING -o %s ' "$dev"; [ "$src" = any ] || [ -z "$src" ] || printf -- '-s %s ' "$src"; printf -- '-j SNAT --to-source %s\n' "$to"
+            ;;
+          dnat)
+            ins=$(printf '%s' "$rule"|jq -r .inSegment); dev=$(segment_iface "$file" "$ins")
+            proto=$(printf '%s' "$rule"|jq -r '.protocol // "tcp"'); port=$(printf '%s' "$rule"|jq -r .destinationPort); to=$(printf '%s' "$rule"|jq -r .toDestination)
+            printf -- '-A PREROUTING -i %s -p %s --dport %s -j DNAT --to-destination %s\n' "$dev" "$proto" "$port" "$to"
+            ;;
+        esac
+      done
     done
-    jq -c '.firewall.nat.snat[]? | select(.enabled != false)' "$LITEFWM_CONFIG" |
-    while IFS= read -r nat; do
-      outseg=$(printf '%s' "$nat" | jq -r .outSegment)
-      src=$(nat_source "$nat")
-      tosrc=$(printf '%s' "$nat" | jq -r .toSource)
-      dev=$(segment_device "$outseg")
-      printf -- '-A POSTROUTING -o %s ' "$dev"
-      [ "$src" = any ] || printf -- '-s %s ' "$src"
-      printf -- '-j SNAT --to-source %s\n' "$tosrc"
-    done
-    jq -c '.firewall.nat.dnat[]? | select(.enabled != false)' "$LITEFWM_CONFIG" |
-    while IFS= read -r nat; do
-      inseg=$(printf '%s' "$nat" | jq -r .inSegment)
-      proto=$(printf '%s' "$nat" | jq -r '.protocol // "tcp"')
-      dport=$(printf '%s' "$nat" | jq -r .destinationPort)
-      todst=$(printf '%s' "$nat" | jq -r .toDestination)
-      dev=$(segment_device "$inseg")
-      mode=$(jq -r --arg id "$inseg" '.segments[] | select(.id==$id) | .addressMode' "$LITEFWM_CONFIG")
-      printf -- '-A PREROUTING -i %s ' "$dev"
-      [ "$mode" != static ] || printf -- '-d %s ' "$(segment_ip "$inseg")"
-      printf -- '-p %s --dport %s -j DNAT --to-destination %s
-' "$proto" "$dport" "$todst"
-    done
-    echo 'COMMIT'
-  } > "$out"
-  echo "$out"
+    echo COMMIT
+  }
+}
+
+reconcile() {
+  require_root; file=$1; need iptables-restore; need iptables-save
+  tmp=$(mktemp); trap 'rm -f "$tmp"' EXIT INT TERM
+  render "$file" > "$tmp"
+  iptables-restore --test < "$tmp"
+  iptables-restore < "$tmp"
+  mkdir -p "$(dirname "$LITEFWM_IPTABLES_SAVE")"
+  iptables-save > "$LITEFWM_IPTABLES_SAVE"
+  rc-update add iptables default >/dev/null 2>&1 || true
 }
 
 case "${1:-}" in
-  render) render;;
-  check) need iptables-restore; f=$(render); iptables-restore --test < "$f"; echo "Firewall rules valid.";;
-  apply)
-    require_root; need iptables-save; need iptables-restore; ensure_dirs
-    iptables-save > "$LITEFWM_STATE/iptables.previous.rules"
-    f=$(render); iptables-restore --test < "$f"; iptables-restore < "$f"
-    ;;
-  rollback)
-    require_root
-    [ -r "$LITEFWM_STATE/iptables.previous.rules" ] || die "No previous firewall snapshot."
-    iptables-restore < "$LITEFWM_STATE/iptables.previous.rules"
-    ;;
+  snapshot) snapshot;;
+  render) render "${2:?desired live snapshot file}";;
+  reconcile) reconcile "${2:?desired live snapshot file}";;
   show) iptables-save;;
-  *) echo "Usage: firewallctl render|check|apply|rollback|show" >&2; exit 2;;
+  *) echo "Usage: firewallctl snapshot|render FILE|reconcile FILE|show" >&2; exit 2;;
 esac

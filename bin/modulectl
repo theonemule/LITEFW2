@@ -3,94 +3,83 @@ set -eu
 SELF_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd -P)
 if [ -r "$SELF_DIR/../lib/common.sh" ]; then . "$SELF_DIR/../lib/common.sh"; else . /usr/lib/litefwm/common.sh; fi
 
-module_package() {
-  case "$1" in
-    openvpn) echo openvpn;;
-    tailscale) echo tailscale;;
-    bind) echo bind;;
-    squid) echo squid;;
-    snort) echo snort;;
-    haproxy) echo haproxy;;
-    ddns) echo ddclient;;
-    *) die "Unknown module: $1";;
-  esac
-}
+NAMES="openvpn tailscale bind squid snort haproxy ddns"
 module_service() {
   case "$1" in bind) echo named;; ddns) echo ddclient;; *) echo "$1";; esac
 }
+native_config() {
+  case "$1" in
+    openvpn) echo /etc/openvpn/openvpn.conf;;
+    tailscale) echo /var/lib/tailscale/tailscaled.state;;
+    bind) echo /etc/bind/named.conf;;
+    squid) echo /etc/squid/squid.conf;;
+    snort) [ -e /etc/snort/snort.lua ] && echo /etc/snort/snort.lua || echo /etc/snort/snort.conf;;
+    haproxy) echo /etc/haproxy/haproxy.cfg;;
+    ddns) echo /etc/ddclient/ddclient.conf;;
+  esac
+}
 install_packages() {
-  mod=$1
-  case "$mod" in
+  case "$1" in
     ddns) apk add --no-cache ddclient ddclient-openrc;;
     openvpn) apk add --no-cache openvpn openvpn-openrc;;
     tailscale) apk add --no-cache tailscale tailscale-openrc;;
     bind) apk add --no-cache bind bind-openrc;;
     squid) apk add --no-cache squid squid-openrc;;
     haproxy) apk add --no-cache haproxy haproxy-openrc;;
-    snort)
-      apk add --no-cache snort
-      if apk search -x snort-openrc 2>/dev/null | grep -q '^snort-openrc-'; then
-        apk add --no-cache snort-openrc
-      fi
-      ;;
+    snort) apk add --no-cache snort; apk add --no-cache snort-openrc >/dev/null 2>&1 || true;;
+    *) die "Unknown module: $1";;
   esac
 }
 remove_packages() {
-  mod=$1
-  case "$mod" in
+  case "$1" in
     ddns) apk del ddclient-openrc ddclient >/dev/null 2>&1 || true;;
     openvpn) apk del openvpn-openrc openvpn >/dev/null 2>&1 || true;;
     tailscale) apk del tailscale-openrc tailscale >/dev/null 2>&1 || true;;
     bind) apk del bind-openrc bind >/dev/null 2>&1 || true;;
     squid) apk del squid-openrc squid >/dev/null 2>&1 || true;;
     haproxy) apk del haproxy-openrc haproxy >/dev/null 2>&1 || true;;
-    snort)
-      apk del snort-openrc snort >/dev/null 2>&1 || apk del snort >/dev/null 2>&1 || true
-      ;;
+    snort) apk del snort-openrc snort >/dev/null 2>&1 || apk del snort >/dev/null 2>&1 || true;;
+    *) die "Unknown module: $1";;
   esac
 }
-
-set_state() {
-  mod=$1; value=$2; tmp=$(mktemp)
-  jq --arg mod "$mod" --argjson value "$value" '.modules[$mod]=$value' "$LITEFWM_CONFIG" > "$tmp"
-  cp "$LITEFWM_CONFIG" "$LITEFWM_STATE/config.previous.json" 2>/dev/null || true
-  mv "$tmp" "$LITEFWM_CONFIG"
+enabled_service() {
+  svc=$1
+  rc-update show default 2>/dev/null | awk '{print $1}' | grep -Fxq "$svc"
 }
 list_modules() {
-  config_exists
-  jq -r '.modules | to_entries[] | [.key,(.value|tostring)] | @tsv' "$LITEFWM_CONFIG" |
-  while IFS="$(printf '\t')" read -r name enabled; do
+  for name in $NAMES; do
     installed=false; module_installed "$name" && installed=true
-    configured=false; running=false
-    status=$("$SELF_DIR/modulecfgctl" status "$name" 2>/dev/null || true)
-    [ -z "$status" ] || { configured=$(printf '%s' "$status"|jq -r '.configured // false'); running=$(printf '%s' "$status"|jq -r '.running // false'); }
-    jq -n --arg name "$name" --argjson enabled "$enabled" --argjson installed "$installed" \
-      --argjson configured "$configured" --argjson running "$running" \
-      '{name:$name,enabled:$enabled,installed:$installed,configured:$configured,running:$running}'
+    svc=$(module_service "$name")
+    running=false; rc-service "$svc" status >/dev/null 2>&1 && running=true
+    enabled=false; enabled_service "$svc" && enabled=true
+    cfg=$(native_config "$name")
+    configured=false; [ -s "$cfg" ] && configured=true
+    jq -n --arg name "$name" --arg configPath "$cfg" --argjson installed "$installed"       --argjson running "$running" --argjson enabled "$enabled" --argjson configured "$configured"       '{name:$name,installed:$installed,running:$running,enabled:$enabled,configured:$configured,configPath:$configPath}'
   done | jq -s .
 }
 case "${1:-}" in
   list) list_modules;;
   install)
-    require_root; mod=${2:?MODULE}; pkg=$(module_package "$mod")
-    install_packages "$mod" || die "Could not install optional module packages for $mod."
-    ensure_dirs
-    set_state "$mod" true
-    "$SELF_DIR/modulecfgctl" init "$mod"
-    echo "$mod installed and ready to configure."
+    require_root; mod=${2:?MODULE}; install_packages "$mod"
+    "$SELF_DIR/modulecfgctl" init "$mod" >/dev/null 2>&1 || true
+    echo "$mod installed."
     ;;
   remove)
-    require_root; mod=${2:?MODULE}; pkg=$(module_package "$mod")
-    set_state "$mod" false
-    svc=$(module_service "$mod")
+    require_root; mod=${2:?MODULE}; svc=$(module_service "$mod")
     rc-service "$svc" stop >/dev/null 2>&1 || true
     rc-update del "$svc" default >/dev/null 2>&1 || true
     remove_packages "$mod"
-    echo "$mod disabled and package removal requested. Module configuration was preserved."
+    echo "$mod removed."
     ;;
   enable)
-    require_root; mod=${2:?MODULE}; module_package "$mod" >/dev/null; set_state "$mod" true;;
+    require_root; mod=${2:?MODULE}; svc=$(module_service "$mod")
+    rc-update add "$svc" default >/dev/null 2>&1 || true
+    rc-service "$svc" start >/dev/null 2>&1 || true
+    ;;
   disable)
-    require_root; mod=${2:?MODULE}; module_package "$mod" >/dev/null; set_state "$mod" false;;
+    require_root; mod=${2:?MODULE}; svc=$(module_service "$mod")
+    rc-service "$svc" stop >/dev/null 2>&1 || true
+    rc-update del "$svc" default >/dev/null 2>&1 || true
+    ;;
   *) echo "Usage: modulectl list|install|remove|enable|disable [module]" >&2; exit 2;;
 esac

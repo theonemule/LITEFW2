@@ -3,406 +3,84 @@ set -eu
 SELF_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd -P)
 if [ -r "$SELF_DIR/../lib/common.sh" ]; then . "$SELF_DIR/../lib/common.sh"; else . /usr/lib/litefwm/common.sh; fi
 
-valid_module() {
-  case "$1" in openvpn|tailscale|bind|squid|snort|haproxy|ddns) :;; *) die "Unknown module: $1";; esac
-}
-cfg_dir() { printf '%s/modules/%s\n' "$LITEFWM_ETC" "$1"; }
-cfg_file() { printf '%s/config.json\n' "$(cfg_dir "$1")"; }
-
-default_config() {
+safe_module() { case "$1" in openvpn|tailscale|bind|squid|snort|haproxy|ddns) :;; *) die "Invalid module";; esac; }
+service_for() { case "$1" in bind) echo named;; ddns) echo ddclient;; *) echo "$1";; esac; }
+path_for() {
   case "$1" in
-    openvpn) cat <<'JSON'
-{"enabled":false,"mode":"server","protocol":"udp","port":1194,"bindAddress":"0.0.0.0","device":"tun0","network":"10.8.0.0/24","dns":[],"pushRoutes":[],"clientToClient":false,"caFile":"/etc/openvpn/ca.crt","certFile":"/etc/openvpn/server.crt","keyFile":"/etc/openvpn/server.key"}
-JSON
-      ;;
-    tailscale) cat <<'JSON'
-{"enabled":false,"authKey":"","hostname":"","advertiseRoutes":[],"acceptRoutes":true,"advertiseExitNode":false,"ssh":false}
-JSON
-      ;;
-    bind) cat <<'JSON'
-{"enabled":false,"zone":"home.arpa","listenSegments":[],"forwarders":["1.1.1.1","1.0.0.1"],"allowRecursionSegments":[],"records":[]}
-JSON
-      ;;
-    squid) cat <<'JSON'
-{"enabled":false,"listenSegment":"","port":3128,"allowedSegments":[],"cacheMb":256,"blockedDomains":[],"visibleHostname":"litefwm"}
-JSON
-      ;;
-    snort) cat <<'JSON'
-{"enabled":false,"interface":"","homeNet":"any","mode":"ids","configFile":"/etc/snort/snort.conf","extraArgs":""}
-JSON
-      ;;
-    haproxy) cat <<'JSON'
-{"enabled":false,"mode":"http","listenAddress":"0.0.0.0","listenPort":80,"balance":"roundrobin","backendServers":[]}
-JSON
-      ;;
-    ddns) "$SELF_DIR/ddnsctl" show;;
+    openvpn) echo /etc/openvpn/openvpn.conf;;
+    tailscale) echo /etc/conf.d/tailscale;;
+    bind) echo /etc/bind/named.conf;;
+    squid) echo /etc/squid/squid.conf;;
+    snort) [ -e /etc/snort/snort.lua ] && echo /etc/snort/snort.lua || echo /etc/snort/snort.conf;;
+    haproxy) echo /etc/haproxy/haproxy.cfg;;
+    ddns) echo /etc/ddclient/ddclient.conf;;
   esac
 }
-init_module() {
-  require_root
-  mod=$1; valid_module "$mod"
-  if [ "$mod" = ddns ]; then "$SELF_DIR/ddnsctl" init; return; fi
-  dir=$(cfg_dir "$mod"); file=$(cfg_file "$mod")
-  mkdir -p "$dir"
-  if [ ! -r "$file" ]; then default_config "$mod" > "$file"; chmod 0600 "$file"; fi
+default_text() {
+  case "$1" in
+    openvpn) printf '# OpenVPN native configuration\n';;
+    tailscale) printf '# Tailscale OpenRC configuration\n';;
+    bind) printf '# BIND native configuration\n';;
+    squid) printf '# Squid native configuration\n';;
+    snort) printf '# Snort native configuration\n';;
+    haproxy) printf '# HAProxy native configuration\n';;
+    ddns) printf '# ddclient native configuration\n';;
+  esac
 }
-show_module() {
-  mod=$1; valid_module "$mod"
-  if [ "$mod" = ddns ]; then "$SELF_DIR/ddnsctl" show; return; fi
-  file=$(cfg_file "$mod")
-  [ -r "$file" ] || { default_config "$mod"; return; }
-  if [ "$mod" = tailscale ]; then
-    jq '(.authKeySet=((.authKey // "")|length>0)) | .authKey=""' "$file"
-  else
-    cat "$file"
+show_cfg() {
+  mod=$1; safe_module "$mod"; path=$(path_for "$mod")
+  raw=''; [ -r "$path" ] && raw=$(cat "$path")
+  svc=$(service_for "$mod")
+  enabled=false; rc-update show default 2>/dev/null | awk '{print $1}' | grep -Fxq "$svc" && enabled=true
+  jq -n --arg raw "$raw" --arg path "$path" --argjson enabled "$enabled" '{raw:$raw,path:$path,enabled:$enabled}'
+}
+status_cfg() {
+  mod=$1; safe_module "$mod"; path=$(path_for "$mod"); svc=$(service_for "$mod")
+  configured=false; [ -s "$path" ] && configured=true
+  running=false; rc-service "$svc" status >/dev/null 2>&1 && running=true
+  enabled=false; rc-update show default 2>/dev/null | awk '{print $1}' | grep -Fxq "$svc" && enabled=true
+  jq -n --arg path "$path" --argjson configured "$configured" --argjson running "$running" --argjson enabled "$enabled"     '{configured:$configured,running:$running,enabled:$enabled,path:$path}'
+}
+init_cfg() {
+  require_root; mod=$1; safe_module "$mod"; path=$(path_for "$mod")
+  [ -e "$path" ] && return 0
+  mkdir -p "$(dirname "$path")"
+  default_text "$mod" > "$path"
+  chmod 0600 "$path"
+}
+set_cfg() {
+  require_root; mod=$1; src=$2; safe_module "$mod"; path=$(path_for "$mod")
+  raw=$(jq -r '.raw // ""' "$src")
+  enabled=$(jq -r 'if .enabled==null then false else .enabled end' "$src")
+  mkdir -p "$(dirname "$path")"
+  printf '%s\n' "$raw" > "$path"
+  chmod 0600 "$path"
+  svc=$(service_for "$mod")
+  if [ "$enabled" = true ]; then rc-update add "$svc" default >/dev/null 2>&1 || true
+  else rc-update del "$svc" default >/dev/null 2>&1 || true
   fi
+  apply_cfg "$mod"
 }
-validate_module() {
-  mod=$1; file=$2; valid_module "$mod"
-  if [ "$mod" = ddns ]; then "$SELF_DIR/ddnsctl" validate "$file" >/dev/null; return; fi
-  case "$mod" in
-    openvpn) jq -e '
-      def safe: type=="string" and (test("[\\r\\n]")|not);
-      def dev: safe and test("^[A-Za-z0-9_.:-]{1,63}$");
-      def ip: safe and test("^([0-9]{1,3}[.]){3}[0-9]{1,3}$");
-      def cidr: safe and test("^([0-9]{1,3}[.]){3}[0-9]{1,3}/([89]|[12][0-9]|30)$");
-      (.enabled|type=="boolean") and (.mode=="server") and
-      (.protocol=="udp" or .protocol=="tcp") and (.port|type=="number" and .>=1 and .<=65535) and
-      (.bindAddress|ip) and (.device|dev) and (.network|cidr) and
-      (.dns|type=="array" and ([.[]|ip]|all)) and
-      (.pushRoutes|type=="array" and ([.[]|cidr]|all)) and (.clientToClient|type=="boolean") and
-      (.caFile|safe and startswith("/")) and (.certFile|safe and startswith("/")) and (.keyFile|safe and startswith("/"))
-    ' "$file" >/dev/null;;
-    tailscale) jq -e '
-      def safe: type=="string" and (test("[\\r\\n]")|not);
-      def cidr: safe and test("^([0-9]{1,3}[.]){3}[0-9]{1,3}/([0-9]|[12][0-9]|3[0-2])$");
-      (.enabled|type=="boolean") and (.authKey|safe) and (.hostname|safe) and
-      (.advertiseRoutes|type=="array" and ([.[]|cidr]|all)) and (.acceptRoutes|type=="boolean") and
-      (.advertiseExitNode|type=="boolean") and (.ssh|type=="boolean")
-    ' "$file" >/dev/null;;
-    bind) jq -e --slurpfile root "$LITEFWM_CONFIG" '
-      def ipv4: type=="string" and test("^([0-9]{1,3}[.]){3}[0-9]{1,3}$");
-      def zone: type=="string" and test("^[A-Za-z0-9][A-Za-z0-9.-]{0,252}$");
-      def host: type=="string" and test("^[A-Za-z0-9][A-Za-z0-9_.-]{0,252}$");
-      ($root[0].segments|map(.id)) as $segments |
-      (.enabled|type=="boolean") and (.zone|zone) and
-      (.listenSegments|type=="array" and ([.[] as $s|$segments|index($s)!=null]|all)) and
-      (.forwarders|type=="array" and ([.[]|ipv4]|all)) and
-      (.allowRecursionSegments|type=="array" and ([.[] as $s|$segments|index($s)!=null]|all)) and
-      (.records|type=="array") and ([.records[]? | (.name|host) and (.address|ipv4)]|all)
-    ' "$file" >/dev/null;;
-    squid) jq -e --slurpfile root "$LITEFWM_CONFIG" '
-      def safe: type=="string" and (test("[\\r\\n]")|not);
-      def domain: safe and test("^\\.?[A-Za-z0-9][A-Za-z0-9.-]{0,252}$");
-      ($root[0].segments|map(.id)) as $segments |
-      (.enabled|type=="boolean") and
-      (.listenSegment as $listen | ($listen|type=="string") and ($listen=="" or ($segments|index($listen)!=null))) and
-      (.port|type=="number" and .>=1 and .<=65535) and
-      (.allowedSegments|type=="array" and ([.[] as $s|$segments|index($s)!=null]|all)) and
-      (.cacheMb|type=="number" and .>=0 and .<=1048576) and
-      (.blockedDomains|type=="array" and ([.[]|domain]|all)) and
-      (.visibleHostname|safe and length>0)
-    ' "$file" >/dev/null;;
-    snort) jq -e '
-      def safe: type=="string" and (test("[\\r\\n]")|not);
-      (.enabled|type=="boolean") and (.interface|safe) and (.homeNet|safe) and
-      (.mode=="ids" or .mode=="ips") and (.configFile|safe and startswith("/")) and (.extraArgs|safe)
-    ' "$file" >/dev/null;;
-    haproxy) jq -e '
-      def safe: type=="string" and (test("[\\r\\n]")|not);
-      def addr: safe and test("^[A-Za-z0-9_.:-]+:[0-9]{1,5}$");
-      (.enabled|type=="boolean") and (.mode=="http" or .mode=="tcp") and
-      (.listenAddress|safe and test("^[A-Za-z0-9_.:-]+$")) and (.listenPort|type=="number" and .>=1 and .<=65535) and
-      (.balance=="roundrobin" or .balance=="leastconn" or .balance=="source") and
-      (.backendServers|type=="array") and
-      ([.backendServers[]? | (.name|safe and test("^[A-Za-z0-9_.-]{1,63}$")) and (.address|addr) and ((.check // true)|type=="boolean")]|all)
-    ' "$file" >/dev/null;;
-  esac || die "Invalid $mod module configuration"
-}
-set_module() {
-  require_root
-  mod=$1; src=$2; valid_module "$mod"
-  if [ "$mod" = ddns ]; then "$SELF_DIR/ddnsctl" set "$src"; return; fi
-  init_module "$mod"
-  tmp=$(mktemp)
-  if [ "$mod" = tailscale ]; then
-    old=$(jq -r '.authKey // ""' "$(cfg_file "$mod")")
-    new=$(jq -r '.authKey // ""' "$src")
-    if [ -z "$new" ] && [ -n "$old" ]; then jq --arg k "$old" '.authKey=$k | del(.authKeySet)' "$src" > "$tmp"; else jq 'del(.authKeySet)' "$src" > "$tmp"; fi
-  else
-    cp "$src" "$tmp"
-  fi
-  validate_module "$mod" "$tmp"
-  install -m 0600 "$tmp" "$(cfg_file "$mod")"
-  rm -f "$tmp"
-  jq -n '{ok:true}'
-}
-
-
-prefix_netmask() {
-  p=$1
-  awk -v p="$p" 'BEGIN {
-    for (i=0;i<4;i++) {
-      n=p-(i*8)
-      if (n>=8) o=255
-      else if (n<=0) o=0
-      else o=256-(2^(8-n))
-      printf "%s%s", (i?".":""), o
-    }
-    printf "\n"
-  }'
-}
-
-render_module() {
-  mod=$1; valid_module "$mod"
-  file=$(cfg_file "$mod")
-  if [ "$mod" = ddns ]; then "$SELF_DIR/ddnsctl" render; return; fi
-  [ -r "$file" ] || die "$mod is not configured."
-  validate_module "$mod" "$file"
-  ensure_dirs
-  case "$mod" in
-    openvpn)
-      out="$LITEFWM_GENERATED/openvpn-litefwm.conf"
-      proto=$(jq -r .protocol "$file"); port=$(jq -r .port "$file"); bind=$(jq -r .bindAddress "$file")
-      dev=$(jq -r .device "$file"); network=$(jq -r .network "$file"); net=${network%/*}; prefix=${network#*/}
-      mask=$(prefix_netmask "$prefix")
-      {
-        echo '# Generated by LiteFWM'
-        echo "port $port"; echo "proto $proto"; echo "local $bind"; echo "dev $dev"
-        echo "server $net $mask"
-        printf 'ca %s\n' "$(jq -r .caFile "$file")"
-        printf 'cert %s\n' "$(jq -r .certFile "$file")"
-        printf 'key %s\n' "$(jq -r .keyFile "$file")"
-        echo 'persist-key'; echo 'persist-tun'; echo 'keepalive 10 120'; echo 'verb 3'
-        [ "$(jq -r .clientToClient "$file")" = true ] && echo 'client-to-client'
-        jq -r '.dns[]?' "$file" | while IFS= read -r x; do printf 'push "dhcp-option DNS %s"\n' "$x"; done
-        jq -r '.pushRoutes[]?' "$file" | while IFS= read -r x; do printf 'push "route %s"\n' "$x"; done
-      } > "$out"
-      ;;
-    bind)
-      out="$LITEFWM_GENERATED/named.conf"
-      zone=$(jq -r .zone "$file")
-      zonefile="$LITEFWM_GENERATED/db.$zone"
-      listen=$(jq -r '.listenSegments[]?' "$file" | while IFS= read -r s; do segment_ip "$s"; done | paste -sd';' -)
-      recurse=$(jq -r '.allowRecursionSegments[]?' "$file" | while IFS= read -r s; do segment_cidr "$s"; done | paste -sd';' -)
-      forwarders=$(jq -r '.forwarders[]?' "$file" | paste -sd';' -)
-      [ -n "$listen" ] || listen='127.0.0.1'
-      [ -n "$recurse" ] || recurse='localhost'
-      {
-        echo 'options {'
-        echo '  directory "/var/cache/bind";'
-        printf '  listen-on { %s; };\n' "$listen"
-        printf '  allow-recursion { %s; };\n' "$recurse"
-        [ -z "$forwarders" ] || printf '  forwarders { %s; };\n' "$forwarders"
-        echo '  recursion yes;'
-        echo '};'
-        printf 'zone "%s" { type master; file "/etc/bind/db.%s"; };\n' "$zone" "$zone"
-      } > "$out"
-      serial=$(date +%Y%m%d%H)
-      nsseg=$(jq -r '.listenSegments[0] // empty' "$file")
-      nsip=''
-      [ -z "$nsseg" ] || nsip=$(segment_ip "$nsseg")
-      [ -n "$nsip" ] || nsip=127.0.0.1
-      {
-        printf '$TTL 300\n@ IN SOA ns1.%s. admin.%s. (%s 300 120 604800 300)\n' "$zone" "$zone" "$serial"
-        printf '@ IN NS ns1.%s.\n' "$zone"
-        printf 'ns1 IN A %s\n' "$nsip"
-        jq -r '.records[]? | "\(.name) IN A \(.address)"' "$file"
-      } > "$zonefile"
-      printf '%s\n%s\n' "$out" "$zonefile"
-      return
-      ;;
-    squid)
-      out="$LITEFWM_GENERATED/squid.conf"
-      port=$(jq -r .port "$file"); seg=$(jq -r .listenSegment "$file")
-      bind=''
-      [ -z "$seg" ] || bind=$(segment_ip "$seg")
-      {
-        echo '# Generated by LiteFWM'
-        if [ -n "$bind" ]; then printf 'http_port %s:%s\n' "$bind" "$port"; else printf 'http_port %s\n' "$port"; fi
-        blocked=$(jq '.blockedDomains|length' "$file")
-        if [ "$blocked" -gt 0 ]; then
-          jq -r '.blockedDomains[]?' "$file" | while IFS= read -r d; do printf 'acl litefwm_blocked dstdomain %s\n' "$d"; done
-          echo 'http_access deny litefwm_blocked'
-        fi
-        allowed=$(jq '.allowedSegments|length' "$file")
-        if [ "$allowed" -gt 0 ]; then
-          jq -r '.allowedSegments[]?' "$file" | while IFS= read -r s; do printf 'acl litefwm_allowed src %s\n' "$(segment_cidr "$s")"; done
-          echo 'http_access allow litefwm_allowed'
-        fi
-        echo 'http_access deny all'
-        printf 'cache_mem %s MB\n' "$(jq -r .cacheMb "$file")"
-        printf 'visible_hostname %s\n' "$(jq -r .visibleHostname "$file")"
-      } > "$out"
-      ;;
-    snort)
-      out="$LITEFWM_GENERATED/snort.conf.d"
-      {
-        printf 'SNORT_INTERFACE="%s"\n' "$(jq -r .interface "$file")"
-        printf 'SNORT_HOME_NET="%s"\n' "$(jq -r .homeNet "$file")"
-        printf 'SNORT_CONFIG="%s"\n' "$(jq -r .configFile "$file")"
-        printf 'SNORT_MODE="%s"\n' "$(jq -r .mode "$file")"
-        printf 'SNORT_EXTRA_ARGS="%s"\n' "$(jq -r .extraArgs "$file" | sed 's/"/\\"/g')"
-      } > "$out"
-      ;;
-    haproxy)
-      out="$LITEFWM_GENERATED/haproxy.cfg"
-      mode=$(jq -r .mode "$file")
-      {
-        echo 'global'; echo '  daemon'; echo '  maxconn 4096'
-        echo 'defaults'; printf '  mode %s\n' "$mode"; echo '  timeout connect 5s'; echo '  timeout client 30s'; echo '  timeout server 30s'
-        echo 'frontend litefwm_frontend'
-        printf '  bind %s:%s\n' "$(jq -r .listenAddress "$file")" "$(jq -r .listenPort "$file")"
-        printf '  mode %s\n' "$mode"; echo '  default_backend litefwm_backend'
-        echo 'backend litefwm_backend'; printf '  mode %s\n' "$mode"; printf '  balance %s\n' "$(jq -r .balance "$file")"
-        jq -c '.backendServers[]?' "$file" | while IFS= read -r s; do
-          name=$(printf '%s' "$s"|jq -r .name); addr=$(printf '%s' "$s"|jq -r .address); check=$(printf '%s' "$s"|jq -r 'if .check == null then true else .check end')
-          if [ "$check" = true ]; then printf '  server %s %s check\n' "$name" "$addr"; else printf '  server %s %s\n' "$name" "$addr"; fi
-        done
-      } > "$out"
-      ;;
-    tailscale)
-      out="$LITEFWM_GENERATED/tailscale.args"
-      : > "$out"
-      ;;
-  esac
-  chmod 0600 "$out"
-  echo "$out"
-}
-
-stop_service() {
-  svc=$1
-  rc-service "$svc" stop >/dev/null 2>&1 || true
-  rc-update del "$svc" default >/dev/null 2>&1 || true
-}
-start_service() {
-  svc=$1
-  rc-update add "$svc" default >/dev/null 2>&1 || true
-  if rc-service "$svc" status >/dev/null 2>&1; then rc-service "$svc" restart >/dev/null; else rc-service "$svc" start >/dev/null; fi
-}
-apply_module() {
-  require_root
-  mod=$1; valid_module "$mod"
-  module_installed "$mod" || die "$mod is not installed."
-  if [ "$mod" = ddns ]; then "$SELF_DIR/ddnsctl" apply; return; fi
-  file=$(cfg_file "$mod"); [ -r "$file" ] || die "$mod is not configured."
-  validate_module "$mod" "$file"
-  enabled=$(jq -r .enabled "$file")
-  svc=$mod; [ "$mod" = bind ] && svc=named
-  if [ "$enabled" != true ]; then stop_service "$svc"; jq -n '{ok:true,running:false,message:"Module saved but disabled."}'; return; fi
-  case "$mod" in
-    openvpn)
-      gen=$(render_module "$mod")
-      install -d -m 0755 /etc/openvpn
-      install -m 0600 "$gen" /etc/openvpn/litefwm.conf
-      # Alpine's generic service reads OPENVPN_CONFIG when provided.
-      printf 'OPENVPN_CONFIG="/etc/openvpn/litefwm.conf"\n' > /etc/conf.d/openvpn
-      start_service openvpn
-      ;;
-    tailscale)
-      start_service tailscale
-      args='--reset'
-      host=$(jq -r .hostname "$file"); [ -z "$host" ] || args="$args --hostname=$host"
-      routes=$(jq -r '.advertiseRoutes|join(",")' "$file"); [ -z "$routes" ] || args="$args --advertise-routes=$routes"
-      [ "$(jq -r .acceptRoutes "$file")" = true ] && args="$args --accept-routes" || args="$args --accept-routes=false"
-      [ "$(jq -r .advertiseExitNode "$file")" = true ] && args="$args --advertise-exit-node"
-      [ "$(jq -r .ssh "$file")" = true ] && args="$args --ssh"
-      key=$(jq -r .authKey "$file"); [ -z "$key" ] || args="$args --auth-key=$key"
-      # shellcheck disable=SC2086
-      tailscale up $args >/dev/null
-      ;;
-    bind)
-      paths=$(render_module "$mod"); gen=$(printf '%s\n' "$paths"|sed -n '1p'); zonefile=$(printf '%s\n' "$paths"|sed -n '2p')
-      zone=$(jq -r .zone "$file")
-      install -d -m 0755 /etc/bind /var/cache/bind
-      install -m 0644 "$gen" /etc/bind/named.conf
-      install -m 0644 "$zonefile" "/etc/bind/db.$zone"
-      named-checkconf /etc/bind/named.conf
-      named-checkzone "$zone" "/etc/bind/db.$zone" >/dev/null
-      start_service named
-      ;;
-    squid)
-      gen=$(render_module "$mod")
-      install -d -m 0755 /etc/squid
-      install -m 0644 "$gen" /etc/squid/squid.conf
-      squid -k parse -f /etc/squid/squid.conf >/dev/null 2>&1
-      start_service squid
-      ;;
-    snort)
-      gen=$(render_module "$mod")
-      install -m 0644 "$gen" /etc/conf.d/snort
-      start_service snort
-      ;;
-    haproxy)
-      gen=$(render_module "$mod")
-      install -d -m 0755 /etc/haproxy
-      install -m 0644 "$gen" /etc/haproxy/haproxy.cfg
-      haproxy -c -f /etc/haproxy/haproxy.cfg >/dev/null
-      start_service haproxy
-      ;;
-  esac
-  jq -n '{ok:true,running:true,message:"Module configuration applied."}'
-}
-status_module() {
-  mod=$1; valid_module "$mod"
-  if [ "$mod" = ddns ]; then "$SELF_DIR/ddnsctl" status; return; fi
-  installed=false; configured=false; enabled=false; running=false
-  module_installed "$mod" && installed=true
-  file=$(cfg_file "$mod"); [ -r "$file" ] && configured=true
-  [ "$configured" = false ] || enabled=$(jq -r '.enabled // false' "$file")
-  svc=$mod; [ "$mod" = bind ] && svc=named
-  rc-service "$svc" status >/dev/null 2>&1 && running=true
-  jq -n --argjson installed "$installed" --argjson configured "$configured" --argjson enabled "$enabled" --argjson running "$running" \
-    '{installed:$installed,configured:$configured,enabled:$enabled,running:$running}'
-}
-bind_reserve() {
-  require_root
-  host=$1; ip=$2
-  module_installed bind || die "BIND is not installed."
-  file=$(cfg_file bind); [ -r "$file" ] || die "BIND is not configured."
-  zone=$(jq -r .zone "$file")
-  name=$host
-  case "$name" in *."$zone") name=${name%."$zone"};; esac
-  tmp=$(mktemp)
-  jq --arg name "$name" --arg ip "$ip" '.records = ((.records // []) | map(select(.name != $name)) + [{name:$name,address:$ip}])' "$file" > "$tmp"
-  validate_module bind "$tmp"
-  install -m 0600 "$tmp" "$file"
-  rm -f "$tmp"
-  [ "$(jq -r .enabled "$file")" = true ] && apply_module bind >/dev/null
-  jq -n --arg fqdn "$name.$zone" --arg ip "$ip" '{ok:true,fqdn:$fqdn,ip:$ip}'
-}
-validate_installed() {
-  for mod in openvpn tailscale bind squid snort haproxy ddns; do
-    if module_installed "$mod"; then
-      if [ "$mod" = ddns ]; then
-        [ -r "$(cfg_file ddns)" ] && "$SELF_DIR/ddnsctl" validate >/dev/null || true
-      else
-        file=$(cfg_file "$mod"); [ ! -r "$file" ] || validate_module "$mod" "$file"
-      fi
+apply_cfg() {
+  require_root; mod=$1; safe_module "$mod"; svc=$(service_for "$mod")
+  enabled=false; rc-update show default 2>/dev/null | awk '{print $1}' | grep -Fxq "$svc" && enabled=true
+  if [ "$enabled" = true ]; then
+    if rc-service "$svc" status >/dev/null 2>&1; then rc-service "$svc" restart >/dev/null
+    else rc-service "$svc" start >/dev/null
     fi
-  done
-}
-apply_enabled() {
-  for mod in openvpn tailscale bind squid snort haproxy ddns; do
-    state=$(jq -r --arg m "$mod" '.modules[$m] // false' "$LITEFWM_CONFIG")
-    [ "$state" = true ] || continue
-    module_installed "$mod" || continue
-    apply_module "$mod" >/dev/null || warn "Could not apply $mod"
-  done
+    echo "$mod native configuration applied."
+  else
+    rc-service "$svc" stop >/dev/null 2>&1 || true
+    echo "$mod disabled."
+  fi
 }
 case "${1:-}" in
-  init) init_module "${2:?MODULE}";;
-  show) show_module "${2:?MODULE}";;
-  set) set_module "${2:?MODULE}" "${3:?FILE}";;
-  validate)
-    mod=${2:?MODULE}; file=$(cfg_file "$mod"); [ "$#" -lt 3 ] || file=$3
-    validate_module "$mod" "$file"; echo "$mod configuration valid."
-    ;;
-  render) render_module "${2:?MODULE}";;
-  apply) apply_module "${2:?MODULE}";;
-  status) status_module "${2:?MODULE}";;
-  bind-reserve) bind_reserve "${2:?HOSTNAME}" "${3:?IP}";;
-  validate-installed) validate_installed;;
-  apply-enabled) apply_enabled;;
-  *) echo "Usage: modulecfgctl init|show|set|validate|render|apply|status MODULE | bind-reserve HOST IP | validate-installed | apply-enabled" >&2; exit 2;;
+  init) init_cfg "${2:?MODULE}";;
+  show) show_cfg "${2:?MODULE}";;
+  status) status_cfg "${2:?MODULE}";;
+  set) set_cfg "${2:?MODULE}" "${3:?JSON FILE}";;
+  apply) apply_cfg "${2:?MODULE}";;
+  validate-installed) echo "Native module configuration is live.";;
+  bind-reserve) die "DNS reservation publishing requires native BIND zone editing and is not available in raw native-config mode.";;
+  *) echo "Usage: modulecfgctl init|show|status|set|apply MODULE [FILE]" >&2; exit 2;;
 esac

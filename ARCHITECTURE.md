@@ -1,112 +1,114 @@
 # LiteFWM Architecture
 
-## Control path
+LiteFWM is a live-state management layer for an Alpine Linux firewall/router.
 
-The JSON configuration is desired state. The SPA never invokes iptables,
-iproute2, dnsmasq, or package management directly.
+## Core rule
 
-    Bootstrap SPA
-        |
-        v
-    lighttpd + Basic Auth
-        |
-        v
-    shell CGI API
-        |
-        v
-    sudo apictl
-        |
-        +--> configctl
-        +--> setupctl
-        +--> netctl
-        +--> dhcpctl
-        +--> firewallctl
-        +--> webctl
-        +--> modulectl
-        +--> modulecfgctl
-        +--> ddnsctl
-        +--> capturectl
-        +--> metricsctl
-        +--> logctl
+Linux and the native services are the source of truth.
 
-fwmctl apply is the core coordinator.
+LiteFWM does not maintain a network/firewall configuration database and does
+not stage a second desired-state model. The browser receives an ephemeral JSON
+snapshot assembled from the running host. A mutation request is reconciled
+immediately into the running host and the corresponding native configuration
+needed to survive reboot.
 
-## Schema v2
+There is no /etc/litefwm/config.json and there is no Apply Changes phase.
 
-Schema v3 separates interfaces from network segments and makes segments the IP/policy boundary.
+## Authoritative sources
 
-An interface is a link-layer endpoint: physical device, Linux bridge, or VLAN
-subinterface.
+Networking:
 
-A segment is L3 policy bound to one interface: internal/external classification, static or DHCP-client addressing, gateway, DNS/domain, and DHCP-server policy/reservations. Multiple static segments may share an interface.
+    running: ip link, ip addr, ip route
+    persistent: /etc/network/interfaces
 
-Firewall and NAT rules reference segment IDs. They resolve to interface devices
-through the same mapping used by DHCP, captures, and management pinning.
+Firewall and NAT:
 
-## Bridge and VLAN order
+    running: iptables-save
+    persistent: /etc/iptables/rules-save
 
-Network rendering creates links in dependency order:
+DHCP:
 
-1. physical links are brought up and MTU is set
-2. bridges are created and VLAN filtering configured
-3. VLAN links are created from their configured parent endpoint
-4. bridge membership is applied
-5. segment addresses and the optional default route are applied
+    running: dnsmasq + lease database
+    persistent: /etc/dnsmasq.d/litefwm.conf
 
-A VLAN can therefore use a bridge as its parent, and a bridge can contain a VLAN
-endpoint created earlier in the interface model.
+Management:
 
-## Firewall baseline
+    lighttpd: /etc/lighttpd/litefwm.conf
+    SSH: /etc/ssh/sshd_config
+    hostname: Alpine hostname configuration
 
-The generated filter table defaults to INPUT DROP, FORWARD DROP, OUTPUT ACCEPT.
+Optional modules use their native configuration files, for example BIND,
+OpenVPN, Squid, HAProxy, Tailscale/OpenRC, Snort, and ddclient.
 
-Before user rules, LiteFWM installs loopback, established/related, ICMP,
-optional SSH, and management INPUT exceptions.
+## API model
 
-User rules are ordered by explicit position. NAT is generated separately.
+GET requests inspect the host when the request is made.
 
-## DHCP and BIND integration
+GET /api/config is a compatibility-shaped live snapshot. It is not backed by a
+LiteFWM JSON file.
 
-dnsmasq owns DHCP leases and reservations. Segment configuration determines the
-interface, range, router, DNS, domain, and lease duration.
+PUT requests use JSON only as an HTTP request envelope. The request is compared
+with a fresh live snapshot and only changed subsystems are reconciled.
 
-The DHCP page can reserve a live lease. When BIND is installed and configured,
-the same operation may add or replace an A record in the BIND module
-configuration and reapply BIND when enabled.
+After each mutation the UI reloads state from the host.
 
-## Optional modules
+## Interfaces
 
-Package lifecycle is handled by modulectl. Service-specific desired state,
-validation, native rendering, and apply behavior are handled by modulecfgctl.
-DDNS delegates provider-specific rendering to ddnsctl.
+The interface page represents actual Linux links.
 
-Module state is stored under /etc/litefwm/modules/<module>/. Module
-configuration is intentionally separate from the core network/firewall schema.
+Physical NICs are discovered automatically. Bridges and VLAN interfaces are
+real kernel links, not LiteFWM objects.
 
-## Apply and rollback
+A bridge can be created with no members or with physical/VLAN members.
 
-Saving configuration only updates staged JSON after validation.
+When a live interface that currently owns IPv4/default-route configuration is
+added to a bridge, LiteFWM performs the migration in this order:
 
-Applying:
+1. Create and bring up the bridge.
+2. Copy the member's current IPv4 address to the bridge.
+3. Move the default route to the bridge.
+4. Stop DHCP on the member when applicable.
+5. Enslave the member to the bridge.
+6. Remove the old address from the member.
+7. Start DHCP on the bridge and request the previous lease when applicable.
+8. Rewrite /etc/network/interfaces to reflect the topology.
 
-1. snapshot JSON
-2. render all core subsystems
-3. snapshot current iptables state
-4. configure network endpoints and segment addressing
-5. update DHCP
-6. atomically load iptables
-7. update lighttpd
-8. apply installed/enabled optional modules
+This ordering is designed to preserve the active management path while the
+layer-2 topology changes.
 
-Firewall rollback is transactional through the previous iptables snapshot.
-Network topology rollback is not yet transactional, so console access is
-recommended for disruptive topology changes.
+VLAN adapters can use a physical NIC or bridge as their parent. Their Linux
+device name and VLAN ID are persisted directly in Alpine networking.
 
-## Desired-state paths
+## Network segments
 
-    /etc/litefwm/config.json
-    /etc/litefwm/htpasswd
-    /etc/litefwm/modules/
-    /var/lib/litefwm/generated/
-    /var/lib/litefwm/captures/
-    /var/lib/litefwm/dnsmasq.leases
+A segment is a live IPv4 configuration observed on an interface.
+
+A DHCP interface exposes its current leased address, gateway, and DNS. Static
+addresses appear directly from ip addr. Multiple static addresses on one
+interface appear as multiple segments.
+
+Editing a segment changes the live interface immediately and then rewrites
+native Alpine networking.
+
+DHCP-server settings are read from and written to the native dnsmasq
+configuration.
+
+## Firewall and NAT
+
+The firewall page reflects the running iptables rules and policies.
+
+Saving firewall or NAT changes validates with iptables-restore, loads them
+immediately, and persists the resulting rule set for reboot.
+
+## Modules
+
+Optional modules are discovered from installed packages and OpenRC service
+state. Their configuration editor operates on each module's native
+configuration file. LiteFWM does not create module JSON sidecars.
+
+## Boot behavior
+
+LiteFWM does not need an OpenRC service to replay application state.
+
+Alpine networking, iptables, dnsmasq, lighttpd, SSH, and optional modules
+restore themselves from their native configuration/service setup.
