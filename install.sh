@@ -49,7 +49,7 @@ install -m 0755 "$BASE/openrc/litefwm" /etc/init.d/litefwm
 if [ ! -r /etc/litefwm/config.json ]; then
   install -m 0640 "$BASE/etc/config.json" /etc/litefwm/config.json
 fi
-if [ "$(jq -r '.version // 1' /etc/litefwm/config.json)" -lt 2 ]; then
+if [ "$(jq -r '.version // 1' /etc/litefwm/config.json)" -lt 3 ]; then
   /usr/local/sbin/configctl migrate
 fi
 jq --argjson port "$PORT" '.management.port=$port' /etc/litefwm/config.json > /etc/litefwm/config.json.tmp

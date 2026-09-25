@@ -38,6 +38,26 @@ segment_ip() {
   printf '%s\n' "${cidr%/*}"
 }
 
+
+segment_network_cidr() {
+  cidr=$(segment_cidr "$1")
+  ip=${cidr%/*}
+  prefix=${cidr#*/}
+  oldifs=$IFS; IFS=.; set -- $ip; IFS=$oldifs
+  ipn=$(( ((($1 * 256 + $2) * 256 + $3) * 256) + $4 ))
+  bits=$((32 - prefix))
+  block=1
+  i=0
+  while [ "$i" -lt "$bits" ]; do block=$((block * 2)); i=$((i + 1)); done
+  net=$(( (ipn / block) * block ))
+  o1=$(( (net / 16777216) % 256 ))
+  o2=$(( (net / 65536) % 256 ))
+  o3=$(( (net / 256) % 256 ))
+  o4=$(( net % 256 ))
+  printf '%s.%s.%s.%s/%s
+' "$o1" "$o2" "$o3" "$o4" "$prefix"
+}
+
 module_installed() {
   case "$1" in
     openvpn) command -v openvpn >/dev/null 2>&1;;

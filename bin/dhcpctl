@@ -23,11 +23,13 @@ render() {
       gateway=$(printf '%s' "$seg" | jq -r '.dhcp.gateway // empty')
       [ -n "$gateway" ] || gateway=$(printf '%s' "$seg" | jq -r '.address' | cut -d/ -f1)
       dns=$(printf '%s' "$seg" | jq -r '(if ((.dhcp.dns // [])|length)>0 then .dhcp.dns else (.dns // []) end) | join(",")')
+      ntp=$(printf '%s' "$seg" | jq -r '(.dhcp.ntp // []) | join(",")')
       domain=$(printf '%s' "$seg" | jq -r '.domain // empty')
       printf 'interface=%s\n' "$dev"
       printf 'dhcp-range=set:%s,%s,%s,%s\n' "$id" "$start" "$end" "$lease"
       printf 'dhcp-option=tag:%s,option:router,%s\n' "$id" "$gateway"
       [ -z "$dns" ] || printf 'dhcp-option=tag:%s,option:dns-server,%s\n' "$id" "$dns"
+      [ -z "$ntp" ] || printf 'dhcp-option=tag:%s,option:ntp-server,%s\n' "$id" "$ntp"
       [ -z "$domain" ] || printf 'dhcp-option=tag:%s,option:domain-name,%s\n' "$id" "$domain"
       printf '%s' "$seg" | jq -c '.dhcp.reservations[]?' |
       while IFS= read -r reservation; do

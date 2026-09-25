@@ -29,13 +29,15 @@ configuration can be completed safely.
 
 ### Network segments
 
-A network segment binds L3 configuration to one configured interface endpoint.
+A network segment is an L3/IP configuration bound to a managed interface.
+Multiple static segments may share one interface, which gives that interface
+multiple IPv4 addresses/networks. A single DHCP-client segment may also obtain
+its address, gateway, and DNS settings from an upstream DHCP server.
 
-Per-segment settings include IPv4 address and prefix, optional default gateway,
-DNS servers, local DNS domain, DHCP enabled/disabled, DHCP ranges and lease
-time, DHCP router/DNS options, static reservations, and management access.
-
-One interface endpoint can have at most one segment.
+Per-segment settings include internal/external firewall classification, static
+or DHCP-client addressing, optional default gateway, DNS and local domain,
+DHCP-server enablement, pool and lease time, client router/DNS/NTP options,
+static reservations, and management access.
 
 ## Firewall and NAT
 
@@ -52,8 +54,14 @@ Built-in appliance rules are evaluated before user rules:
 Management starts in allowAny mode to avoid first-install lockout. It can be
 restricted to selected network segments later.
 
-User firewall rules are ordered explicitly. NAT supports masquerade, SNAT, and
-DNAT. DNAT does not implicitly create a FORWARD allow rule.
+User firewall rules are ordered explicitly and expressed in network segments.
+Internal static segments automatically contribute their subnet match when a
+rule does not specify a narrower address.
+
+Outbound NAT is configured as a source segment to an outbound segment. It can
+use the outbound address dynamically or a fixed SNAT address. Port forwarding
+uses destination NAT on an inbound/external segment. DNAT does not implicitly
+create a FORWARD allow rule.
 
 ## DHCP and local DNS
 
@@ -94,22 +102,22 @@ Inspect physical links:
 
 Create a simple physical WAN and LAN:
 
-    setupctl physical wan0 eth0 wan WAN
-    setupctl physical lan0 eth1 lan LAN
-    setupctl segment lan lan0 192.168.10.1/24 "" 192.168.10.1 home.arpa
+    setupctl physical wan0 eth0 WAN
+    setupctl physical lan0 eth1 LAN
+    setupctl segment-static lan lan0 192.168.10.1/24 internal "" 192.168.10.1 home.arpa
     setupctl dhcp lan true 192.168.10.100 192.168.10.200 12h
 
 Create a VLAN-aware bridge:
 
-    setupctl physical lanp1 eth1 none lan-port-1
-    setupctl physical lanp2 eth2 none lan-port-2
-    setupctl bridge lan br0 lan lanp1,lanp2 true
-    setupctl segment lan lan 192.168.10.1/24
+    setupctl physical lanp1 eth1 lan-port-1
+    setupctl physical lanp2 eth2 lan-port-2
+    setupctl bridge lan br0 lanp1,lanp2 true
+    setupctl segment-static lan lan 192.168.10.1/24 internal
 
 Create a VLAN adapter on that bridge:
 
-    setupctl vlan iot-vlan lan 20 lan br0.20
-    setupctl segment iot iot-vlan 192.168.20.1/24
+    setupctl vlan iot-vlan lan 20 br0.20
+    setupctl segment-static iot iot-vlan 192.168.20.1/24 internal
     setupctl dhcp iot true 192.168.20.100 192.168.20.199 8h
 
 Restrict the management listener to a segment:

@@ -18,46 +18,62 @@ upsert_interface() {
   jq --argjson o "$obj" '.interfaces = ((.interfaces // []) | map(select(.id != $o.id)) + [$o])' "$LITEFWM_CONFIG" > "$tmp"
   write_cfg "$tmp"
 }
+upsert_segment() {
+  obj=$1
+  tmp=$(mktemp)
+  jq --argjson o "$obj" '.segments = ((.segments // []) | map(select(.id != $o.id)) + [$o])' "$LITEFWM_CONFIG" > "$tmp"
+  write_cfg "$tmp"
+}
 case "${1:-}" in
   show) jq . "$LITEFWM_CONFIG";;
   inventory) "$SELF_DIR/netctl" inventory;;
   physical)
-    id=${2:?ID}; dev=${3:?DEVICE}; role=${4:-none}; name=${5:-$id}
-    obj=$(jq -n --arg id "$id" --arg name "$name" --arg dev "$dev" --arg role "$role" \
-      '{id:$id,name:$name,type:"physical",device:$dev,role:$role,mtu:1500,enabled:true}')
+    id=${2:?ID}; dev=${3:?DEVICE}; name=${4:-$id}
+    obj=$(jq -n --arg id "$id" --arg name "$name" --arg dev "$dev" \
+      '{id:$id,name:$name,type:"physical",device:$dev,role:"none",mtu:1500,enabled:true}')
     upsert_interface "$obj"
     ;;
   bridge)
-    id=${2:?ID}; dev=${3:?DEVICE}; role=${4:-lan}; members=${5:-}; aware=${6:-true}
-    obj=$(jq -n --arg id "$id" --arg dev "$dev" --arg role "$role" --arg members "$members" --argjson aware "$aware" \
-      '{id:$id,name:$id,type:"bridge",device:$dev,role:$role,mtu:1500,enabled:true,vlanAware:$aware,members:($members|split(",")|map(select(length>0)))}')
+    id=${2:?ID}; dev=${3:?DEVICE}; members=${4:-}; aware=${5:-true}
+    obj=$(jq -n --arg id "$id" --arg dev "$dev" --arg members "$members" --argjson aware "$aware" \
+      '{id:$id,name:$id,type:"bridge",device:$dev,role:"none",mtu:1500,enabled:true,vlanAware:$aware,members:($members|split(",")|map(select(length>0)))}')
     upsert_interface "$obj"
     ;;
   vlan)
-    id=${2:?ID}; parent=${3:?PARENT_ID}; vid=${4:?VLAN_ID}; role=${5:-lan}; dev=${6:-}
+    id=${2:?ID}; parent=${3:?PARENT_ID}; vid=${4:?VLAN_ID}; dev=${5:-}
     [ -n "$dev" ] || dev="$(interface_device "$parent").$vid"
-    obj=$(jq -n --arg id "$id" --arg parent "$parent" --arg dev "$dev" --arg role "$role" --argjson vid "$vid" \
-      '{id:$id,name:$id,type:"vlan",device:$dev,parent:$parent,vlanId:$vid,role:$role,mtu:1500,enabled:true}')
+    obj=$(jq -n --arg id "$id" --arg parent "$parent" --arg dev "$dev" --argjson vid "$vid" \
+      '{id:$id,name:$id,type:"vlan",device:$dev,parent:$parent,vlanId:$vid,role:"none",mtu:1500,enabled:true}')
     upsert_interface "$obj"
     ;;
-  segment)
-    id=${2:?ID}; iid=${3:?INTERFACE_ID}; cidr=${4:?CIDR}; gateway=${5:-}; dns=${6:-}; domain=${7:-}
-    tmp=$(mktemp)
-    jq --arg id "$id" --arg iid "$iid" --arg cidr "$cidr" --arg gateway "$gateway" --arg dns "$dns" --arg domain "$domain" '
-      .segments = ((.segments // []) | map(select(.id != $id)) + [{
-        id:$id,name:$id,interface:$iid,address:$cidr,gateway:$gateway,
-        dns:($dns|split(",")|map(select(length>0))),domain:$domain,
-        dhcp:{enabled:false,reservations:[]}
-      }])
-    ' "$LITEFWM_CONFIG" > "$tmp"
-    write_cfg "$tmp"
+  segment|segment-static)
+    id=${2:?ID}; iid=${3:?INTERFACE_ID}; cidr=${4:?CIDR}; zone=${5:-internal}; gateway=${6:-}; dns=${7:-}; domain=${8:-}
+    if [ "${1:-}" = segment ] && [ "$zone" != internal ] && [ "$zone" != external ] && [ "$zone" != none ]; then
+      domain=$dns; dns=$gateway; gateway=$zone
+      if [ -n "$gateway" ]; then zone=external; else zone=internal; fi
+    fi
+    obj=$(jq -n --arg id "$id" --arg iid "$iid" --arg cidr "$cidr" --arg zone "$zone" --arg gateway "$gateway" --arg dns "$dns" --arg domain "$domain" \
+      '{id:$id,name:$id,interface:$iid,zone:$zone,addressMode:"static",address:$cidr,gateway:$gateway,dns:($dns|split(",")|map(select(length>0))),domain:$domain,dhcpClient:{hostname:""},dhcp:{enabled:false,dns:[],ntp:[],reservations:[]}}')
+    upsert_segment "$obj"
+    ;;
+  segment-dhcp)
+    id=${2:?ID}; iid=${3:?INTERFACE_ID}; zone=${4:-external}; host=${5:-}
+    obj=$(jq -n --arg id "$id" --arg iid "$iid" --arg zone "$zone" --arg host "$host" \
+      '{id:$id,name:$id,interface:$iid,zone:$zone,addressMode:"dhcp",address:"",gateway:"",dns:[],domain:"",dhcpClient:{hostname:$host},dhcp:{enabled:false,dns:[],ntp:[],reservations:[]}}')
+    upsert_segment "$obj"
     ;;
   dhcp)
-    id=${2:?SEGMENT}; enabled=${3:?true_or_false}; start=${4:-}; end=${5:-}; lease=${6:-12h}
+    id=${2:?SEGMENT}; enabled=${3:?true_or_false}; start=${4:-}; end=${5:-}; lease=${6:-12h}; gateway=${7:-}; dns=${8:-}; domain=${9:-}; ntp=${10:-}
     tmp=$(mktemp)
-    jq --arg id "$id" --argjson enabled "$enabled" --arg start "$start" --arg end "$end" --arg lease "$lease" '
+    jq --arg id "$id" --argjson enabled "$enabled" --arg start "$start" --arg end "$end" --arg lease "$lease" --arg gateway "$gateway" --arg dns "$dns" --arg domain "$domain" --arg ntp "$ntp" '
       .segments |= map(if .id==$id then
-        .dhcp = ((.dhcp // {reservations:[]}) + {enabled:$enabled,poolStart:$start,poolEnd:$end,leaseTime:$lease})
+        .domain=(if ($domain|length)>0 then $domain else .domain end) |
+        .dhcp = ((.dhcp // {reservations:[]}) + {
+          enabled:$enabled,poolStart:$start,poolEnd:$end,leaseTime:$lease,gateway:$gateway,
+          dns:($dns|split(",")|map(select(length>0))),
+          ntp:($ntp|split(",")|map(select(length>0))),
+          reservations:(.dhcp.reservations // [])
+        })
       else . end)
     ' "$LITEFWM_CONFIG" > "$tmp"
     write_cfg "$tmp"
@@ -83,11 +99,12 @@ case "${1:-}" in
     cat >&2 <<'TXT'
 Usage:
   setupctl inventory
-  setupctl physical ID DEVICE [wan|lan|none] [NAME]
-  setupctl bridge ID DEVICE [wan|lan|none] [MEMBER_IDS_CSV] [true|false]
-  setupctl vlan ID PARENT_ID VLAN_ID [wan|lan|none] [DEVICE]
-  setupctl segment ID INTERFACE_ID CIDR [GATEWAY] [DNS_CSV] [DOMAIN]
-  setupctl dhcp SEGMENT true|false [POOL_START] [POOL_END] [LEASE]
+  setupctl physical ID DEVICE [NAME]
+  setupctl bridge ID DEVICE [MEMBER_IDS_CSV] [true|false]
+  setupctl vlan ID PARENT_ID VLAN_ID [DEVICE]
+  setupctl segment-static ID INTERFACE_ID CIDR [internal|external|none] [GATEWAY] [DNS_CSV] [DOMAIN]
+  setupctl segment-dhcp ID INTERFACE_ID [internal|external|none] [HOSTNAME]
+  setupctl dhcp SEGMENT true|false [POOL_START] [POOL_END] [LEASE] [ROUTER] [DNS_CSV] [DOMAIN] [NTP_CSV]
   setupctl management any|SEGMENT [PORT]
   setupctl ssh true|false [PORT]
   setupctl show

@@ -9,9 +9,18 @@ policy_word() {
 iface_clause() {
   direction=$1
   seg=$2
+  explicit=$3
   if [ -z "$seg" ] || [ "$seg" = any ]; then return 0; fi
   dev=$(segment_device "$seg") || die "Unknown segment: $seg"
-  if [ "$direction" = in ]; then printf -- '-i %s ' "$dev"; else printf -- '-o %s ' "$dev"; fi
+  mode=$(jq -r --arg id "$seg" '.segments[] | select(.id==$id) | .addressMode' "$LITEFWM_CONFIG")
+  zone=$(jq -r --arg id "$seg" '.segments[] | select(.id==$id) | .zone' "$LITEFWM_CONFIG")
+  if [ "$direction" = in ]; then
+    printf -- '-i %s ' "$dev"
+    if [ "$mode" = static ] && [ "$zone" = internal ] && [ "$explicit" = any ]; then printf -- '-s %s ' "$(segment_network_cidr "$seg")"; fi
+  else
+    printf -- '-o %s ' "$dev"
+    if [ "$mode" = static ] && [ "$zone" = internal ] && [ "$explicit" = any ]; then printf -- '-d %s ' "$(segment_network_cidr "$seg")"; fi
+  fi
 }
 render_rule() {
   rule=$1
@@ -25,8 +34,8 @@ render_rule() {
   inseg=$(printf '%s' "$rule" | jq -r '.inSegment // "any"')
   outseg=$(printf '%s' "$rule" | jq -r '.outSegment // "any"')
   printf -- '-A %s ' "$chain"
-  [ "$chain" = OUTPUT ] || iface_clause in "$inseg"
-  [ "$chain" = INPUT ] || iface_clause out "$outseg"
+  [ "$chain" = OUTPUT ] || iface_clause in "$inseg" "$src"
+  [ "$chain" = INPUT ] || iface_clause out "$outseg" "$dst"
   [ "$proto" = any ] || printf -- '-p %s ' "$proto"
   [ "$src" = any ] || printf -- '-s %s ' "$src"
   [ "$dst" = any ] || printf -- '-d %s ' "$dst"
@@ -38,6 +47,17 @@ render_rule() {
     *) die "Invalid action: $action";;
   esac
 }
+nat_source() {
+  nat=$1
+  srcseg=$(printf '%s' "$nat" | jq -r '.sourceSegment // empty')
+  if [ -n "$srcseg" ]; then
+    mode=$(jq -r --arg id "$srcseg" '.segments[] | select(.id==$id) | .addressMode' "$LITEFWM_CONFIG")
+    if [ "$mode" = static ]; then segment_network_cidr "$srcseg"; else echo any; fi
+  else
+    printf '%s' "$nat" | jq -r '.source // "any"'
+  fi
+}
+
 render() {
   config_exists
   ensure_dirs
@@ -65,7 +85,11 @@ render() {
     else
       jq -r '.management.allowedSegments[]?' "$LITEFWM_CONFIG" | while IFS= read -r seg; do
         dev=$(segment_device "$seg")
-        printf -- '-A INPUT -i %s -p tcp --dport %s -j ACCEPT\n' "$dev" "$mgmt"
+        mode=$(jq -r --arg id "$seg" '.segments[] | select(.id==$id) | .addressMode' "$LITEFWM_CONFIG")
+        zone=$(jq -r --arg id "$seg" '.segments[] | select(.id==$id) | .zone' "$LITEFWM_CONFIG")
+        printf -- '-A INPUT -i %s ' "$dev"
+        if [ "$mode" = static ] && [ "$zone" = internal ]; then printf -- '-s %s ' "$(segment_network_cidr "$seg")"; fi
+        printf -- '-p tcp --dport %s -j ACCEPT\n' "$mgmt"
       done
     fi
     jq -c '.firewall.rules | sort_by(.position // 999999)[] | select(.enabled != false)' "$LITEFWM_CONFIG" |
@@ -80,7 +104,7 @@ render() {
     jq -c '.firewall.nat.masquerade[]? | select(.enabled != false)' "$LITEFWM_CONFIG" |
     while IFS= read -r nat; do
       outseg=$(printf '%s' "$nat" | jq -r .outSegment)
-      src=$(printf '%s' "$nat" | jq -r '.source // "any"')
+      src=$(nat_source "$nat")
       dev=$(segment_device "$outseg")
       printf -- '-A POSTROUTING -o %s ' "$dev"
       [ "$src" = any ] || printf -- '-s %s ' "$src"
@@ -89,7 +113,7 @@ render() {
     jq -c '.firewall.nat.snat[]? | select(.enabled != false)' "$LITEFWM_CONFIG" |
     while IFS= read -r nat; do
       outseg=$(printf '%s' "$nat" | jq -r .outSegment)
-      src=$(printf '%s' "$nat" | jq -r '.source // "any"')
+      src=$(nat_source "$nat")
       tosrc=$(printf '%s' "$nat" | jq -r .toSource)
       dev=$(segment_device "$outseg")
       printf -- '-A POSTROUTING -o %s ' "$dev"
@@ -103,7 +127,11 @@ render() {
       dport=$(printf '%s' "$nat" | jq -r .destinationPort)
       todst=$(printf '%s' "$nat" | jq -r .toDestination)
       dev=$(segment_device "$inseg")
-      printf -- '-A PREROUTING -i %s -p %s --dport %s -j DNAT --to-destination %s\n' "$dev" "$proto" "$dport" "$todst"
+      mode=$(jq -r --arg id "$inseg" '.segments[] | select(.id==$id) | .addressMode' "$LITEFWM_CONFIG")
+      printf -- '-A PREROUTING -i %s ' "$dev"
+      [ "$mode" != static ] || printf -- '-d %s ' "$(segment_ip "$inseg")"
+      printf -- '-p %s --dport %s -j DNAT --to-destination %s
+' "$proto" "$dport" "$todst"
     done
     echo 'COMMIT'
   } > "$out"

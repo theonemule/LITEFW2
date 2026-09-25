@@ -79,12 +79,25 @@ render() {
     done
 
     jq -c '.segments[]' "$LITEFWM_CONFIG" | while IFS= read -r seg; do
+      id=$(printf '%s' "$seg" | jq -r .id)
       iid=$(printf '%s' "$seg" | jq -r .interface)
       dev=$(interface_device "$iid")
-      addr=$(printf '%s' "$seg" | jq -r .address)
-      gateway=$(printf '%s' "$seg" | jq -r '.gateway // empty')
-      printf "ip addr replace '%s' dev '%s'\n" "$addr" "$dev"
-      [ -z "$gateway" ] || printf "ip route replace default via '%s' dev '%s'\n" "$gateway" "$dev"
+      mode=$(printf '%s' "$seg" | jq -r '.addressMode // "static"')
+      if [ "$mode" = static ]; then
+        addr=$(printf '%s' "$seg" | jq -r .address)
+        gateway=$(printf '%s' "$seg" | jq -r '.gateway // empty')
+        printf "ip addr replace '%s' dev '%s'\n" "$addr" "$dev"
+        [ -z "$gateway" ] || printf "ip route replace default via '%s' dev '%s'\n" "$gateway" "$dev"
+      else
+        host=$(printf '%s' "$seg" | jq -r '.dhcpClient.hostname // empty')
+        pid="$LITEFWM_RUN/udhcpc-$id.pid"
+        printf "if [ -r '%s' ]; then kill \$(cat '%s') >/dev/null 2>&1 || true; rm -f '%s'; fi\n" "$pid" "$pid" "$pid"
+        if [ -n "$host" ]; then
+          printf "udhcpc -i '%s' -p '%s' -b -x 'hostname:%s'\n" "$dev" "$pid" "$host"
+        else
+          printf "udhcpc -i '%s' -p '%s' -b\n" "$dev" "$pid"
+        fi
+      fi
     done
   } > "$out"
   chmod 0750 "$out"
@@ -92,15 +105,96 @@ render() {
 }
 
 inventory() {
-  ip -j link show | jq '[.[] | {
-    name:.ifname,state:(.operstate // "UNKNOWN"),mtu:.mtu,mac:(.address // ""),
-    kind:(.linkinfo.info_kind // "physical"),master:(.master // null)
-  }]'
+  ip -d -j link show | jq '[.[] |
+    (.linkinfo.info_kind // "") as $kind |
+    {
+      name:.ifname,
+      state:(.operstate // "UNKNOWN"),
+      mtu:.mtu,
+      mac:(.address // ""),
+      kind:(if .ifname=="lo" then "loopback"
+            elif $kind!="" then $kind
+            elif (.link_type // "")=="ether" then "physical"
+            else (.link_type // "virtual") end),
+      physical:(.ifname!="lo" and $kind=="" and (.link_type // "")=="ether"),
+      master:(.master // null)
+    }
+  ]'
+}
+
+cleanup_removed_virtuals() {
+  prev="$LITEFWM_STATE/applied-interfaces.json"
+  [ -r "$prev" ] || return 0
+  jq -c '.[] | select(.type=="bridge" or .type=="vlan")' "$prev" |
+  while IFS= read -r obj; do
+    id=$(printf '%s' "$obj" | jq -r .id)
+    dev=$(printf '%s' "$obj" | jq -r .device)
+    type=$(printf '%s' "$obj" | jq -r .type)
+    current=$(jq -r --arg id "$id" '.interfaces[]? | select(.id==$id) | [.type,.device] | @tsv' "$LITEFWM_CONFIG" | head -1)
+    [ "$current" = "$type	$dev" ] || {
+      ip link show "$dev" >/dev/null 2>&1 && ip link delete dev "$dev" >/dev/null 2>&1 || true
+    }
+  done
+}
+
+cleanup_changed_segments() {
+  prev="$LITEFWM_STATE/applied-segments.json"
+  [ -r "$prev" ] || return 0
+  jq -c '.[]' "$prev" |
+  while IFS= read -r old; do
+    id=$(printf '%s' "$old" | jq -r .id)
+    oldmode=$(printf '%s' "$old" | jq -r '.addressMode // "static"')
+    olddev=$(printf '%s' "$old" | jq -r '.device // empty')
+    oldaddr=$(printf '%s' "$old" | jq -r '.address // empty')
+    oldgw=$(printf '%s' "$old" | jq -r '.gateway // empty')
+
+    cur=$(jq -c --arg id "$id" '.segments[]? | select(.id==$id)' "$LITEFWM_CONFIG" | head -1)
+    same=false
+    if [ -n "$cur" ]; then
+      curmode=$(printf '%s' "$cur" | jq -r '.addressMode // "static"')
+      curiid=$(printf '%s' "$cur" | jq -r .interface)
+      curdev=$(interface_device "$curiid" 2>/dev/null || true)
+      curaddr=$(printf '%s' "$cur" | jq -r '.address // empty')
+      if [ "$oldmode" = "$curmode" ] && [ "$olddev" = "$curdev" ] && [ "$oldaddr" = "$curaddr" ]; then same=true; fi
+    fi
+    [ "$same" = true ] && continue
+
+    if [ "$oldmode" = static ]; then
+      [ -z "$oldgw" ] || ip route del default via "$oldgw" dev "$olddev" >/dev/null 2>&1 || true
+      [ -z "$oldaddr" ] || ip addr del "$oldaddr" dev "$olddev" >/dev/null 2>&1 || true
+    else
+      pid="$LITEFWM_RUN/udhcpc-$id.pid"
+      if [ -r "$pid" ]; then kill "$(cat "$pid")" >/dev/null 2>&1 || true; rm -f "$pid"; fi
+    fi
+  done
+}
+
+save_applied_state() {
+  jq '.interfaces' "$LITEFWM_CONFIG" > "$LITEFWM_STATE/applied-interfaces.json"
+  tmp=$(mktemp)
+  : > "$tmp"
+  jq -c '.segments[]' "$LITEFWM_CONFIG" |
+  while IFS= read -r seg; do
+    iid=$(printf '%s' "$seg" | jq -r .interface)
+    dev=$(interface_device "$iid")
+    printf '%s' "$seg" | jq -c --arg dev "$dev" '. + {device:$dev}' >> "$tmp"
+  done
+  jq -s . "$tmp" > "$LITEFWM_STATE/applied-segments.json"
+  rm -f "$tmp"
 }
 
 case "${1:-}" in
   render) render;;
-  apply) require_root; render >/dev/null; "$LITEFWM_GENERATED/network.sh";;
+  apply)
+    require_root
+    ensure_dirs
+    if jq -e '.segments[]? | select(.addressMode=="dhcp")' "$LITEFWM_CONFIG" >/dev/null; then need udhcpc; fi
+    cleanup_changed_segments
+    cleanup_removed_virtuals
+    render >/dev/null
+    "$LITEFWM_GENERATED/network.sh"
+    save_applied_state
+    ;;
   status) ip -j addr show 2>/dev/null | jq '.' || ip addr show;;
   inventory) inventory;;
   *) echo "Usage: netctl render|apply|status|inventory" >&2; exit 2;;

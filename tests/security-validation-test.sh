@@ -17,4 +17,10 @@ if LITEFWM_CONFIG="$bad" "$ROOT/bin/configctl" validate "$bad" >/dev/null 2>&1; 
   exit 1
 fi
 
+jq '(.segments[] | select(.id=="lan") | .dhcp.poolStart)="192.168.99.10"' "$ROOT/tests/fixtures/full.json" > "$bad"
+if LITEFWM_CONFIG="$bad" "$ROOT/bin/configctl" validate "$bad" >/dev/null 2>&1; then
+  echo "DHCP pool outside segment CIDR was accepted" >&2
+  exit 1
+fi
+
 echo "security-validation-test: PASS"

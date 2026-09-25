@@ -13,10 +13,19 @@ function esc(v) {
   });
 }
 function id(prefix) { return prefix + '-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2,7); }
-function segOptions(selected, includeAny) {
-  let out = includeAny ? '<option value="any">Any</option>' : '';
-  (state.config.segments || []).forEach(function(s) {
-    out += '<option value="' + esc(s.id) + '"' + (s.id===selected?' selected':'') + '>' + esc(s.name || s.id) + '</option>';
+function zoneName(z) {
+  return z==='internal'?'Internal':z==='external'?'External':'Unclassified';
+}
+function segmentText(s) {
+  const addr=(s.addressMode||'static')==='dhcp'?'DHCP client':(s.address||'');
+  return zoneName(s.zone)+' · '+(s.name||s.id)+(addr?' · '+addr:'');
+}
+function segOptions(selected, includeAny, preferredZone) {
+  let out = includeAny ? '<option value="any">Any segment</option>' : '';
+  let list=(state.config.segments||[]).slice();
+  if(preferredZone) list.sort(function(a,b){return (a.zone===preferredZone?0:1)-(b.zone===preferredZone?0:1);});
+  list.forEach(function(s) {
+    out += '<option value="' + esc(s.id) + '"' + (s.id===selected?' selected':'') + '>' + esc(segmentText(s)) + '</option>';
   });
   return out;
 }
@@ -29,11 +38,32 @@ function ifaceOptions(selected, includeBlank) {
 }
 function detectedDeviceOptions(selected) {
   let out='<option value="">Select physical NIC</option>';
-  (state.interfaces || []).filter(function(i){return i.name!=='lo';}).forEach(function(i){
+  (state.interfaces || []).filter(function(i){return i.physical===true || i.kind==='physical';}).forEach(function(i){
     out+='<option value="'+esc(i.name)+'"'+(i.name===selected?' selected':'')+'>'+esc(i.name)+' · '+esc(i.mac||'')+' · '+esc(i.state||'')+'</option>';
   });
   if(selected && !(state.interfaces||[]).some(function(i){return i.name===selected;})) out+='<option selected value="'+esc(selected)+'">'+esc(selected)+' (not currently detected)</option>';
   return out;
+}
+function ipv4Int(ip) {
+  const p=String(ip||'').split('.').map(Number);
+  if(p.length!==4 || p.some(function(x){return !Number.isInteger(x)||x<0||x>255;})) return null;
+  return ((((p[0]<<24)>>>0)+(p[1]<<16)+(p[2]<<8)+p[3])>>>0);
+}
+function intIpv4(n) {
+  n=n>>>0;
+  return [(n>>>24)&255,(n>>>16)&255,(n>>>8)&255,n&255].join('.');
+}
+function cidrInfo(cidr) {
+  const a=String(cidr||'').split('/');
+  if(a.length!==2) return null;
+  const ip=ipv4Int(a[0]), prefix=Number(a[1]);
+  if(ip===null || !Number.isInteger(prefix) || prefix<0 || prefix>32) return null;
+  const mask=prefix===0?0:((0xffffffff << (32-prefix))>>>0);
+  const network=(ip & mask)>>>0;
+  const broadcast=(network | ((~mask)>>>0))>>>0;
+  const first=prefix>=31?network:(network+1)>>>0;
+  const last=prefix>=31?broadcast:(broadcast-1)>>>0;
+  return {network:intIpv4(network)+'/'+prefix,broadcast:intIpv4(broadcast),first:intIpv4(first),last:intIpv4(last),prefix:prefix};
 }
 function toast(title, body) {
   document.getElementById('toastTitle').textContent = title;
@@ -111,54 +141,64 @@ function renderOverview() {
 }
 function renderInterfaces() {
   const configured=state.config.interfaces||[];
-  let html='<div class="d-flex justify-content-between align-items-center mb-3"><div><p class="mb-0 text-secondary">Configure raw NICs, VLAN-aware Linux bridges, and VLAN virtual adapters here. Network segments bind L3 settings to these endpoints separately.</p></div><button id="addInterface" class="btn btn-primary btn-sm">Add interface</button></div>';
-  if(configured.length<2) html+='<div class="alert alert-warning small">A typical routed firewall needs at least two endpoints, usually one WAN and one LAN. LiteFWM does not enforce that during initial setup.</div>';
-  html+='<div class="card mb-3"><div class="card-header fw-semibold">Configured endpoints</div><div class="table-responsive"><table class="table mb-0"><thead><tr><th>Name</th><th>Type</th><th>Device</th><th>Role</th><th>Details</th><th></th></tr></thead><tbody>';
+  let html='<div class="d-flex justify-content-between align-items-center mb-3"><div><p class="mb-0 text-secondary">Manage physical NICs, Linux bridges, and VLAN adapters. IP addresses are assigned separately under Network segments.</p></div><button id="addInterface" class="btn btn-primary btn-sm">Add managed interface</button></div>';
+  html+='<div class="card mb-3"><div class="card-header fw-semibold">Managed interfaces</div><div class="table-responsive"><table class="table mb-0"><thead><tr><th>Name</th><th>Type</th><th>Device</th><th>Attached segments</th><th>Details</th><th></th></tr></thead><tbody>';
   configured.forEach(function(i,idx){
-    let details='';
+    const segs=(state.config.segments||[]).filter(function(s){return s.interface===i.id;});
+    let details='MTU '+esc(i.mtu||1500);
     if(i.type==='bridge') details='VLAN-aware '+(i.vlanAware===false?'off':'on')+' · members: '+((i.members||[]).join(', ')||'none');
     if(i.type==='vlan') details='parent '+esc(i.parent)+' · VLAN '+esc(i.vlanId);
-    if(i.type==='physical') details='MTU '+esc(i.mtu||1500);
-    html+='<tr><td><strong>'+esc(i.name||i.id)+'</strong><div class="small text-secondary">'+esc(i.id)+'</div></td><td>'+esc(i.type)+'</td><td><code>'+esc(i.device)+'</code></td><td><span class="badge '+(i.role==='wan'?'text-bg-primary':i.role==='lan'?'text-bg-success':'badge-soft')+'">'+esc(i.role||'none')+'</span></td><td class="small">'+details+'</td><td class="text-end"><div class="btn-group btn-group-sm"><button class="btn btn-outline-secondary edit-iface" data-i="'+idx+'">Edit</button><button class="btn btn-outline-danger del-iface" data-i="'+idx+'">Delete</button></div></td></tr>';
+    html+='<tr><td><strong>'+esc(i.name||i.id)+'</strong><div class="small text-secondary">'+esc(i.id)+'</div></td><td>'+esc(i.type)+'</td><td><code>'+esc(i.device)+'</code></td><td>'+(segs.length?segs.map(function(x){return '<span class="badge badge-soft me-1">'+esc(x.name||x.id)+'</span>';}).join(''):'<span class="text-secondary">None</span>')+'</td><td class="small">'+details+'</td><td class="text-end"><div class="btn-group btn-group-sm"><button class="btn btn-outline-secondary edit-iface" data-i="'+idx+'">Edit</button><button class="btn btn-outline-danger del-iface" data-i="'+idx+'">Remove</button></div></td></tr>';
   });
+  if(!configured.length) html+='<tr><td colspan="6" class="text-secondary">No interfaces are managed by LiteFWM yet. Configure a detected physical NIC or add a bridge/VLAN.</td></tr>';
   html+='</tbody></table></div></div>';
-  html+='<div class="card"><div class="card-header fw-semibold">Detected system links</div><div class="table-responsive"><table class="table table-sm mb-0"><thead><tr><th>Device</th><th>Kind</th><th>State</th><th>MAC</th><th>MTU</th></tr></thead><tbody>';
-  (state.interfaces||[]).forEach(function(i){html+='<tr><td>'+esc(i.name)+'</td><td>'+esc(i.kind||'physical')+'</td><td>'+esc(i.state)+'</td><td><code>'+esc(i.mac||'')+'</code></td><td>'+esc(i.mtu)+'</td></tr>';});
-  html+='</tbody></table></div></div>';
+  html+='<div class="card"><div class="card-header fw-semibold">Detected host links</div><div class="table-responsive"><table class="table table-sm mb-0"><thead><tr><th>Device</th><th>Detected type</th><th>State</th><th>MAC</th><th>Owner</th><th></th></tr></thead><tbody>';
+  (state.interfaces||[]).forEach(function(i){
+    const managed=configured.find(function(x){return x.device===i.name;});
+    const isPhysical=i.physical===true || i.kind==='physical';
+    let owner=managed?'<span class="badge text-bg-success">LiteFWM managed</span>':(isPhysical?'<span class="badge badge-soft">Available NIC</span>':'<span class="badge badge-soft">System / other service</span>');
+    let action='';
+    if(managed) action='<button class="btn btn-sm btn-outline-secondary edit-detected" data-id="'+esc(managed.id)+'">Edit</button>';
+    else if(isPhysical) action='<button class="btn btn-sm btn-outline-primary configure-detected" data-device="'+esc(i.name)+'">Configure</button>';
+    html+='<tr><td><strong>'+esc(i.name)+'</strong></td><td>'+esc(i.kind||'virtual')+'</td><td>'+esc(i.state||'')+'</td><td><code>'+esc(i.mac||'')+'</code></td><td>'+owner+'</td><td class="text-end">'+action+'</td></tr>';
+  });
+  html+='</tbody></table></div><div class="card-footer small text-secondary">Loopback, Docker bridges, veth pairs, and other service-created links are shown for visibility but are not treated as physical NICs. LiteFWM only deletes virtual interfaces that LiteFWM itself previously created.</div></div>';
   document.getElementById('view').innerHTML=html;
   document.getElementById('addInterface').onclick=function(){editInterface(-1);};
   document.querySelectorAll('.edit-iface').forEach(function(b){b.onclick=function(){editInterface(Number(b.dataset.i));};});
+  document.querySelectorAll('.edit-detected').forEach(function(b){b.onclick=function(){const idx=configured.findIndex(function(x){return x.id===b.dataset.id;});if(idx>=0)editInterface(idx);};});
+  document.querySelectorAll('.configure-detected').forEach(function(b){b.onclick=function(){editInterface(-1,{type:'physical',device:b.dataset.device,id:b.dataset.device,name:b.dataset.device});};});
   document.querySelectorAll('.del-iface').forEach(function(b){b.onclick=async function(){
     const idx=Number(b.dataset.i), item=state.config.interfaces[idx];
     const refs=(state.config.segments||[]).some(function(x){return x.interface===item.id;}) ||
       (state.config.interfaces||[]).some(function(x){return x.parent===item.id || (x.members||[]).includes(item.id);});
     if(refs){toast('Interface is in use','Remove dependent segments, VLANs, or bridge membership first.');return;}
-    if(confirm('Delete '+(item.name||item.id)+' from the staged configuration?')){state.config.interfaces.splice(idx,1);await saveConfig('Interface removed.');renderInterfaces();}
+    if(confirm('Remove '+(item.name||item.id)+' from LiteFWM management?'+(item.type==='physical'?' The Linux NIC itself will not be deleted.':' The virtual link will be deleted on the next Apply.'))){
+      state.config.interfaces.splice(idx,1);await saveConfig('Interface removal staged.');renderInterfaces();
+    }
   };});
 }
-function editInterface(index) {
-  const old=index>=0?state.config.interfaces[index]:{id:'',name:'',type:'physical',device:'',role:'none',mtu:1500,enabled:true,vlanAware:true,members:[]};
-  document.getElementById('modalTitle').textContent=index>=0?'Edit interface':'Add interface';
+function editInterface(index,preset) {
+  const old=index>=0?state.config.interfaces[index]:Object.assign({id:'',name:'',type:'physical',device:'',role:'none',mtu:1500,enabled:true,vlanAware:true,members:[]},preset||{});
+  document.getElementById('modalTitle').textContent=index>=0?'Edit managed interface':'Add managed interface';
   document.getElementById('modalBody').innerHTML=
     '<div class="row g-3">'+
     '<div class="col-md-4"><label class="form-label">ID</label><input id="ifId" class="form-control" value="'+esc(old.id||'')+'"></div>'+
     '<div class="col-md-4"><label class="form-label">Name</label><input id="ifName" class="form-control" value="'+esc(old.name||'')+'"></div>'+
-    '<div class="col-md-4"><label class="form-label">Type</label><select id="ifType" class="form-select"><option value="physical">Physical NIC</option><option value="bridge">Bridge</option><option value="vlan">VLAN adapter</option></select></div>'+
-    '<div class="col-md-4"><label class="form-label">Role</label><select id="ifRole" class="form-select"><option value="none">Unassigned</option><option value="wan">WAN</option><option value="lan">LAN</option></select></div>'+
+    '<div class="col-md-4"><label class="form-label">Type</label><select id="ifType" class="form-select"><option value="physical">Physical NIC</option><option value="bridge">Linux bridge</option><option value="vlan">VLAN adapter</option></select></div>'+
     '<div class="col-md-4"><label class="form-label">MTU</label><input id="ifMtu" type="number" min="576" max="9216" class="form-control" value="'+esc(old.mtu||1500)+'"></div>'+
     '<div class="col-md-4 d-flex align-items-end"><div class="form-check mb-2"><input id="ifEnabled" class="form-check-input" type="checkbox" '+(old.enabled===false?'':'checked')+'><label class="form-check-label">Enabled</label></div></div>'+
     '<div id="ifTypeFields" class="col-12"></div></div>';
   document.getElementById('ifType').value=old.type||'physical';
-  document.getElementById('ifRole').value=old.role||'none';
   function fields(){
     const t=document.getElementById('ifType').value;
     let h='';
-    if(t==='physical') h='<label class="form-label">Physical device</label><select id="ifDevice" class="form-select">'+detectedDeviceOptions(old.device||'')+'</select>';
+    if(t==='physical') h='<label class="form-label">Physical device</label><select id="ifDevice" class="form-select">'+detectedDeviceOptions(old.device||'')+'</select><div class="form-text">Only links detected as physical NICs are offered here.</div>';
     if(t==='bridge') {
       const choices=(state.config.interfaces||[]).filter(function(x){return x.id!==old.id && x.type!=='bridge';}).map(function(x){return '<label class="form-check"><input class="form-check-input bridge-member" type="checkbox" value="'+esc(x.id)+'" '+((old.members||[]).includes(x.id)?'checked':'')+'><span class="form-check-label">'+esc(x.name||x.id)+' <code>'+esc(x.device)+'</code></span></label>';}).join('');
-      h='<div class="row g-3"><div class="col-md-6"><label class="form-label">Bridge device</label><input id="ifDevice" class="form-control" placeholder="br0" value="'+esc(old.device||'')+'"></div><div class="col-md-6 d-flex align-items-end"><div class="form-check mb-2"><input id="ifVlanAware" class="form-check-input" type="checkbox" '+(old.vlanAware===false?'':'checked')+'><label class="form-check-label">VLAN-aware bridge</label></div></div><div class="col-12"><label class="form-label">Member interfaces</label><div class="border rounded p-2">'+(choices||'<span class="text-secondary small">Create physical or VLAN adapters first.</span>')+'</div></div></div>';
+      h='<div class="row g-3"><div class="col-md-6"><label class="form-label">Bridge device</label><input id="ifDevice" class="form-control" placeholder="br-lan" value="'+esc(old.device||'')+'"></div><div class="col-md-6 d-flex align-items-end"><div class="form-check mb-2"><input id="ifVlanAware" class="form-check-input" type="checkbox" '+(old.vlanAware===false?'':'checked')+'><label class="form-check-label">VLAN-aware bridge</label></div></div><div class="col-12"><label class="form-label">Member interfaces</label><div class="border rounded p-2">'+(choices||'<span class="text-secondary small">Add physical or VLAN interfaces first.</span>')+'</div></div></div>';
     }
-    if(t==='vlan') h='<div class="row g-3"><div class="col-md-5"><label class="form-label">Parent interface</label><select id="ifParent" class="form-select">'+ifaceOptions(old.parent||'',true)+'</select></div><div class="col-md-3"><label class="form-label">VLAN ID</label><input id="ifVlanId" type="number" min="1" max="4094" class="form-control" value="'+esc(old.vlanId==null?'':old.vlanId)+'"></div><div class="col-md-4"><label class="form-label">Device name</label><input id="ifDevice" class="form-control" placeholder="eth0.100" value="'+esc(old.device||'')+'"><div class="form-text">Leave blank to derive parent-device.VLAN.</div></div></div>';
+    if(t==='vlan') h='<div class="row g-3"><div class="col-md-5"><label class="form-label">Parent interface</label><select id="ifParent" class="form-select">'+ifaceOptions(old.parent||'',true)+'</select></div><div class="col-md-3"><label class="form-label">VLAN ID</label><input id="ifVlanId" type="number" min="1" max="4094" class="form-control" value="'+esc(old.vlanId==null?'':old.vlanId)+'"></div><div class="col-md-4"><label class="form-label">Device name</label><input id="ifDevice" class="form-control" placeholder="br-lan.100" value="'+esc(old.device||'')+'"><div class="form-text">Leave blank to derive parent-device.VLAN.</div></div></div>';
     document.getElementById('ifTypeFields').innerHTML=h;
   }
   document.getElementById('ifType').onchange=fields;fields();
@@ -168,7 +208,7 @@ function editInterface(index) {
     const type=document.getElementById('ifType').value;
     const iid=document.getElementById('ifId').value.trim();
     let device=document.getElementById('ifDevice').value.trim();
-    const obj={id:iid,name:document.getElementById('ifName').value.trim()||iid,type:type,device:device,role:document.getElementById('ifRole').value,mtu:Number(document.getElementById('ifMtu').value||1500),enabled:document.getElementById('ifEnabled').checked};
+    const obj={id:iid,name:document.getElementById('ifName').value.trim()||iid,type:type,device:device,role:'none',mtu:Number(document.getElementById('ifMtu').value||1500),enabled:document.getElementById('ifEnabled').checked};
     if(type==='bridge'){obj.vlanAware=document.getElementById('ifVlanAware').checked;obj.members=Array.from(document.querySelectorAll('.bridge-member:checked')).map(function(x){return x.value;});}
     if(type==='vlan'){obj.parent=document.getElementById('ifParent').value;obj.vlanId=Number(document.getElementById('ifVlanId').value);if(!device){const parent=(state.config.interfaces||[]).find(function(x){return x.id===obj.parent;});obj.device=(parent?parent.device:obj.parent)+'.'+obj.vlanId;}}
     const prev=old.id;
@@ -181,47 +221,100 @@ function editInterface(index) {
   };
 }
 function renderSegments() {
-  let html='<div class="d-flex justify-content-between align-items-center mb-3"><div><p class="mb-0 text-secondary">A network segment is the L3 configuration bound to one configured interface. Addressing, gateway, DNS and DHCP live here.</p></div><button class="btn btn-primary btn-sm" id="addSegment">Add segment</button></div>';
-  html+='<div class="card"><div class="table-responsive"><table class="table mb-0"><thead><tr><th>Name</th><th>Interface</th><th>Address</th><th>Gateway</th><th>DNS</th><th>DHCP</th><th></th></tr></thead><tbody>';
+  let html='<div class="d-flex justify-content-between align-items-center mb-3"><div><p class="mb-0 text-secondary">Segments are IP configurations attached to managed interfaces. An interface may carry multiple static segments.</p></div><button class="btn btn-primary btn-sm" id="addSegment">Add segment</button></div>';
+  html+='<div class="card"><div class="table-responsive"><table class="table mb-0"><thead><tr><th>Name</th><th>Zone</th><th>Interface</th><th>Addressing</th><th>Gateway / DNS</th><th>DHCP server</th><th></th></tr></thead><tbody>';
   (state.config.segments||[]).forEach(function(seg,idx){
     const i=(state.config.interfaces||[]).find(function(x){return x.id===seg.interface;});
-    html+='<tr><td><strong>'+esc(seg.name||seg.id)+'</strong><div class="small text-secondary">'+esc(seg.id)+'</div></td><td>'+esc(i?i.name||i.id:seg.interface)+'<div class="small text-secondary"><code>'+esc(i?i.device:'')+'</code></div></td><td><code>'+esc(seg.address)+'</code></td><td>'+esc(seg.gateway||'—')+'</td><td>'+esc((seg.dns||[]).join(', ')||'—')+'</td><td>'+(seg.dhcp&&seg.dhcp.enabled?'<span class="badge text-bg-success">On</span>':'<span class="badge badge-soft">Off</span>')+'</td><td class="text-end"><div class="btn-group btn-group-sm"><button class="btn btn-outline-secondary edit-seg" data-i="'+idx+'">Edit</button><button class="btn btn-outline-danger del-seg" data-i="'+idx+'">Delete</button></div></td></tr>';
+    const staticMode=(seg.addressMode||'static')==='static';
+    const ci=staticMode?cidrInfo(seg.address):null;
+    const zoneClass=seg.zone==='external'?'text-bg-primary':seg.zone==='internal'?'text-bg-success':'badge-soft';
+    html+='<tr><td><strong>'+esc(seg.name||seg.id)+'</strong><div class="small text-secondary">'+esc(seg.id)+'</div></td>'+
+      '<td><span class="badge '+zoneClass+'">'+esc(zoneName(seg.zone))+'</span></td>'+
+      '<td>'+esc(i?i.name||i.id:seg.interface)+'<div class="small text-secondary"><code>'+esc(i?i.device:'')+'</code></div></td>'+
+      '<td>'+(staticMode?'<code>'+esc(seg.address)+'</code><div class="small text-secondary">'+(ci?'Network '+esc(ci.network):'Invalid CIDR')+'</div>':'<span class="badge text-bg-info">DHCP client</span>')+'</td>'+
+      '<td>'+esc(seg.gateway||'—')+'<div class="small text-secondary">'+esc((seg.dns||[]).join(', ')||'DNS via DHCP / none')+'</div></td>'+
+      '<td>'+(seg.dhcp&&seg.dhcp.enabled?'<span class="badge text-bg-success">On</span><div class="small text-secondary">'+esc(seg.dhcp.poolStart)+' – '+esc(seg.dhcp.poolEnd)+'</div>':'<span class="badge badge-soft">Off</span>')+'</td>'+
+      '<td class="text-end"><div class="btn-group btn-group-sm"><button class="btn btn-outline-secondary edit-seg" data-i="'+idx+'">Edit</button><button class="btn btn-outline-danger del-seg" data-i="'+idx+'">Delete</button></div></td></tr>';
   });
+  if(!(state.config.segments||[]).length) html+='<tr><td colspan="7" class="text-secondary">No network segments configured.</td></tr>';
   html+='</tbody></table></div></div>';
   document.getElementById('view').innerHTML=html;
   document.getElementById('addSegment').onclick=function(){editSegment(-1);};
   document.querySelectorAll('.edit-seg').forEach(function(b){b.onclick=function(){editSegment(Number(b.dataset.i));};});
-  document.querySelectorAll('.del-seg').forEach(function(b){b.onclick=async function(){const idx=Number(b.dataset.i),old=state.config.segments[idx];if(confirm('Delete '+(old.name||old.id)+'?')){state.config.segments.splice(idx,1);state.config.management.allowedSegments=(state.config.management.allowedSegments||[]).filter(function(x){return x!==old.id;});await saveConfig('Segment removed.');renderSegments();}};});
+  document.querySelectorAll('.del-seg').forEach(function(b){b.onclick=async function(){
+    const idx=Number(b.dataset.i), old=state.config.segments[idx];
+    const used=(state.config.firewall.rules||[]).some(function(r){return r.inSegment===old.id||r.outSegment===old.id;}) ||
+      ['masquerade','snat'].some(function(k){return (state.config.firewall.nat[k]||[]).some(function(n){return n.sourceSegment===old.id||n.outSegment===old.id;});}) ||
+      (state.config.firewall.nat.dnat||[]).some(function(n){return n.inSegment===old.id;});
+    if(used){toast('Segment is in use','Remove firewall and NAT rules that reference this segment first.');return;}
+    if(confirm('Delete '+(old.name||old.id)+'?')){
+      state.config.segments.splice(idx,1);
+      state.config.management.allowedSegments=(state.config.management.allowedSegments||[]).filter(function(x){return x!==old.id;});
+      await saveConfig('Segment removed.');renderSegments();
+    }
+  };});
 }
 function editSegment(index) {
-  const old=index>=0?state.config.segments[index]:{id:'',name:'',interface:'',address:'',gateway:'',dns:[],domain:'',dhcp:{enabled:false,reservations:[]}};
-  const d=old.dhcp||{enabled:false,reservations:[]};
+  const old=index>=0?state.config.segments[index]:{id:'',name:'',interface:'',zone:'internal',addressMode:'static',address:'',gateway:'',dns:[],domain:'',dhcpClient:{hostname:''},dhcp:{enabled:false,dns:[],ntp:[],reservations:[]}};
+  const d=old.dhcp||{enabled:false,dns:[],ntp:[],reservations:[]};
   document.getElementById('modalTitle').textContent=index>=0?'Edit network segment':'Add network segment';
   document.getElementById('modalBody').innerHTML=
     '<div class="row g-3">'+
-    '<div class="col-md-4"><label class="form-label">ID</label><input id="segId" class="form-control" value="'+esc(old.id)+'"></div>'+
-    '<div class="col-md-4"><label class="form-label">Name</label><input id="segName" class="form-control" value="'+esc(old.name||'')+'"></div>'+
-    '<div class="col-md-4"><label class="form-label">Interface</label><select id="segInterface" class="form-select">'+ifaceOptions(old.interface||'',true)+'</select></div>'+
-    '<div class="col-md-6"><label class="form-label">Address / CIDR</label><input id="segAddress" class="form-control" placeholder="192.168.10.1/24" value="'+esc(old.address||'')+'"></div>'+
-    '<div class="col-md-6"><label class="form-label">Default gateway <span class="text-secondary">(normally WAN only)</span></label><input id="segGateway" class="form-control" placeholder="203.0.113.1" value="'+esc(old.gateway||'')+'"></div>'+
-    '<div class="col-md-6"><label class="form-label">DNS servers</label><input id="segDns" class="form-control" placeholder="1.1.1.1, 9.9.9.9" value="'+esc((old.dns||[]).join(', '))+'"></div>'+
-    '<div class="col-md-6"><label class="form-label">Local DNS domain</label><input id="segDomain" class="form-control" placeholder="lan.example" value="'+esc(old.domain||'')+'"></div>'+
+    '<div class="col-md-3"><label class="form-label">ID</label><input id="segId" class="form-control" '+(index>=0?'disabled ':'')+'value="'+esc(old.id||'')+'"></div>'+
+    '<div class="col-md-3"><label class="form-label">Name</label><input id="segName" class="form-control" value="'+esc(old.name||'')+'"></div>'+
+    '<div class="col-md-3"><label class="form-label">Interface</label><select id="segInterface" class="form-select">'+ifaceOptions(old.interface||'',true)+'</select></div>'+
+    '<div class="col-md-3"><label class="form-label">Firewall zone</label><select id="segZone" class="form-select"><option value="internal">Internal</option><option value="external">External</option><option value="none">Unclassified</option></select></div>'+
+    '<div class="col-md-4"><label class="form-label">Address assignment</label><select id="addressMode" class="form-select"><option value="static">Static IPv4</option><option value="dhcp">DHCP client</option></select></div>'+
+    '<div id="staticFields" class="col-12"></div><div id="dhcpClientFields" class="col-12"></div>'+
     '<div class="col-12"><div class="form-check"><input id="managementAllowed" type="checkbox" class="form-check-input" '+((state.config.management.allowedSegments||[]).includes(old.id)?'checked':'')+'><label class="form-check-label">Allow LiteFWM management from this segment when management is restricted</label></div></div>'+
-    '<div class="col-12"><hr><div class="form-check"><input id="dhcpEnabled" type="checkbox" class="form-check-input" '+(d.enabled?'checked':'')+'><label class="form-check-label">Enable DHCP server on this segment</label></div></div>'+
-    '<div class="col-md-4"><label class="form-label">Pool start</label><input id="poolStart" class="form-control" value="'+esc(d.poolStart||'')+'"></div>'+
-    '<div class="col-md-4"><label class="form-label">Pool end</label><input id="poolEnd" class="form-control" value="'+esc(d.poolEnd||'')+'"></div>'+
-    '<div class="col-md-4"><label class="form-label">Lease time</label><input id="leaseTime" class="form-control" value="'+esc(d.leaseTime||'12h')+'"></div>'+
-    '<div class="col-md-6"><label class="form-label">DHCP router override</label><input id="dhcpGateway" class="form-control" placeholder="Defaults to segment address" value="'+esc(d.gateway||'')+'"></div>'+
-    '<div class="col-md-6"><label class="form-label">DHCP DNS override</label><input id="dhcpDns" class="form-control" placeholder="Defaults to segment DNS" value="'+esc((d.dns||[]).join(', '))+'"></div>'+
-    '</div>';
+    '<div id="dhcpServerFields" class="col-12"></div></div>';
+  document.getElementById('segZone').value=old.zone||'internal';
+  document.getElementById('addressMode').value=old.addressMode||'static';
+
+  function renderAddressFields(){
+    const mode=document.getElementById('addressMode').value;
+    if(mode==='static'){
+      document.getElementById('staticFields').innerHTML='<div class="row g-3"><div class="col-md-4"><label class="form-label">Interface address / CIDR</label><input id="segAddress" class="form-control" placeholder="192.168.10.1/24" value="'+esc(old.address||'')+'"><div id="cidrPreview" class="form-text"></div></div><div class="col-md-4"><label class="form-label">Default gateway</label><input id="segGateway" class="form-control" placeholder="Usually only on an external segment" value="'+esc(old.gateway||'')+'"></div><div class="col-md-4"><label class="form-label">DNS servers</label><input id="segDns" class="form-control" placeholder="1.1.1.1, 9.9.9.9" value="'+esc((old.dns||[]).join(', '))+'"></div></div>';
+      document.getElementById('dhcpClientFields').innerHTML='';
+      const addr=document.getElementById('segAddress');
+      function preview(){const c=cidrInfo(addr.value.trim());document.getElementById('cidrPreview').textContent=c?'Network '+c.network+' · usable '+c.first+' – '+c.last+' · broadcast '+c.broadcast:'Enter an IPv4 address with CIDR prefix.';}
+      addr.oninput=preview;preview();
+    } else {
+      document.getElementById('staticFields').innerHTML='';
+      document.getElementById('dhcpClientFields').innerHTML='<div class="row g-3"><div class="col-md-6"><label class="form-label">DHCP hostname</label><input id="dhcpClientHost" class="form-control" value="'+esc((old.dhcpClient&&old.dhcpClient.hostname)||'')+'"></div><div class="col-md-6"><div class="alert alert-light border mb-0 small">Address, subnet, gateway, and DNS are learned from the upstream DHCP server.</div></div></div>';
+    }
+    renderDhcpServerFields();
+  }
+  function renderDhcpServerFields(){
+    const mode=document.getElementById('addressMode').value;
+    if(mode!=='static'){document.getElementById('dhcpServerFields').innerHTML='';return;}
+    document.getElementById('dhcpServerFields').innerHTML='<hr><div class="form-check mb-3"><input id="dhcpEnabled" type="checkbox" class="form-check-input" '+(d.enabled?'checked':'')+'><label class="form-check-label">Provide DHCP service on this segment</label></div><div class="row g-3"><div class="col-md-4"><label class="form-label">Pool start</label><input id="poolStart" class="form-control" value="'+esc(d.poolStart||'')+'"></div><div class="col-md-4"><label class="form-label">Pool end</label><input id="poolEnd" class="form-control" value="'+esc(d.poolEnd||'')+'"></div><div class="col-md-4"><label class="form-label">Lease time</label><input id="leaseTime" class="form-control" value="'+esc(d.leaseTime||'12h')+'"></div><div class="col-md-6"><label class="form-label">Client gateway / router</label><input id="dhcpGateway" class="form-control" placeholder="Defaults to this interface address" value="'+esc(d.gateway||'')+'"></div><div class="col-md-6"><label class="form-label">Client DNS servers</label><input id="dhcpDns" class="form-control" placeholder="Defaults to segment DNS" value="'+esc((d.dns||[]).join(', '))+'"></div><div class="col-md-6"><label class="form-label">DNS domain</label><input id="segDomain" class="form-control" placeholder="home.arpa" value="'+esc(old.domain||'')+'"></div><div class="col-md-6"><label class="form-label">NTP servers</label><input id="dhcpNtp" class="form-control" placeholder="192.168.10.1" value="'+esc((d.ntp||[]).join(', '))+'"></div></div>';
+  }
+  document.getElementById('addressMode').onchange=renderAddressFields;
+  renderAddressFields();
   document.getElementById('modalFooter').innerHTML='<button class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button><button id="saveSegment" class="btn btn-primary">Save segment</button>';
   const modal=bootstrap.Modal.getOrCreateInstance(document.getElementById('formModal'));modal.show();
   document.getElementById('saveSegment').onclick=async function(){
-    const seg={id:document.getElementById('segId').value.trim(),name:document.getElementById('segName').value.trim(),interface:document.getElementById('segInterface').value,address:document.getElementById('segAddress').value.trim(),gateway:document.getElementById('segGateway').value.trim(),dns:document.getElementById('segDns').value.split(',').map(function(x){return x.trim();}).filter(Boolean),domain:document.getElementById('segDomain').value.trim(),dhcp:{enabled:document.getElementById('dhcpEnabled').checked,poolStart:document.getElementById('poolStart').value.trim(),poolEnd:document.getElementById('poolEnd').value.trim(),leaseTime:document.getElementById('leaseTime').value.trim()||'12h',gateway:document.getElementById('dhcpGateway').value.trim(),dns:document.getElementById('dhcpDns').value.split(',').map(function(x){return x.trim();}).filter(Boolean),reservations:(old.dhcp&&old.dhcp.reservations)||[]}};
-    if(!seg.dhcp.enabled) seg.dhcp={enabled:false,reservations:(old.dhcp&&old.dhcp.reservations)||[]};
-    const prev=old.id;
+    const mode=document.getElementById('addressMode').value;
+    const seg={
+      id:index>=0?old.id:document.getElementById('segId').value.trim(),
+      name:document.getElementById('segName').value.trim()||(index>=0?old.id:document.getElementById('segId').value.trim()),
+      interface:document.getElementById('segInterface').value,
+      zone:document.getElementById('segZone').value,
+      addressMode:mode,address:'',gateway:'',dns:[],domain:'',dhcpClient:{hostname:''},
+      dhcp:{enabled:false,dns:[],ntp:[],reservations:(old.dhcp&&old.dhcp.reservations)||[]}
+    };
+    if(mode==='static'){
+      seg.address=document.getElementById('segAddress').value.trim();
+      seg.gateway=document.getElementById('segGateway').value.trim();
+      seg.dns=splitCsv(document.getElementById('segDns').value);
+      seg.domain=document.getElementById('segDomain').value.trim();
+      seg.dhcp={enabled:document.getElementById('dhcpEnabled').checked,poolStart:document.getElementById('poolStart').value.trim(),poolEnd:document.getElementById('poolEnd').value.trim(),leaseTime:document.getElementById('leaseTime').value.trim()||'12h',gateway:document.getElementById('dhcpGateway').value.trim(),dns:splitCsv(document.getElementById('dhcpDns').value),ntp:splitCsv(document.getElementById('dhcpNtp').value),reservations:(old.dhcp&&old.dhcp.reservations)||[]};
+    } else {
+      seg.dhcpClient={hostname:document.getElementById('dhcpClientHost').value.trim()};
+    }
     if(index>=0)state.config.segments[index]=seg;else state.config.segments.push(seg);
-    state.config.management.allowedSegments=(state.config.management.allowedSegments||[]).filter(function(x){return x!==prev && x!==seg.id;});
+    state.config.management.allowedSegments=(state.config.management.allowedSegments||[]).filter(function(x){return x!==old.id&&x!==seg.id;});
     if(document.getElementById('managementAllowed').checked)state.config.management.allowedSegments.push(seg.id);
     try{await saveConfig('Network segment saved.');modal.hide();renderSegments();}catch(e){if(index>=0)state.config.segments[index]=old;else state.config.segments.pop();toast('Save failed',e.message);}
   };
@@ -229,83 +322,97 @@ function editSegment(index) {
 function renderFirewall() {
   const rules=(state.config.firewall.rules||[]).slice().sort(function(a,b){return (a.position||999)-(b.position||999);});
   const d=state.config.firewall.defaults||{input:'drop',forward:'drop',output:'accept'};
-  let html='<div class="card mb-3"><div class="card-body"><div class="row g-3"><div class="col-lg-5"><h2 class="h6">Default policy</h2><div class="d-flex gap-2 flex-wrap"><span class="badge '+(d.input==='drop'?'text-bg-danger':'text-bg-success')+'">INPUT '+esc(d.input.toUpperCase())+'</span><span class="badge '+(d.forward==='drop'?'text-bg-danger':'text-bg-success')+'">FORWARD '+esc(d.forward.toUpperCase())+'</span><span class="badge '+(d.output==='drop'?'text-bg-danger':'text-bg-success')+'">OUTPUT '+esc(d.output.toUpperCase())+'</span></div></div><div class="col-lg-7"><h2 class="h6">Built-in appliance access</h2><div class="small text-secondary">Loopback, established/related traffic, and ICMP to the appliance are accepted before user rules. '+(state.config.management.allowSsh?'SSH TCP '+esc(state.config.management.sshPort||22)+' is allowed. ':'SSH is disabled by built-in policy. ')+'Management TCP '+esc(state.config.management.port)+' is allowed '+(state.config.management.allowAny?'from any interface.':'only from segments marked for management access.')+'</div></div></div></div></div>';
-  html+='<div class="d-flex justify-content-between align-items-center mb-3"><div><p class="mb-0 text-secondary">User rules are evaluated top to bottom after the built-in appliance rules.</p></div><button id="addRule" class="btn btn-primary btn-sm">Add rule</button></div>';
-  html+='<div class="card"><div class="table-responsive"><table class="table mb-0"><thead><tr><th>#</th><th>Rule</th><th>Source</th><th>Destination</th><th>Action</th><th></th></tr></thead><tbody>';
+  function policySelect(id,value){return '<select id="'+id+'" class="form-select form-select-sm"><option value="drop">Drop</option><option value="accept">Accept</option></select>';}
+  let html='<div class="card mb-3"><div class="card-body"><h2 class="h6">Default policies</h2><div class="row g-3 align-items-end"><div class="col-md-3"><label class="form-label">INPUT</label>'+policySelect('defaultInput',d.input)+'</div><div class="col-md-3"><label class="form-label">FORWARD</label>'+policySelect('defaultForward',d.forward)+'</div><div class="col-md-3"><label class="form-label">OUTPUT</label>'+policySelect('defaultOutput',d.output)+'</div><div class="col-md-3"><button id="savePolicies" class="btn btn-outline-primary btn-sm">Save policies</button></div></div><div class="small text-secondary mt-3">INPUT controls traffic to LiteFWM. FORWARD controls traffic between network segments. OUTPUT controls traffic generated by LiteFWM. Loopback, established/related traffic, ICMP, configured SSH, and the management port are handled before user rules.</div></div></div>';
+  html+='<div class="d-flex justify-content-between align-items-center mb-3"><p class="mb-0 text-secondary">Rules are expressed in network segments. Static segments also match their subnet automatically when no narrower address is specified.</p><button id="addRule" class="btn btn-primary btn-sm">Add rule</button></div>';
+  html+='<div class="card"><div class="table-responsive"><table class="table mb-0"><thead><tr><th>#</th><th>Rule</th><th>From</th><th>To</th><th>Protocol</th><th>Action</th><th></th></tr></thead><tbody>';
   rules.forEach(function(r,i){
-    html+='<tr class="'+(r.enabled===false?'rule-disabled':'')+'"><td>'+(i+1)+'</td><td><strong>'+esc(r.description||r.id)+'</strong><div class="small text-secondary">'+esc((r.chain||'forward').toUpperCase())+' · '+esc(r.protocol||'any')+'</div></td><td>'+esc(r.inSegment||'any')+'<div class="small text-secondary">'+esc(r.source||'any')+(r.sourcePort&&r.sourcePort!=='any'?':'+esc(r.sourcePort):'')+'</div></td><td>'+esc(r.outSegment||'any')+'<div class="small text-secondary">'+esc(r.destination||'any')+(r.destinationPort&&r.destinationPort!=='any'?':'+esc(r.destinationPort):'')+'</div></td><td><span class="badge '+(r.action==='accept'?'text-bg-success':r.action==='drop'?'text-bg-danger':'text-bg-secondary')+'">'+esc(r.action)+'</span></td><td class="text-end"><div class="btn-group btn-group-sm"><button class="btn btn-outline-secondary rule-up" data-i="'+i+'">↑</button><button class="btn btn-outline-secondary rule-down" data-i="'+i+'">↓</button><button class="btn btn-outline-secondary edit-rule" data-i="'+i+'">Edit</button><button class="btn btn-outline-danger del-rule" data-i="'+i+'">Delete</button></div></td></tr>';
+    const from=r.chain==='output'?'LiteFWM':(r.inSegment==='any'?'Any segment':segmentText((state.config.segments||[]).find(function(x){return x.id===r.inSegment;})||{id:r.inSegment,zone:'none'}));
+    const to=r.chain==='input'?'LiteFWM':(r.outSegment==='any'?'Any segment':segmentText((state.config.segments||[]).find(function(x){return x.id===r.outSegment;})||{id:r.outSegment,zone:'none'}));
+    html+='<tr class="'+(r.enabled===false?'rule-disabled':'')+'"><td>'+(i+1)+'</td><td><strong>'+esc(r.description||r.id)+'</strong><div class="small text-secondary">'+esc((r.chain||'forward').toUpperCase())+'</div></td><td>'+esc(from)+'</td><td>'+esc(to)+'</td><td>'+esc(r.protocol||'any')+(r.destinationPort&&r.destinationPort!=='any'?' / '+esc(r.destinationPort):'')+'</td><td><span class="badge '+(r.action==='accept'?'text-bg-success':r.action==='drop'?'text-bg-danger':'text-bg-secondary')+'">'+esc(r.action)+'</span></td><td class="text-end"><div class="btn-group btn-group-sm"><button class="btn btn-outline-secondary rule-up" data-i="'+i+'">↑</button><button class="btn btn-outline-secondary rule-down" data-i="'+i+'">↓</button><button class="btn btn-outline-secondary edit-rule" data-i="'+i+'">Edit</button><button class="btn btn-outline-danger del-rule" data-i="'+i+'">Delete</button></div></td></tr>';
   });
+  if(!rules.length)html+='<tr><td colspan="7" class="text-secondary">No user firewall rules.</td></tr>';
   html+='</tbody></table></div></div>';
   document.getElementById('view').innerHTML=html;
+  ['Input','Forward','Output'].forEach(function(k){document.getElementById('default'+k).value=d[k.toLowerCase()]||'drop';});
+  document.getElementById('savePolicies').onclick=async function(){state.config.firewall.defaults={input:document.getElementById('defaultInput').value,forward:document.getElementById('defaultForward').value,output:document.getElementById('defaultOutput').value};await saveConfig('Default firewall policies saved.');renderFirewall();};
   document.getElementById('addRule').onclick=function(){editRule(-1,rules);};
   document.querySelectorAll('.edit-rule').forEach(function(b){b.onclick=function(){editRule(Number(b.dataset.i),rules);};});
   document.querySelectorAll('.del-rule').forEach(function(b){b.onclick=async function(){rules.splice(Number(b.dataset.i),1);rules.forEach(function(r,i){r.position=(i+1)*10;});state.config.firewall.rules=rules;await saveConfig('Firewall rule removed.');renderFirewall();};});
   document.querySelectorAll('.rule-up').forEach(function(b){b.onclick=async function(){const i=Number(b.dataset.i);if(i>0){const x=rules[i-1];rules[i-1]=rules[i];rules[i]=x;rules.forEach(function(r,n){r.position=(n+1)*10;});state.config.firewall.rules=rules;await saveConfig('Rule order changed.');renderFirewall();}};});
   document.querySelectorAll('.rule-down').forEach(function(b){b.onclick=async function(){const i=Number(b.dataset.i);if(i<rules.length-1){const x=rules[i+1];rules[i+1]=rules[i];rules[i]=x;rules.forEach(function(r,n){r.position=(n+1)*10;});state.config.firewall.rules=rules;await saveConfig('Rule order changed.');renderFirewall();}};});
 }
-function editRule(index, rules) {
-  const r=index>=0?rules[index]:{id:id('rule'),enabled:true,chain:'forward',protocol:'tcp',inSegment:'any',outSegment:'any',source:'any',destination:'any',sourcePort:'any',destinationPort:'any',action:'accept',description:''};
+function editRule(index,rules) {
+  const r=index>=0?rules[index]:{id:id('rule'),enabled:true,chain:'forward',protocol:'any',inSegment:'any',outSegment:'any',source:'any',destination:'any',sourcePort:'any',destinationPort:'any',action:'accept',description:''};
   document.getElementById('modalTitle').textContent=index>=0?'Edit firewall rule':'Add firewall rule';
   document.getElementById('modalBody').innerHTML=
-    '<div class="row g-3">'+
-    '<div class="col-12"><label class="form-label">Description</label><input id="ruleDesc" class="form-control" value="'+esc(r.description||'')+'"></div>'+
-    '<div class="col-md-4"><label class="form-label">Chain</label><select id="ruleChain" class="form-select"><option value="forward">Forward</option><option value="input">Input</option><option value="output">Output</option></select></div>'+
-    '<div class="col-md-4"><label class="form-label">Protocol</label><select id="ruleProto" class="form-select"><option>any</option><option>tcp</option><option>udp</option><option>icmp</option></select></div>'+
+    '<div class="row g-3"><div class="col-12"><label class="form-label">Description</label><input id="ruleDesc" class="form-control" value="'+esc(r.description||'')+'"></div>'+
+    '<div class="col-md-4"><label class="form-label">Traffic path</label><select id="ruleChain" class="form-select"><option value="input">Segment → LiteFWM</option><option value="forward">Segment → segment</option><option value="output">LiteFWM → segment</option></select></div>'+
+    '<div class="col-md-4"><label class="form-label">Protocol</label><select id="ruleProto" class="form-select"><option value="any">Any</option><option value="tcp">TCP</option><option value="udp">UDP</option><option value="icmp">ICMP</option></select></div>'+
     '<div class="col-md-4"><label class="form-label">Action</label><select id="ruleAction" class="form-select"><option value="accept">Accept</option><option value="drop">Drop</option><option value="reject">Reject</option><option value="log">Log</option></select></div>'+
-    '<div class="col-md-6"><label class="form-label">Inbound segment</label><select id="ruleIn" class="form-select">'+segOptions(r.inSegment||'any',true)+'</select></div>'+
-    '<div class="col-md-6"><label class="form-label">Outbound segment</label><select id="ruleOut" class="form-select">'+segOptions(r.outSegment||'any',true)+'</select></div>'+
-    '<div class="col-md-6"><label class="form-label">Source CIDR</label><input id="ruleSrc" class="form-control" value="'+esc(r.source||'any')+'"></div>'+
-    '<div class="col-md-6"><label class="form-label">Destination CIDR</label><input id="ruleDst" class="form-control" value="'+esc(r.destination||'any')+'"></div>'+
-    '<div class="col-md-6"><label class="form-label">Source port</label><input id="ruleSport" class="form-control" value="'+esc(r.sourcePort||'any')+'"></div>'+
-    '<div class="col-md-6"><label class="form-label">Destination port</label><input id="ruleDport" class="form-control" value="'+esc(r.destinationPort||'any')+'"></div>'+
-    '<div class="col-12 form-check ms-2"><input id="ruleEnabled" type="checkbox" class="form-check-input" '+(r.enabled===false?'':'checked')+'><label class="form-check-label">Enabled</label></div></div>';
-  document.getElementById('ruleChain').value=r.chain||'forward';document.getElementById('ruleProto').value=r.protocol||'any';document.getElementById('ruleAction').value=r.action||'accept';
+    '<div id="ruleSegmentFields" class="col-12"></div>'+
+    '<div class="col-12"><details><summary class="mb-2">Advanced address and port matching</summary><div class="row g-3"><div class="col-md-6"><label class="form-label">Source CIDR / IP</label><input id="ruleSrc" class="form-control" value="'+esc(r.source||'any')+'"></div><div class="col-md-6"><label class="form-label">Destination CIDR / IP</label><input id="ruleDst" class="form-control" value="'+esc(r.destination||'any')+'"></div><div class="col-md-6"><label class="form-label">Source port</label><input id="ruleSport" class="form-control" value="'+esc(r.sourcePort||'any')+'"></div><div class="col-md-6"><label class="form-label">Destination port</label><input id="ruleDport" class="form-control" value="'+esc(r.destinationPort||'any')+'"></div></div></details></div>'+
+    '<div class="col-12"><div class="form-check"><input id="ruleEnabled" type="checkbox" class="form-check-input" '+(r.enabled===false?'':'checked')+'><label class="form-check-label">Enabled</label></div></div></div>';
+  document.getElementById('ruleChain').value=r.chain||'forward';
+  document.getElementById('ruleProto').value=r.protocol||'any';
+  document.getElementById('ruleAction').value=r.action||'accept';
+  function pathFields(){
+    const c=document.getElementById('ruleChain').value;
+    let h='<div class="row g-3">';
+    if(c!=='output')h+='<div class="col-md-6"><label class="form-label">Source / inbound segment</label><select id="ruleIn" class="form-select">'+segOptions(r.inSegment||'any',true,c==='forward'?'internal':null)+'</select></div>';
+    if(c!=='input')h+='<div class="col-md-6"><label class="form-label">Destination / outbound segment</label><select id="ruleOut" class="form-select">'+segOptions(r.outSegment||'any',true,c==='forward'?'external':null)+'</select></div>';
+    h+='</div>';document.getElementById('ruleSegmentFields').innerHTML=h;
+  }
+  document.getElementById('ruleChain').onchange=pathFields;pathFields();
   document.getElementById('modalFooter').innerHTML='<button class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button><button id="saveRule" class="btn btn-primary">Save rule</button>';
   const modal=bootstrap.Modal.getOrCreateInstance(document.getElementById('formModal'));modal.show();
   document.getElementById('saveRule').onclick=async function(){
-    const nr={id:r.id||id('rule'),description:document.getElementById('ruleDesc').value.trim(),enabled:document.getElementById('ruleEnabled').checked,chain:document.getElementById('ruleChain').value,protocol:document.getElementById('ruleProto').value,inSegment:document.getElementById('ruleIn').value,outSegment:document.getElementById('ruleOut').value,source:document.getElementById('ruleSrc').value.trim()||'any',destination:document.getElementById('ruleDst').value.trim()||'any',sourcePort:document.getElementById('ruleSport').value.trim()||'any',destinationPort:document.getElementById('ruleDport').value.trim()||'any',action:document.getElementById('ruleAction').value,position:index>=0?(r.position||((index+1)*10)):((rules.length+1)*10)};
+    const chain=document.getElementById('ruleChain').value;
+    const nr={id:r.id||id('rule'),description:document.getElementById('ruleDesc').value.trim(),enabled:document.getElementById('ruleEnabled').checked,chain:chain,protocol:document.getElementById('ruleProto').value,inSegment:chain==='output'?'any':document.getElementById('ruleIn').value,outSegment:chain==='input'?'any':document.getElementById('ruleOut').value,source:document.getElementById('ruleSrc').value.trim()||'any',destination:document.getElementById('ruleDst').value.trim()||'any',sourcePort:document.getElementById('ruleSport').value.trim()||'any',destinationPort:document.getElementById('ruleDport').value.trim()||'any',action:document.getElementById('ruleAction').value,position:index>=0?(r.position||((index+1)*10)):((rules.length+1)*10)};
     if(index>=0)rules[index]=nr;else rules.push(nr);state.config.firewall.rules=rules;
     try{await saveConfig('Firewall rule saved.');modal.hide();renderFirewall();}catch(e){toast('Save failed',e.message);}
   };
 }
 function renderNat() {
   const n=state.config.firewall.nat;
-  function section(title,kind,rows,cols) {
-    let h='<div class="card mb-3"><div class="card-header d-flex align-items-center"><strong>'+esc(title)+'</strong><button class="btn btn-sm btn-outline-primary ms-auto add-nat" data-kind="'+kind+'">Add</button></div><div class="table-responsive"><table class="table table-sm mb-0"><thead><tr>';
-    cols.forEach(function(c){h+='<th>'+esc(c)+'</th>';});h+='<th></th></tr></thead><tbody>';
-    rows.forEach(function(x,i){
-      h+='<tr>';
-      if(kind==='masquerade')h+='<td>'+esc(x.source||'any')+'</td><td>'+esc(x.outSegment)+'</td>';
-      if(kind==='snat')h+='<td>'+esc(x.source||'any')+'</td><td>'+esc(x.outSegment)+'</td><td>'+esc(x.toSource)+'</td>';
-      if(kind==='dnat')h+='<td>'+esc(x.inSegment)+'</td><td>'+esc(x.protocol||'tcp')+'/'+esc(x.destinationPort)+'</td><td>'+esc(x.toDestination)+'</td>';
-      h+='<td class="text-end"><button class="btn btn-sm btn-outline-danger del-nat" data-kind="'+kind+'" data-i="'+i+'">Delete</button></td></tr>';
-    });
-    h+='</tbody></table></div></div>';return h;
-  }
-  let html='<p class="text-secondary">Masquerade handles typical outbound Internet NAT. SNAT fixes the translated source address. DNAT implements port forwarding.</p>';
-  html+=section('Masquerade','masquerade',n.masquerade||[],['Source','Outbound segment']);
-  html+=section('Source NAT','snat',n.snat||[],['Source','Outbound segment','Translated source']);
-  html+=section('Destination NAT / port forwards','dnat',n.dnat||[],['Inbound segment','Port','Destination']);
+  const outbound=[];
+  (n.masquerade||[]).forEach(function(x,i){outbound.push({kind:'masquerade',index:i,sourceSegment:x.sourceSegment||'',source:x.source||'any',outSegment:x.outSegment,translation:'Outbound address'});});
+  (n.snat||[]).forEach(function(x,i){outbound.push({kind:'snat',index:i,sourceSegment:x.sourceSegment||'',source:x.source||'any',outSegment:x.outSegment,translation:x.toSource});});
+  let html='<p class="text-secondary">Outbound NAT translates traffic from a source network segment as it leaves through an outbound segment. Port forwards translate traffic arriving on an external segment.</p>';
+  html+='<div class="card mb-3"><div class="card-header d-flex align-items-center"><strong>Outbound NAT</strong><button id="addOutboundNat" class="btn btn-sm btn-outline-primary ms-auto">Add outbound NAT</button></div><div class="table-responsive"><table class="table table-sm mb-0"><thead><tr><th>Source segment</th><th>Outbound segment</th><th>Translation</th><th></th></tr></thead><tbody>';
+  outbound.forEach(function(x){const src=x.sourceSegment?(state.config.segments||[]).find(function(s){return s.id===x.sourceSegment;}):null;const out=(state.config.segments||[]).find(function(s){return s.id===x.outSegment;});html+='<tr><td>'+esc(src?segmentText(src):x.source)+'</td><td>'+esc(out?segmentText(out):x.outSegment)+'</td><td>'+esc(x.translation)+'</td><td class="text-end"><button class="btn btn-sm btn-outline-danger del-outnat" data-kind="'+x.kind+'" data-i="'+x.index+'">Delete</button></td></tr>';});
+  if(!outbound.length)html+='<tr><td colspan="4" class="text-secondary">No outbound NAT rules.</td></tr>';
+  html+='</tbody></table></div></div>';
+  html+='<div class="card"><div class="card-header d-flex align-items-center"><strong>Port forwards / destination NAT</strong><button id="addDnat" class="btn btn-sm btn-outline-primary ms-auto">Add port forward</button></div><div class="table-responsive"><table class="table table-sm mb-0"><thead><tr><th>Inbound segment</th><th>External port</th><th>Internal destination</th><th></th></tr></thead><tbody>';
+  (n.dnat||[]).forEach(function(x,i){const seg=(state.config.segments||[]).find(function(s){return s.id===x.inSegment;});html+='<tr><td>'+esc(seg?segmentText(seg):x.inSegment)+'</td><td>'+esc((x.protocol||'tcp').toUpperCase())+' '+esc(x.destinationPort)+'</td><td>'+esc(x.toDestination)+'</td><td class="text-end"><button class="btn btn-sm btn-outline-danger del-dnat" data-i="'+i+'">Delete</button></td></tr>';});
+  if(!(n.dnat||[]).length)html+='<tr><td colspan="4" class="text-secondary">No port forwards.</td></tr>';
+  html+='</tbody></table></div></div>';
   document.getElementById('view').innerHTML=html;
-  document.querySelectorAll('.add-nat').forEach(function(b){b.onclick=function(){editNat(b.dataset.kind);};});
-  document.querySelectorAll('.del-nat').forEach(function(b){b.onclick=async function(){state.config.firewall.nat[b.dataset.kind].splice(Number(b.dataset.i),1);await saveConfig('NAT rule removed.');renderNat();};});
+  document.getElementById('addOutboundNat').onclick=editOutboundNat;
+  document.getElementById('addDnat').onclick=editDnat;
+  document.querySelectorAll('.del-outnat').forEach(function(b){b.onclick=async function(){state.config.firewall.nat[b.dataset.kind].splice(Number(b.dataset.i),1);await saveConfig('Outbound NAT rule removed.');renderNat();};});
+  document.querySelectorAll('.del-dnat').forEach(function(b){b.onclick=async function(){state.config.firewall.nat.dnat.splice(Number(b.dataset.i),1);await saveConfig('Port forward removed.');renderNat();};});
 }
-function editNat(kind) {
-  document.getElementById('modalTitle').textContent='Add '+kind.toUpperCase()+' rule';
-  let body='<div class="row g-3">';
-  if(kind==='masquerade')body+='<div class="col-md-6"><label class="form-label">Source CIDR</label><input id="natSource" class="form-control" value="any"></div><div class="col-md-6"><label class="form-label">Outbound segment</label><select id="natOut" class="form-select">'+segOptions('',false)+'</select></div>';
-  if(kind==='snat')body+='<div class="col-md-4"><label class="form-label">Source CIDR</label><input id="natSource" class="form-control" value="any"></div><div class="col-md-4"><label class="form-label">Outbound segment</label><select id="natOut" class="form-select">'+segOptions('',false)+'</select></div><div class="col-md-4"><label class="form-label">To source IP</label><input id="natToSource" class="form-control"></div>';
-  if(kind==='dnat')body+='<div class="col-md-3"><label class="form-label">Inbound segment</label><select id="natIn" class="form-select">'+segOptions('',false)+'</select></div><div class="col-md-2"><label class="form-label">Protocol</label><select id="natProto" class="form-select"><option>tcp</option><option>udp</option></select></div><div class="col-md-3"><label class="form-label">External port</label><input id="natPort" class="form-control"></div><div class="col-md-4"><label class="form-label">Internal IP[:port]</label><input id="natToDest" class="form-control"></div>';
-  body+='</div>';document.getElementById('modalBody').innerHTML=body;
-  document.getElementById('modalFooter').innerHTML='<button class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button><button id="saveNat" class="btn btn-primary">Add rule</button>';
+function editOutboundNat() {
+  document.getElementById('modalTitle').textContent='Add outbound NAT';
+  document.getElementById('modalBody').innerHTML='<div class="row g-3"><div class="col-md-6"><label class="form-label">Source segment</label><select id="natSourceSegment" class="form-select">'+segOptions('',false,'internal')+'</select></div><div class="col-md-6"><label class="form-label">Outbound segment</label><select id="natOutSegment" class="form-select">'+segOptions('',false,'external')+'</select></div><div class="col-md-6"><label class="form-label">Translation</label><select id="natMode" class="form-select"><option value="masquerade">Use outbound address</option><option value="snat">Use fixed source IP</option></select></div><div id="natFixedWrap" class="col-md-6"></div></div>';
+  function fields(){document.getElementById('natFixedWrap').innerHTML=document.getElementById('natMode').value==='snat'?'<label class="form-label">Translated source IP</label><input id="natFixedIp" class="form-control" placeholder="203.0.113.2">':'';}
+  document.getElementById('natMode').onchange=fields;fields();
+  document.getElementById('modalFooter').innerHTML='<button class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button><button id="saveOutboundNat" class="btn btn-primary">Add rule</button>';
   const modal=bootstrap.Modal.getOrCreateInstance(document.getElementById('formModal'));modal.show();
-  document.getElementById('saveNat').onclick=async function(){
-    let x={id:id(kind),enabled:true};
-    if(kind==='masquerade'){x.source=document.getElementById('natSource').value.trim()||'any';x.outSegment=document.getElementById('natOut').value;}
-    if(kind==='snat'){x.source=document.getElementById('natSource').value.trim()||'any';x.outSegment=document.getElementById('natOut').value;x.toSource=document.getElementById('natToSource').value.trim();}
-    if(kind==='dnat'){x.inSegment=document.getElementById('natIn').value;x.protocol=document.getElementById('natProto').value;x.destinationPort=document.getElementById('natPort').value.trim();x.toDestination=document.getElementById('natToDest').value.trim();}
-    state.config.firewall.nat[kind].push(x);try{await saveConfig('NAT rule saved.');modal.hide();renderNat();}catch(e){toast('Save failed',e.message);}
+  document.getElementById('saveOutboundNat').onclick=async function(){
+    const mode=document.getElementById('natMode').value, src=document.getElementById('natSourceSegment').value, out=document.getElementById('natOutSegment').value;
+    if(mode==='masquerade')state.config.firewall.nat.masquerade.push({id:id('masq'),enabled:true,sourceSegment:src,source:'any',outSegment:out});
+    else state.config.firewall.nat.snat.push({id:id('snat'),enabled:true,sourceSegment:src,source:'any',outSegment:out,toSource:document.getElementById('natFixedIp').value.trim()});
+    try{await saveConfig('Outbound NAT rule saved.');modal.hide();renderNat();}catch(e){toast('Save failed',e.message);}
   };
+}
+function editDnat() {
+  document.getElementById('modalTitle').textContent='Add port forward';
+  document.getElementById('modalBody').innerHTML='<div class="row g-3"><div class="col-md-4"><label class="form-label">Inbound / external segment</label><select id="natIn" class="form-select">'+segOptions('',false,'external')+'</select></div><div class="col-md-2"><label class="form-label">Protocol</label><select id="natProto" class="form-select"><option value="tcp">TCP</option><option value="udp">UDP</option></select></div><div class="col-md-2"><label class="form-label">External port</label><input id="natPort" class="form-control"></div><div class="col-md-4"><label class="form-label">Internal IP[:port]</label><input id="natToDest" class="form-control"></div></div><div class="alert alert-light border small mt-3 mb-0">Destination NAT does not automatically allow forwarded traffic. Add a firewall FORWARD rule for the destination segment/address as needed.</div>';
+  document.getElementById('modalFooter').innerHTML='<button class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button><button id="saveDnat" class="btn btn-primary">Add port forward</button>';
+  const modal=bootstrap.Modal.getOrCreateInstance(document.getElementById('formModal'));modal.show();
+  document.getElementById('saveDnat').onclick=async function(){state.config.firewall.nat.dnat.push({id:id('dnat'),enabled:true,inSegment:document.getElementById('natIn').value,protocol:document.getElementById('natProto').value,destinationPort:document.getElementById('natPort').value.trim(),toDestination:document.getElementById('natToDest').value.trim()});try{await saveConfig('Port forward saved.');modal.hide();renderNat();}catch(e){toast('Save failed',e.message);}};
 }
 function renderDhcp() {
   const bind=(state.modules||[]).find(function(m){return m.name==='bind';});

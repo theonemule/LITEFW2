@@ -33,13 +33,12 @@ fwmctl apply is the core coordinator.
 
 ## Schema v2
 
-Schema v2 separates interfaces from network segments.
+Schema v3 separates interfaces from network segments and makes segments the IP/policy boundary.
 
 An interface is a link-layer endpoint: physical device, Linux bridge, or VLAN
 subinterface.
 
-A segment is L3 policy bound to one interface: address/prefix, gateway,
-DNS/domain, and DHCP policy/reservations.
+A segment is L3 policy bound to one interface: internal/external classification, static or DHCP-client addressing, gateway, DNS/domain, and DHCP-server policy/reservations. Multiple static segments may share an interface.
 
 Firewall and NAT rules reference segment IDs. They resolve to interface devices
 through the same mapping used by DHCP, captures, and management pinning.

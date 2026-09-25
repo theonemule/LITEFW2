@@ -19,115 +19,149 @@ migrate_file() {
   src=$1
   dst=$2
   version=$(jq -r '.version // 1' "$src")
-  if [ "$version" -ge 2 ]; then
-    cp "$src" "$dst"
-    return
+  work=$src
+  cleanup=''
+
+  if [ "$version" -lt 2 ]; then
+    tmpv2=$(mktemp)
+    cleanup=$tmpv2
+    jq '
+      . as $old |
+      def olddev:
+        if .type=="interface" then .interface
+        elif .type=="bridge" then .bridge
+        elif .type=="vlan" then (.device // (.parent+"."+(.vlanId|tostring)))
+        else (.interface // .id) end;
+      def interface_id_for($dev):
+        ([ $old.segments[]? | select(olddev == $dev) | .id ][0] // $dev);
+      def known_device($dev):
+        ([ $old.segments[]? | olddev ] | index($dev)) != null;
+      (
+        [
+          $old.segments[]? | . as $seg |
+          {
+            id:$seg.id,name:($seg.name // $seg.id),
+            role:(if (($seg.gateway // "") != "") then "wan" else "lan" end),
+            mtu:($seg.mtu // 1500),enabled:true
+          } +
+          (if $seg.type=="interface" then
+            {type:"physical",device:$seg.interface}
+           elif $seg.type=="bridge" then
+            {type:"bridge",device:$seg.bridge,vlanAware:true,members:[ $seg.members[]? | interface_id_for(.) ]}
+           elif $seg.type=="vlan" then
+            {type:"vlan",device:($seg.device // ($seg.parent+"."+($seg.vlanId|tostring))),parent:interface_id_for($seg.parent),vlanId:$seg.vlanId}
+           else
+            {type:"physical",device:($seg.interface // $seg.id)}
+           end)
+        ]
+        +
+        [
+          $old.segments[]? | select(.type=="bridge") | .members[]? as $dev |
+          select(known_device($dev) | not) |
+          {id:$dev,name:$dev,type:"physical",device:$dev,role:"none",mtu:1500,enabled:true}
+        ]
+        +
+        [
+          $old.segments[]? | select(.type=="vlan") | .parent as $dev |
+          select(known_device($dev) | not) |
+          {id:$dev,name:$dev,type:"physical",device:$dev,role:"none",mtu:1500,enabled:true}
+        ]
+      ) | unique_by(.id) as $interfaces |
+      {
+        version:2,
+        hostname:($old.hostname // "litefwm"),
+        management:{
+          port:(if (($old.management.port // 8080)==8080) then 5187 else ($old.management.port // 5187) end),
+          sshPort:22,allowSsh:true,
+          allowedSegments:($old.management.allowedSegments // []),
+          allowAny:(if $old.management.allowAny == null then true else $old.management.allowAny end)
+        },
+        interfaces:$interfaces,
+        segments:[
+          $old.segments[]? |
+          {
+            id:.id,name:(.name // .id),interface:.id,address:.address,
+            gateway:(.gateway // ""),dns:(.dns // .dhcp.dns // []),
+            domain:(.domain // ""),
+            dhcp:((.dhcp // {enabled:false,reservations:[]}) | .reservations=(.reservations // []))
+          }
+        ],
+        firewall:($old.firewall // {
+          defaults:{input:"drop",forward:"drop",output:"accept"},
+          rules:[],nat:{masquerade:[],snat:[],dnat:[]}
+        }),
+        modules:($old.modules // {
+          openvpn:false,tailscale:false,bind:false,squid:false,snort:false,haproxy:false,ddns:false
+        })
+      }
+    ' "$src" > "$tmpv2"
+    work=$tmpv2
+    version=2
   fi
-  jq '
-    . as $old |
-    def olddev:
-      if .type=="interface" then .interface
-      elif .type=="bridge" then .bridge
-      elif .type=="vlan" then (.device // (.parent+"."+(.vlanId|tostring)))
-      else (.interface // .id) end;
-    def interface_id_for($dev):
-      ([ $old.segments[]? | select(olddev == $dev) | .id ][0] // $dev);
-    def known_device($dev):
-      ([ $old.segments[]? | olddev ] | index($dev)) != null;
 
-    (
-      [
-        $old.segments[]? |
+  if [ "$version" -lt 3 ]; then
+    jq '
+      . as $root |
+      .version=3 |
+      .interfaces |= map(.role=(.role // "none")) |
+      .segments |= map(
         . as $seg |
-        {
-          id:$seg.id,
-          name:($seg.name // $seg.id),
-          role:(if (($seg.gateway // "") != "") then "wan" else "lan" end),
-          mtu:($seg.mtu // 1500),
-          enabled:true
-        } +
-        (if $seg.type=="interface" then
-          {type:"physical",device:$seg.interface}
-         elif $seg.type=="bridge" then
-          {
-            type:"bridge",
-            device:$seg.bridge,
-            vlanAware:true,
-            members:[ $seg.members[]? | interface_id_for(.) ]
-          }
-         elif $seg.type=="vlan" then
-          {
-            type:"vlan",
-            device:($seg.device // ($seg.parent+"."+($seg.vlanId|tostring))),
-            parent:interface_id_for($seg.parent),
-            vlanId:$seg.vlanId
-          }
-         else
-          {type:"physical",device:($seg.interface // $seg.id)}
-         end)
-      ]
-      +
-      [
-        $old.segments[]? |
-        select(.type=="bridge") |
-        .members[]? as $dev |
-        select(known_device($dev) | not) |
-        {
-          id:$dev,name:$dev,type:"physical",device:$dev,
-          role:"none",mtu:1500,enabled:true
-        }
-      ]
-      +
-      [
-        $old.segments[]? |
-        select(.type=="vlan") |
-        .parent as $dev |
-        select(known_device($dev) | not) |
-        {
-          id:$dev,name:$dev,type:"physical",device:$dev,
-          role:"none",mtu:1500,enabled:true
-        }
-      ]
-    ) | unique_by(.id) as $interfaces |
-
-    {
-      version:2,
-      hostname:($old.hostname // "litefwm"),
-      management:{
-        port:(if (($old.management.port // 8080)==8080) then 5187 else ($old.management.port // 5187) end),
-        sshPort:22,
-        allowSsh:true,
-        allowedSegments:($old.management.allowedSegments // []),
-        allowAny:(if $old.management.allowAny == null then true else $old.management.allowAny end)
-      },
-      interfaces:$interfaces,
-      segments:[
-        $old.segments[]? |
-        {
-          id:.id,
-          name:(.name // .id),
-          interface:.id,
-          address:.address,
-          gateway:(.gateway // ""),
-          dns:(.dns // .dhcp.dns // []),
-          domain:(.domain // ""),
-          dhcp:(
-            (.dhcp // {enabled:false,reservations:[]}) |
-            .reservations=(.reservations // [])
-          )
-        }
-      ],
-      firewall:($old.firewall // {
-        defaults:{input:"drop",forward:"drop",output:"accept"},
-        rules:[],
-        nat:{masquerade:[],snat:[],dnat:[]}
-      }),
-      modules:($old.modules // {
-        openvpn:false,tailscale:false,bind:false,squid:false,snort:false,haproxy:false,ddns:false
-      })
-    }
-  ' "$src" > "$dst"
+        ([ $root.interfaces[]? | select(.id==$seg.interface) | .role ][0] // "none") as $role |
+        .zone = (.zone // (if (($seg.gateway // "") != "" or $role=="wan") then "external" else "internal" end)) |
+        .addressMode = (.addressMode // (if (($seg.address // "") == "") then "dhcp" else "static" end)) |
+        .address = (.address // "") |
+        .gateway = (.gateway // "") |
+        .dns = (.dns // []) |
+        .domain = (.domain // "") |
+        .dhcpClient = (.dhcpClient // {hostname:""}) |
+        .dhcp = ((.dhcp // {enabled:false}) |
+          .enabled=(.enabled // false) |
+          .reservations=(.reservations // []) |
+          .dns=(.dns // []) |
+          .ntp=(.ntp // []))
+      ) |
+      .firewall.nat.masquerade = ((.firewall.nat.masquerade // []) | map(.sourceSegment=(.sourceSegment // ""))) |
+      .firewall.nat.snat = ((.firewall.nat.snat // []) | map(.sourceSegment=(.sourceSegment // "")))
+    ' "$work" > "$dst"
+  else
+    cp "$work" "$dst"
+  fi
+  [ -z "$cleanup" ] || rm -f "$cleanup"
 }
+
+ip_to_int() {
+  awk -F. '{ print (((($1*256)+$2)*256+$3)*256+$4) }' <<EOF
+$1
+EOF
+}
+
+validate_ranges() {
+  f=$1
+  jq -r '.segments[] | select(.addressMode=="static" and .dhcp.enabled==true) |
+    [.id,.address,.dhcp.poolStart,.dhcp.poolEnd,(.dhcp.gateway // "")] | @tsv' "$f" |
+  while IFS="$(printf '\t')" read -r id cidr start end gw; do
+    ip=${cidr%/*}; prefix=${cidr#*/}
+    [ "$prefix" -le 30 ] || die "DHCP segment $id requires a subnet no smaller than /30."
+    ipn=$(ip_to_int "$ip"); sn=$(ip_to_int "$start"); en=$(ip_to_int "$end")
+    bits=$((32 - prefix))
+    block=1
+    i=0
+    while [ "$i" -lt "$bits" ]; do
+      block=$((block * 2))
+      i=$((i + 1))
+    done
+    network=$(( (ipn / block) * block ))
+    broadcast=$(( network + block - 1 ))
+    [ "$sn" -gt "$network" ] && [ "$sn" -lt "$broadcast" ] || die "DHCP pool start for $id is outside the usable subnet."
+    [ "$en" -gt "$network" ] && [ "$en" -lt "$broadcast" ] || die "DHCP pool end for $id is outside the usable subnet."
+    [ "$sn" -le "$en" ] || die "DHCP pool start for $id must be before pool end."
+    if [ -n "$gw" ]; then
+      gwn=$(ip_to_int "$gw")
+      [ "$gwn" -gt "$network" ] && [ "$gwn" -lt "$broadcast" ] || die "DHCP gateway for $id is outside the usable subnet."
+    fi
+  done
+}
+
 validate_file() {
   f=$1
   need jq
@@ -142,8 +176,9 @@ validate_file() {
     def mac: type=="string" and test("^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$");
     def target: type=="string" and test("^([0-9]{1,3}[.]){3}[0-9]{1,3}(:[0-9]{1,5})?$");
     def domain: type=="string" and (.=="" or test("^[A-Za-z0-9][A-Za-z0-9.-]{0,252}$"));
+    def host: type=="string" and (.=="" or test("^[A-Za-z0-9][A-Za-z0-9.-]{0,252}$"));
 
-    .version == 2 and
+    .version == 3 and
     (.hostname|type=="string" and length>0 and length<64) and
     (.management.port|type=="number" and .>=1 and .<=65535) and
     (.management.sshPort|type=="number" and .>=1 and .<=65535) and
@@ -169,12 +204,13 @@ validate_file() {
         ($iface.id|slug) and ($iface.name|type=="string" and length>0 and length<96) and
         ($iface.device|dev) and
         ($iface.type=="physical" or $iface.type=="bridge" or $iface.type=="vlan") and
-        ($iface.role=="wan" or $iface.role=="lan" or $iface.role=="none") and
-        (($iface.enabled // true)|type=="boolean") and
+        (($iface.role // "none")=="wan" or ($iface.role // "none")=="lan" or ($iface.role // "none")=="none") and
+        ((if $iface.enabled == null then true else $iface.enabled end)|type=="boolean") and
         (($iface.mtu // 1500)|type=="number" and .>=576 and .<=9216) and
         (if $iface.type=="physical" then true
          elif $iface.type=="bridge" then
-           (($iface.vlanAware // true)|type=="boolean") and ($iface.members|type=="array") and
+           ((if $iface.vlanAware == null then true else $iface.vlanAware end)|type=="boolean") and
+           ($iface.members|type=="array") and
            ([$iface.members[]? as $m | ($m != $iface.id) and ($ifids|index($m) != null)] | all)
          elif $iface.type=="vlan" then
            ($iface.parent|slug) and ($ifids|index($iface.parent) != null) and
@@ -184,21 +220,34 @@ validate_file() {
       ([.segments[] | . as $seg |
         ($seg.id|slug) and ($seg.name|type=="string" and length>0 and length<96) and
         ($seg.interface|slug) and ($ifids|index($seg.interface) != null) and
-        (.address|cidr) and ((.gateway // "")=="" or (.gateway|ipv4)) and
-        ([.dns[]? | ipv4] | all) and ((.domain // "")|domain) and
-        (.dhcp|type=="object") and ((.dhcp.enabled // false)|type=="boolean") and
-        (if (.dhcp.enabled // false) then
-          (.dhcp.poolStart|ipv4) and (.dhcp.poolEnd|ipv4) and
-          (((.dhcp.gateway // "")=="") or (.dhcp.gateway|ipv4)) and
-          ([.dhcp.dns[]? | ipv4] | all) and
-          ([.dhcp.reservations[]? |
-            (.mac|mac) and (.ip|ipv4) and
-            (((.hostname // "")=="") or ((.hostname|type=="string") and (.hostname|test("^[A-Za-z0-9][A-Za-z0-9.-]{0,252}$"))))
+        ($seg.zone=="internal" or $seg.zone=="external" or $seg.zone=="none") and
+        ($seg.addressMode=="static" or $seg.addressMode=="dhcp") and
+        (if $seg.addressMode=="static" then
+          ($seg.address|cidr) and
+          ((($seg.gateway // "")=="") or ($seg.gateway|ipv4)) and
+          ([$seg.dns[]? | ipv4] | all)
+         else
+          (($seg.address // "")=="") and (($seg.gateway // "")=="") and
+          ([$seg.dns[]? | ipv4] | all) and
+          (($seg.dhcpClient // {})|type=="object") and
+          ((($seg.dhcpClient.hostname // "")|host))
+         end) and
+        (($seg.domain // "")|domain) and
+        ($seg.dhcp|type=="object") and
+        ((if $seg.dhcp.enabled == null then false else $seg.dhcp.enabled end)|type=="boolean") and
+        (if ($seg.dhcp.enabled // false) then
+          ($seg.addressMode=="static") and
+          ($seg.dhcp.poolStart|ipv4) and ($seg.dhcp.poolEnd|ipv4) and
+          (((($seg.dhcp.gateway // "")=="") or ($seg.dhcp.gateway|ipv4))) and
+          ([$seg.dhcp.dns[]? | ipv4] | all) and
+          ([$seg.dhcp.ntp[]? | ipv4] | all) and
+          ([$seg.dhcp.reservations[]? |
+            (.mac|mac) and (.ip|ipv4) and (((.hostname // "")|host))
           ] | all)
          else true end)
       ] | all) and
-      ([.segments[].interface] | length == (unique|length)) and
-      ([.segments[] | select((.gateway // "") != "")] | length <= 1) and
+      ([.segments | group_by(.interface)[] | ([.[] | select(.addressMode=="dhcp")]|length <= 1)] | all) and
+      ([.segments[] | select(.addressMode=="static" and (.gateway // "") != "")] | length <= 1) and
       ([.firewall.rules[]? as $r |
         ($r.chain=="input" or $r.chain=="output" or $r.chain=="forward") and
         ($r.protocol=="any" or $r.protocol=="tcp" or $r.protocol=="udp" or $r.protocol=="icmp") and
@@ -209,16 +258,26 @@ validate_file() {
         ((($r.inSegment // "any")=="any") or ($segids|index($r.inSegment) != null)) and
         ((($r.outSegment // "any")=="any") or ($segids|index($r.outSegment) != null))
       ] | all) and
-      ([.firewall.nat.masquerade[]? as $n | (($n.source // "any")|addr) and ($segids|index($n.outSegment) != null)] | all) and
-      ([.firewall.nat.snat[]? as $n | (($n.source // "any")|addr) and ($n.toSource|ipv4) and ($segids|index($n.outSegment) != null)] | all) and
+      ([.firewall.nat.masquerade[]? as $n |
+        (($n.source // "any")|addr) and
+        ((($n.sourceSegment // "")=="") or ($segids|index($n.sourceSegment) != null)) and
+        ($segids|index($n.outSegment) != null)
+      ] | all) and
+      ([.firewall.nat.snat[]? as $n |
+        (($n.source // "any")|addr) and ($n.toSource|ipv4) and
+        ((($n.sourceSegment // "")=="") or ($segids|index($n.sourceSegment) != null)) and
+        ($segids|index($n.outSegment) != null)
+      ] | all) and
       ([.firewall.nat.dnat[]? as $n |
         ($n.protocol=="tcp" or $n.protocol=="udp") and ($n.destinationPort|port) and
-        ($n.destinationPort!="any") and ($n.toDestination|target) and ($segids|index($n.inSegment) != null)
+        ($n.destinationPort!="any") and ($n.toDestination|target) and
+        ($segids|index($n.inSegment) != null)
       ] | all)
     )
   ' "$f" >/dev/null || die "Configuration schema or value validation failed"
-}
 
+  validate_ranges "$f"
+}
 case "${1:-}" in
   show) config_exists; jq . "$LITEFWM_CONFIG";;
   migrate)
@@ -230,9 +289,9 @@ case "${1:-}" in
     if [ "$src" = "$LITEFWM_CONFIG" ]; then
       require_root
       ensure_dirs
-      cp "$LITEFWM_CONFIG" "$LITEFWM_STATE/config.pre-v2.json" 2>/dev/null || true
+      cp "$LITEFWM_CONFIG" "$LITEFWM_STATE/config.pre-v3.json" 2>/dev/null || true
       install -m 0640 "$tmp" "$LITEFWM_CONFIG"
-      echo "Configuration migrated to schema version 2."
+      echo "Configuration migrated to schema version 3."
     else
       cat "$tmp"
     fi
