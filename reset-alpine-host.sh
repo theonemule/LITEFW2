@@ -105,6 +105,19 @@ is_physical_link() {
     [ "$name" != lo ] && [ -e "/sys/class/net/$name/device" ]
 }
 
+select_current_ipv4() {
+    default_dev=''
+    if command -v ip >/dev/null 2>&1; then
+        default_dev=$(ip route show default 2>/dev/null | awk 'NR==1 {print $5}')
+        if [ -n "$default_dev" ]; then
+            ip -4 addr show dev "$default_dev" scope global 2>/dev/null |
+                awk '/inet / { split($2,a,"/"); print a[1]; exit }'
+            return 0
+        fi
+    fi
+    return 1
+}
+
 select_primary_nic() {
     default_dev=''
     if command -v ip >/dev/null 2>&1; then
@@ -186,19 +199,30 @@ delete_nonphysical_links() {
 
 restore_alpine_dhcp() {
     nic=$1
+    requested_ip=${2:-}
     [ -n "$nic" ] || die "Could not identify a physical NIC to restore to DHCP"
 
-    log "Restoring Alpine networking on $nic using DHCP"
+    if [ -n "$requested_ip" ]; then
+        log "Restoring Alpine networking on $nic using DHCP (requesting $requested_ip)"
+    else
+        log "Restoring Alpine networking on $nic using DHCP"
+    fi
 
     mkdir -p /etc/network/interfaces.d
     rm -f /etc/network/interfaces.d/* 2>/dev/null || true
-    cat > /etc/network/interfaces <<EOF
-auto lo
-iface lo inet loopback
+    {
+        printf 'auto lo
+'
+        printf 'iface lo inet loopback
 
-auto $nic
-iface $nic inet dhcp
-EOF
+'
+        printf 'auto %s
+' "$nic"
+        printf 'iface %s inet dhcp
+' "$nic"
+        [ -z "$requested_ip" ] || printf '    udhcpc_opts -r %s
+' "$requested_ip"
+    } > /etc/network/interfaces
 
     # Remove known appliance networking hooks/config fragments while leaving
     # Alpine's stock ifup/down machinery intact.
@@ -215,8 +239,13 @@ EOF
 
     killall udhcpc >/dev/null 2>&1 || true
     if command -v udhcpc >/dev/null 2>&1; then
-        udhcpc -i "$nic" -q -n -t 12 -T 2 >/dev/null 2>&1 ||
-            warn "Immediate DHCP renewal failed; Alpine networking service will retry."
+        if [ -n "$requested_ip" ]; then
+            udhcpc -i "$nic" -q -n -t 12 -T 2 -r "$requested_ip" >/dev/null 2>&1 ||
+                warn "Immediate DHCP renewal for $requested_ip failed; Alpine networking service will retry."
+        else
+            udhcpc -i "$nic" -q -n -t 12 -T 2 >/dev/null 2>&1 ||
+                warn "Immediate DHCP renewal failed; Alpine networking service will retry."
+        fi
     fi
 
     if command -v rc-update >/dev/null 2>&1; then
@@ -377,8 +406,10 @@ ttyd xorriso nfs-utils docker docker-openrc docker-cli-compose certbot
     fi
 }
 
+PRIMARY_IP=$(select_current_ipv4 || true)
 PRIMARY_NIC=$(select_primary_nic) || die "No physical Ethernet interface was detected"
 log "Primary physical NIC selected for DHCP restore: $PRIMARY_NIC"
+[ -z "$PRIMARY_IP" ] || log "Current management IPv4 will be requested from DHCP after reset: $PRIMARY_IP"
 
 log "Stopping LiteVMM/LiteFWM workloads and services"
 
@@ -429,7 +460,7 @@ remove_litefwm_state
 log "Resetting firewall and network devices"
 flush_firewall_state
 delete_nonphysical_links
-restore_alpine_dhcp "$PRIMARY_NIC"
+restore_alpine_dhcp "$PRIMARY_NIC" "$PRIMARY_IP"
 
 log "Removing LiteVMM OpenRC services, binaries and configuration"
 
