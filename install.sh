@@ -29,6 +29,18 @@ echo "==> packages"
 apk add --no-cache ifupdown-ng iproute2 iptables dnsmasq jq lighttpd lighttpd-mod_auth \
   apache2-utils sudo busybox-openrc >/dev/null
 
+echo "==> removing LiteFWM 1.x (if present)"
+# 1.x kept its own config store and regenerated the system from it at boot;
+# 2.x has no store, so the 1.x service, tools and generated files must go.
+if [ -e /etc/init.d/litefwm ] || [ -e /usr/local/sbin/fwmctl ]; then
+  rc-update del litefwm default >/dev/null 2>&1 || true
+  rm -f /etc/init.d/litefwm /etc/sudoers.d/litefwm-web /etc/litefwm/config.json /etc/litefwm/config.json.tmp
+  for t in apictl capturectl configctl ddnsctl dhcpctl diagctl firewallctl fwmctl logctl metricsctl \
+           modulecfgctl modulectl netctl setupctl webctl; do rm -f "/usr/local/sbin/$t"; done
+  rm -rf /var/lib/litefwm /etc/litefwm/modules /usr/share/litefwm/litefwm-lighttpd.conf
+  echo "    removed 1.x service and tools (existing admin logins are kept)"
+fi
+
 echo "==> files"
 install -d -m 0755 /usr/lib/litefwm /usr/lib/litefwm/cgi /usr/share/litefwm/www /etc/litefwm \
   /etc/dnsmasq.d /etc/dnsmasq.hosts.d /etc/iptables /var/lib/misc
@@ -55,7 +67,8 @@ if [ ! -s /etc/litefwm/htpasswd ]; then
 fi
 chown root:lighttpd /etc/litefwm/htpasswd; chmod 0640 /etc/litefwm/htpasswd
 lighttpd -tt -f /etc/lighttpd/lighttpd.conf
-printf 'lighttpd ALL=(root) NOPASSWD: /usr/sbin/lfwctl\nDefaults:lighttpd !requiretty\n' >/etc/sudoers.d/litefwm
+printf 'lighttpd ALL=(root) NOPASSWD: /usr/sbin/lfwctl\nDefaults:lighttpd !requiretty, !syslog\n' >/etc/sudoers.d/litefwm
+visudo -cf /etc/sudoers.d/litefwm >/dev/null
 chmod 0440 /etc/sudoers.d/litefwm
 
 echo "==> routing"
@@ -64,6 +77,8 @@ sysctl -w net.ipv4.ip_forward=1 >/dev/null
 
 echo "==> dnsmasq"
 install -m 0644 "$BASE/etc/dnsmasq.conf" /etc/dnsmasq.conf
+# the service must read exactly /etc/dnsmasq.conf (no leftover DNSMASQ_OPTS)
+printf '# Owned by LiteFWM\ncfgfile="/etc/dnsmasq.conf"\nleasefile="/var/lib/misc/dnsmasq.leases"\n' >/etc/conf.d/dnsmasq
 install -m 0644 "$BASE/etc/dnsmasq-base.conf" /etc/dnsmasq.d/00-litefwm.conf
 [ -f /etc/dnsmasq.d/10-dns.conf ] || printf '# LiteFWM DNS settings\ndomain=lan\nlocal=/lan/\nexpand-hosts\n' >/etc/dnsmasq.d/10-dns.conf
 
