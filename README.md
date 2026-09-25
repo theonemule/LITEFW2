@@ -87,12 +87,15 @@ remove these Alpine packages on demand.
 - Squid
 - Snort
 - HAProxy
+- Dynamic DNS using ddclient
 
 Module packages are not installed by the base installer. Module state is stored
 in the LiteFWM configuration, and a module-specific directory is reserved under
 /etc/litefwm/modules/<module> when installed.
 
-The v0.1 module manager handles package lifecycle and enablement state. Rich
+The Dynamic DNS module is functional in v0.1. It uses the maintained ddclient package and includes a web editor for Cloudflare, No-IP, DuckDNS, Namecheap, DigitalOcean, Hetzner DNS, and generic DynDNS2 endpoints. It can discover the public IPv4 address from the web or read it from a selected local interface. DDNS credentials are stored in a root-only module configuration file and are redacted when read through the API.
+
+The remaining v0.1 module manager handles package lifecycle and enablement state. Rich
 service-specific editors for OpenVPN profiles, BIND zones, Squid ACLs, Snort
 policies, Tailscale enrollment, and HAProxy frontends/backends are deliberately
 kept outside the core firewall model and can be added as independent module
@@ -201,6 +204,14 @@ It does not create WAN/LAN segments or apply custom NAT/firewall rules.
     modulectl install squid
     modulectl install snort
     modulectl install haproxy
+    modulectl install ddns
+
+    ddnsctl show
+    ddnsctl validate
+    ddnsctl render
+    ddnsctl apply
+    ddnsctl status
+    ddnsctl query
 
     capturectl start lan 30
     capturectl list
@@ -235,6 +246,7 @@ The tests intentionally do not apply networking or firewall state.
     ./tests/syntax-test.sh
     ./tests/render-test.sh
     ./tests/security-validation-test.sh
+    ./tests/ddns-render-test.sh
 
 render-test.sh uses a temporary state directory and a realistic topology with
 WAN, LAN bridge, VLAN, DHCP, reservation, masquerade, and DNAT.

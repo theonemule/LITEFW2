@@ -75,6 +75,8 @@ case "$method:$path" in
   GET:/interfaces) run_json '500 Internal Server Error' interfaces;;
   GET:/leases) run_json '500 Internal Server Error' leases;;
   GET:/modules) run_json '500 Internal Server Error' modules;;
+  GET:/ddns) run_json '500 Internal Server Error' ddns-get;;
+  GET:/ddns/status) run_json '500 Internal Server Error' ddns-status;;
   GET:/metrics) run_json '500 Internal Server Error' metrics;;
   GET:/captures) run_json '500 Internal Server Error' captures;;
   GET:/logs/firewall) run_json '500 Internal Server Error' logs firewall 200;;

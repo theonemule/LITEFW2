@@ -11,12 +11,14 @@ module_package() {
     squid) echo squid;;
     snort) echo snort;;
     haproxy) echo haproxy;;
+    ddns) echo ddclient;;
     *) die "Unknown module: $1";;
   esac
 }
 module_service() {
   case "$1" in
     bind) echo named;;
+    ddns) echo ddclient;;
     *) echo "$1";;
   esac
 }
@@ -48,9 +50,14 @@ case "$cmd" in
     require_root
     mod=$2
     pkg=$(module_package "$mod")
-    apk add --no-cache "$pkg" || die "Could not install optional Alpine package: $pkg"
+    if [ "$mod" = ddns ]; then
+      apk add --no-cache ddclient ddclient-openrc || die "Could not install Dynamic DNS packages."
+    else
+      apk add --no-cache "$pkg" || die "Could not install optional Alpine package: $pkg"
+    fi
     set_state "$mod" true
     mkdir -p "$LITEFWM_ETC/modules/$mod"
+    if [ "$mod" = ddns ]; then "$SELF_DIR/ddnsctl" init; fi
     echo "$mod installed and enabled."
     ;;
   remove)
@@ -61,7 +68,11 @@ case "$cmd" in
     svc=$(module_service "$mod")
     rc-service "$svc" stop >/dev/null 2>&1 || true
     rc-update del "$svc" default >/dev/null 2>&1 || true
-    apk del "$pkg" >/dev/null 2>&1 || true
+    if [ "$mod" = ddns ]; then
+      apk del ddclient-openrc ddclient >/dev/null 2>&1 || true
+    else
+      apk del "$pkg" >/dev/null 2>&1 || true
+    fi
     echo "$mod disabled and package removal requested."
     ;;
   enable)

@@ -26,6 +26,7 @@
     "bind": false,
     "squid": false,
     "snort": false,
-    "haproxy": false
+    "haproxy": false,
+    "ddns": false
   }
 }

@@ -8,7 +8,7 @@ bindir=$(dirname "$0")
 cmd=$1
 
 safe_module() {
-  case "$1" in openvpn|tailscale|bind|squid|snort|haproxy) :;; *) die "Invalid module";; esac
+  case "$1" in openvpn|tailscale|bind|squid|snort|haproxy|ddns) :;; *) die "Invalid module";; esac
 }
 
 case "$cmd" in

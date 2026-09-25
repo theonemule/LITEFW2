@@ -262,12 +262,167 @@ function reserveLease(lease) {
   document.getElementById('reserveNow').onclick=async function(){try{await api('/reserve',{method:'POST',body:JSON.stringify({segment:document.getElementById('reserveSeg').value,mac:lease.mac,hostname:document.getElementById('reserveHost').value.trim()})});modal.hide();await refresh();toast('Lease reserved',lease.ip+' will stay assigned to '+lease.mac+'.');}catch(e){toast('Reservation failed',e.message);}};
 }
 function renderModules() {
-  const desc={openvpn:'Traditional routed or bridged VPN',tailscale:'WireGuard-based mesh VPN',bind:'Full BIND DNS service',squid:'Forward proxy and caching',snort:'Optional IDS/IPS engine',haproxy:'Reverse proxy and TCP/HTTP load balancer'};
+  const desc={
+    openvpn:'Traditional routed or bridged VPN',
+    tailscale:'WireGuard-based mesh VPN',
+    bind:'Full BIND DNS service',
+    squid:'Forward proxy and caching',
+    snort:'Optional IDS/IPS engine',
+    haproxy:'Reverse proxy and TCP/HTTP load balancer',
+    ddns:'Dynamic DNS updates using ddclient'
+  };
   let html='<p class="text-secondary">These packages are not part of the base appliance. Install only what you need.</p><div class="row g-3">';
-  (state.modules||[]).forEach(function(m){html+='<div class="col-md-6 col-xl-4"><div class="card h-100"><div class="card-body"><div class="d-flex"><div><h2 class="h6 mb-1">'+esc(m.name)+'</h2><p class="small text-secondary">'+esc(desc[m.name]||'Optional service')+'</p></div><span class="badge ms-auto align-self-start '+(m.installed?'text-bg-success':'badge-soft')+'">'+(m.installed?'Installed':'Not installed')+'</span></div><button class="btn btn-sm '+(m.installed?'btn-outline-danger':'btn-outline-primary')+' module-action" data-name="'+esc(m.name)+'" data-action="'+(m.installed?'remove':'install')+'">'+(m.installed?'Remove':'Install')+'</button></div></div></div>';});
-  html+='</div>';document.getElementById('view').innerHTML=html;
-  document.querySelectorAll('.module-action').forEach(function(b){b.onclick=async function(){const act=b.dataset.action;try{b.disabled=true;await api('/module/'+act,{method:'POST',body:JSON.stringify({module:b.dataset.name})});await refresh();toast('Module updated',b.dataset.name+' '+(act==='install'?'installed.':'removed.'));}catch(e){b.disabled=false;toast('Module operation failed',e.message);}};});
+  (state.modules||[]).forEach(function(m){
+    html+='<div class="col-md-6 col-xl-4"><div class="card h-100"><div class="card-body">';
+    html+='<div class="d-flex"><div><h2 class="h6 mb-1">'+esc(m.name)+'</h2><p class="small text-secondary">'+esc(desc[m.name]||'Optional service')+'</p></div>';
+    html+='<span class="badge ms-auto align-self-start '+(m.installed?'text-bg-success':'badge-soft')+'">'+(m.installed?'Installed':'Not installed')+'</span></div>';
+    html+='<div class="action-row">';
+    if(m.name==='ddns' && m.installed) html+='<button class="btn btn-sm btn-outline-primary ddns-config">Configure</button>';
+    html+='<button class="btn btn-sm '+(m.installed?'btn-outline-danger':'btn-outline-primary')+' module-action" data-name="'+esc(m.name)+'" data-action="'+(m.installed?'remove':'install')+'">'+(m.installed?'Remove':'Install')+'</button>';
+    html+='</div></div></div></div>';
+  });
+  html+='</div>';
+  document.getElementById('view').innerHTML=html;
+  document.querySelectorAll('.module-action').forEach(function(b){
+    b.onclick=async function(){
+      const act=b.dataset.action;
+      try{
+        b.disabled=true;
+        await api('/module/'+act,{method:'POST',body:JSON.stringify({module:b.dataset.name})});
+        await refresh();
+        toast('Module updated',b.dataset.name+' '+(act==='install'?'installed.':'removed.'));
+      }catch(e){
+        b.disabled=false;
+        toast('Module operation failed',e.message);
+      }
+    };
+  });
+  const ddns=document.querySelector('.ddns-config');
+  if(ddns) ddns.onclick=configureDdns;
 }
+
+async function configureDdns() {
+  let cfg, status;
+  try {
+    [cfg,status]=await Promise.all([api('/ddns'),api('/ddns/status')]);
+  } catch(e) {
+    toast('Dynamic DNS',e.message);
+    return;
+  }
+
+  const providers=[
+    ['cloudflare','Cloudflare'],
+    ['noip','No-IP'],
+    ['duckdns','DuckDNS'],
+    ['namecheap','Namecheap'],
+    ['digitalocean','DigitalOcean'],
+    ['hetzner','Hetzner DNS'],
+    ['dyndns2','Generic DynDNS2']
+  ];
+  const providerOptions=providers.map(function(x){return '<option value="'+x[0]+'"'+(cfg.provider===x[0]?' selected':'')+'>'+x[1]+'</option>';}).join('');
+  const ifaceOptions='<option value="">Select interface</option>'+(state.interfaces||[]).map(function(i){return '<option value="'+esc(i.name)+'"'+(cfg.interface===i.name?' selected':'')+'>'+esc(i.name)+'</option>';}).join('');
+
+  document.getElementById('modalTitle').textContent='Dynamic DNS';
+  document.getElementById('modalBody').innerHTML=
+    '<div class="d-flex align-items-center mb-3"><div><div class="fw-semibold">ddclient</div><div class="small text-secondary">Update public DNS records when the WAN address changes.</div></div><span class="badge ms-auto '+(status.running?'text-bg-success':'badge-soft')+'">'+(status.running?'Running':'Stopped')+'</span></div>'+
+    '<div class="row g-3">'+
+      '<div class="col-md-4"><label class="form-label">Provider</label><select id="ddnsProvider" class="form-select">'+providerOptions+'</select></div>'+
+      '<div class="col-md-4"><label class="form-label">Check interval</label><div class="input-group"><input id="ddnsInterval" type="number" min="60" max="86400" class="form-control" value="'+esc(cfg.interval||300)+'"><span class="input-group-text">sec</span></div></div>'+
+      '<div class="col-md-4"><label class="form-label">Address source</label><select id="ddnsSource" class="form-select"><option value="web">Public IP lookup</option><option value="interface">Local interface</option></select></div>'+
+      '<div id="ddnsInterfaceWrap" class="col-md-6"><label class="form-label">Interface</label><select id="ddnsInterface" class="form-select">'+ifaceOptions+'</select></div>'+
+      '<div class="col-md-6"><label class="form-label">Hostnames</label><input id="ddnsHosts" class="form-control" placeholder="home.example.com, vpn.example.com" value="'+esc((cfg.hostnames||[]).join(', '))+'"><div id="ddnsHostHelp" class="form-text"></div></div>'+
+      '<div id="ddnsZoneWrap" class="col-md-6"><label class="form-label">DNS zone</label><input id="ddnsZone" class="form-control" placeholder="example.com" value="'+esc(cfg.zone||'')+'"></div>'+
+      '<div id="ddnsServerWrap" class="col-md-6"><label class="form-label">DynDNS server</label><input id="ddnsServer" class="form-control" placeholder="members.example.com" value="'+esc(cfg.server||'')+'"></div>'+
+      '<div id="ddnsLoginWrap" class="col-md-6"><label id="ddnsLoginLabel" class="form-label">Username</label><input id="ddnsLogin" class="form-control" value="'+esc(cfg.login||'')+'"></div>'+
+      '<div class="col-md-6"><label id="ddnsPasswordLabel" class="form-label">Password / API token</label><input id="ddnsPassword" type="password" class="form-control" placeholder="'+(cfg.passwordSet?'Leave blank to keep current credential':'Required')+'"><div class="form-text">Credentials are stored root-only on the appliance and are never returned by the API.</div></div>'+
+      '<div class="col-12"><div class="form-check"><input id="ddnsEnabled" type="checkbox" class="form-check-input" '+(cfg.enabled?'checked':'')+'><label class="form-check-label">Enable Dynamic DNS service</label></div></div>'+
+      '<div class="col-12"><div id="ddnsProviderHelp" class="alert alert-secondary mb-0"></div></div>'+
+      '<div class="col-12"><div id="ddnsQueryOutput" class="code-box d-none"></div></div>'+
+    '</div>';
+
+  document.getElementById('ddnsSource').value=cfg.source||'web';
+
+  function refreshDdnsFields(){
+    const provider=document.getElementById('ddnsProvider').value;
+    const source=document.getElementById('ddnsSource').value;
+    document.getElementById('ddnsInterfaceWrap').classList.toggle('d-none',source!=='interface');
+
+    const needsZone=['cloudflare','digitalocean','hetzner'].includes(provider);
+    const needsServer=provider==='dyndns2';
+    const needsLogin=['noip','namecheap','dyndns2'].includes(provider);
+    document.getElementById('ddnsZoneWrap').classList.toggle('d-none',!needsZone);
+    document.getElementById('ddnsServerWrap').classList.toggle('d-none',!needsServer);
+    document.getElementById('ddnsLoginWrap').classList.toggle('d-none',!needsLogin);
+
+    const help={
+      cloudflare:'Use a Cloudflare API token. Set DNS zone to the parent zone, such as example.com. No username is required.',
+      noip:'Use the No-IP username and password for the hostname.',
+      duckdns:'Use the DuckDNS token. Host entries are the DuckDNS host names without the .duckdns.org suffix.',
+      namecheap:'Set Username to the registered domain, such as example.com, and use its Dynamic DNS password.',
+      digitalocean:'Use a DigitalOcean API token and set the DNS zone.',
+      hetzner:'Use a Hetzner DNS API token and set the DNS zone.',
+      dyndns2:'Generic DynDNS2 endpoint. Supply the update server, username, password, and fully-qualified hostname.'
+    };
+    document.getElementById('ddnsProviderHelp').textContent=help[provider]||'';
+    document.getElementById('ddnsHostHelp').textContent=provider==='duckdns'?'Example: myhouse, myvpn':'Comma-separated DNS names.';
+  }
+  document.getElementById('ddnsProvider').onchange=refreshDdnsFields;
+  document.getElementById('ddnsSource').onchange=refreshDdnsFields;
+  refreshDdnsFields();
+
+  document.getElementById('modalFooter').innerHTML=
+    '<button class="btn btn-secondary" data-bs-dismiss="modal">Close</button>'+
+    '<button id="ddnsQuery" class="btn btn-outline-secondary">Check IP source</button>'+
+    '<button id="ddnsSave" class="btn btn-outline-primary">Save</button>'+
+    '<button id="ddnsApply" class="btn btn-primary">Save & apply</button>';
+
+  const modal=bootstrap.Modal.getOrCreateInstance(document.getElementById('formModal'));
+  modal.show();
+
+  function collectDdns(){
+    return {
+      enabled:document.getElementById('ddnsEnabled').checked,
+      provider:document.getElementById('ddnsProvider').value,
+      interval:Number(document.getElementById('ddnsInterval').value||300),
+      source:document.getElementById('ddnsSource').value,
+      interface:document.getElementById('ddnsInterface').value,
+      zone:document.getElementById('ddnsZone').value.trim(),
+      server:document.getElementById('ddnsServer').value.trim(),
+      login:document.getElementById('ddnsLogin').value.trim(),
+      password:document.getElementById('ddnsPassword').value,
+      hostnames:document.getElementById('ddnsHosts').value.split(',').map(function(x){return x.trim();}).filter(Boolean)
+    };
+  }
+  async function saveDdns(apply){
+    try{
+      await api('/ddns',{method:'PUT',body:JSON.stringify(collectDdns())});
+      if(apply) {
+        const result=await api('/ddns/apply',{method:'POST'});
+        toast('Dynamic DNS',result.message||'Configuration applied.');
+      } else {
+        toast('Dynamic DNS','Configuration saved.');
+      }
+      await refresh();
+      if(apply) modal.hide();
+    }catch(e){
+      toast('Dynamic DNS error',e.message);
+    }
+  }
+  document.getElementById('ddnsSave').onclick=function(){saveDdns(false);};
+  document.getElementById('ddnsApply').onclick=function(){saveDdns(true);};
+  document.getElementById('ddnsQuery').onclick=async function(){
+    try{
+      await api('/ddns',{method:'PUT',body:JSON.stringify(collectDdns())});
+      const result=await api('/ddns/query',{method:'POST'});
+      const box=document.getElementById('ddnsQueryOutput');
+      box.classList.remove('d-none');
+      box.textContent=result.output||'No output.';
+    }catch(e){
+      toast('Dynamic DNS check failed',e.message);
+    }
+  };
+}
+
 function renderMonitoring() {
   const m=state.metrics||{interfaces:[],memory:{}};
   let html='<div class="row g-3 mb-3">'+card('Conntrack',m.conntrack||0,'Active tracked flows')+card('Load',m.load1||0,'1 minute load average')+card('Memory available',Math.round((m.memory&&m.memory.available||0)/1048576)+' MB','Target appliance')+card('Captures',(state.captures||[]).length,'Saved packet captures')+'</div>';

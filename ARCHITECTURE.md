@@ -22,6 +22,7 @@ iproute2, dnsmasq, or package-management commands directly.
         +--> firewallctl
         +--> webctl
         +--> modulectl
+    +--> ddnsctl
         +--> capturectl
         +--> metricsctl
         +--> logctl
@@ -68,3 +69,19 @@ restores the previous JSON when available.
 
 Network-interface rollback is not yet transactional in v0.1, so administrators
 should preserve a console path while making topology changes.
+
+## Dynamic DNS module
+
+Dynamic DNS is an optional package-backed service. Installing the module adds
+ddclient and its OpenRC service on the target Alpine appliance. LiteFWM stores
+the module configuration separately from the main firewall model under:
+
+    /etc/litefwm/modules/ddns/config.json
+
+That file is mode 0600 because it contains provider credentials. The web API
+never returns the credential value. ddnsctl renders the native ddclient
+configuration to /etc/ddclient/ddclient.conf and controls the ddclient OpenRC
+service.
+
+The initial provider presets are Cloudflare, No-IP, DuckDNS, Namecheap,
+DigitalOcean, Hetzner DNS, and generic DynDNS2.
