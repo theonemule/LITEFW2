@@ -63,8 +63,7 @@ def spawn_vm(from_iso):
     q.sendline("root")
     i=q.expect([r"#\s*$", r"(?i)password:\s*$"], timeout=60)
     if i == 1:
-        q.sendline("")
-        q.expect(r"#\s*$", timeout=60)
+        raise RuntimeError("ISO or installed system requested a root password; local console login must be passwordless")
 
 def vmcmd(cmd, timeout=120):
     marker=f"__OFFRC_{int(time.time()*1000000)}__"
