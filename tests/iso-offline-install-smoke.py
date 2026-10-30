@@ -104,6 +104,7 @@ def install_from_iso():
     vmcmd("test ! -e /root/litefwm-admin.txt")
     vmcmd("test -x /usr/local/sbin/setup-alpine")
     vmcmd("test -x /usr/sbin/setup-alpine")
+    vmcmd("awk -F: '$1==\"root\" {exit ($2!=\"\")} END {}' /etc/shadow")
     # This low-level setup-disk smoke bypasses the integrated setup-alpine
     # prompts; create a test-only hash so it tests disk persistence honestly.
     vmcmd("htpasswd -bB -C 12 -c /etc/litefwm/htpasswd admin 'SmokeTestOnlyPassword123!' >/dev/null")
@@ -147,6 +148,9 @@ def verify_installed_system():
     vmcmd("test -s /etc/litefwm/htpasswd")
     vmcmd("test ! -e /root/litefwm-admin.txt")
     vmcmd("grep -q '^admin:' /etc/litefwm/htpasswd")
+    vmcmd("grep -q '^PermitRootLogin prohibit-password$' /etc/ssh/sshd_config.d/90-litefwm-console-only.conf")
+    vmcmd("grep -q '^PermitEmptyPasswords no$' /etc/ssh/sshd_config.d/90-litefwm-console-only.conf")
+    vmcmd("awk -F: '$1==\"root\" {exit ($2!=\"\")} END {}' /etc/shadow")
     stop_vm()
 
 def main():

@@ -51,6 +51,11 @@ the same `setup-alpine` command.
 Only a bcrypt hash is persisted. The appliance never creates a random password
 or writes a plaintext credential file.
 
+The live ISO accepts `root` at the local console with **no root password**,
+and `setup-alpine` suppresses Alpine's separate root-password prompt.
+The installed appliance preserves passwordless local-console root access;
+remote SSH disallows empty-password authentication and root password login.
+
 lfw-setup applies those roles to the live network and rewrites the native
 network configuration so the normal Alpine sys install carries the selected
 network configuration forward.

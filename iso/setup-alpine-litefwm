@@ -88,4 +88,6 @@ awk -v hook="$hook" '
 ' "$tmp" >"$tmp.new"
 mv -f "$tmp.new" "$tmp"
 chmod 0755 "$tmp"
-"$tmp" "$@"
+# Alpine's -e option suppresses its root-password prompt. LiteFW2 only
+# asks for the management UI administrator password.
+"$tmp" -e "$@"

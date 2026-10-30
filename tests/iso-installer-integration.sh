@@ -11,6 +11,7 @@ docker run --rm -v "$PWD/iso/setup-alpine-litefwm:/usr/local/sbin/setup-alpine:r
   # to isolate and execute the inserted firewall + credential stages.
   cat >/usr/sbin/setup-alpine <<\MOCK
 #!/bin/sh
+[ "$1" = "-e" ] || { echo "Root password suppression flag missing" >&2; exit 1; }
 print_heading2() { echo "$1"; }
 print_heading2 " Disk & Install"
 echo ALPINE_DISK_INSTALL_REACHED
@@ -29,5 +30,6 @@ MOCK
   htpasswd -vb /etc/litefwm/htpasswd admin "SmokeTestOnlyPassword123!" >/dev/null
   test ! -e /root/litefwm-admin.txt
   ! grep -q "SmokeTestOnlyPassword123!" /tmp/installer.log
+  ! grep -q "Root Password" /tmp/installer.log
   echo "PASS single setup-alpine command invoked firewall configuration, securely set web admin password, and reached disk install"
 '

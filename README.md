@@ -67,6 +67,8 @@ and can reassign WAN/LAN roles even when the web UI is unreachable:
     lfw-setup lan eth1 192.168.10.1/24
 
 The firewall starts in default-deny with the web UI and SSH reachable.
+The installer ISO lets you log in as `root` on the local/Proxmox console
+without a password and does not request a root password during installation.
 Set the web administrator password during `setup-alpine`. The password itself
 is never saved as plaintext; only its bcrypt hash is stored. Use `lfw-setup`
 only for later recovery or reconfiguration, not initial installation.

@@ -95,11 +95,18 @@ depend() {
 start() {
   ebegin "Initializing LiteFW2"
   install -d -m 0755 /etc/litefwm /var/log/lighttpd
-  chown lighttpd:lighttpd /var/log/lighttpd 2>/dev/null || true
-  if [ ! -s /etc/litefwm/htpasswd ]; then
-    eerror "Missing web admin password. Run lfw-admin-setup on the console."
+  # Proxmox/physical console access must not depend on a root password.
+  # SSH root password logins remain disabled separately below.
+  passwd -d root >/dev/null 2>&1 || {
+    eerror "Unable to unlock passwordless root console"
     eend 1
     return 1
+  }
+  chown lighttpd:lighttpd /var/log/lighttpd 2>/dev/null || true
+  if [ ! -s /etc/litefwm/htpasswd ]; then
+    einfo "Web UI is not configured yet. Run setup-alpine to install LiteFW2."
+    eend 0
+    return 0
   fi
   chown root:lighttpd /etc/litefwm/htpasswd
   chmod 0640 /etc/litefwm/htpasswd
@@ -107,6 +114,14 @@ start() {
 }
 INIT
 chmod 0755 "$tmp/etc/init.d/litefwm-init"
+
+# No root password is ever accepted via SSH. The console is controlled by the
+# VM/hardware administrator, not the network-facing SSH daemon.
+install -d "$tmp/etc/ssh/sshd_config.d"
+cat >"$tmp/etc/ssh/sshd_config.d/90-litefwm-console-only.conf" <<'SSHD'
+PermitRootLogin prohibit-password
+PermitEmptyPasswords no
+SSHD
 
 # Installed base appliance only. Optional module APKs are on the ISO repository
 # but deliberately not installed by default.
@@ -146,7 +161,8 @@ WORLD
     "$tmp/etc/dnsmasq.d/00-litefwm.conf" \
     "$tmp/etc/dnsmasq.d/10-dns.conf" \
     "$tmp/etc/iptables/rules-save" \
-    "$tmp/etc/litefwm/htpasswd"
+    "$tmp/etc/litefwm/htpasswd" \
+    "$tmp/etc/ssh/sshd_config.d/90-litefwm-console-only.conf"
 } | sed "s#^$tmp/#+#" >"$tmp/etc/apk/protected_paths.d/lbu.list"
 
 # Normal Alpine live-media services plus installed appliance services.
@@ -175,11 +191,12 @@ LiteFWM appliance installer
 
 TO INSTALL ALPINE + CONFIGURE LITEFW2 FIREWALL: run setup-alpine
 
-The normal Alpine setup runs first. Immediately before Disk & Install, LiteFWM
+Alpine setup skips the root-password step. The normal Alpine setup runs first. Immediately before Disk & Install, LiteFWM
 asks which interface is the WAN / Internet edge and which is the LAN / internal
 network. The stock Alpine installer remains available as /sbin/setup-alpine.
 
-During setup-alpine you will set the LiteFW2 web admin password.
+Root console login: root (no password).
+During setup-alpine you will set ONLY the LiteFW2 web admin password.
 The installer handles Alpine setup, WAN/LAN assignment, and web administrator
 password together. No second setup command is required.
 MOTD
