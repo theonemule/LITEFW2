@@ -3,7 +3,7 @@
 # and management password before disk installation.
 set -eu
 
-stock=/sbin/setup-alpine
+stock=/usr/sbin/setup-alpine
 [ -x "$stock" ] || { echo "stock Alpine installer not found: $stock" >&2; exit 1; }
 [ -x /usr/sbin/lfw-setup ] || { echo "LiteFW2 network configuration is missing" >&2; exit 1; }
 
@@ -88,4 +88,4 @@ awk -v hook="$hook" '
 ' "$tmp" >"$tmp.new"
 mv -f "$tmp.new" "$tmp"
 chmod 0755 "$tmp"
-exec "$tmp" "$@"
+"$tmp" "$@"

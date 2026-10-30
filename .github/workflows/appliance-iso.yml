@@ -45,6 +45,10 @@ jobs:
             echo 'Unsupported Debian/Ubuntu dependency in appliance build path' >&2
             exit 1
           fi
+      - name: Verify single-command Alpine firewall installer
+        run: |
+          set -euo pipefail
+          ./tests/iso-installer-integration.sh
       - name: Install ISO verification dependencies
         run: |
           sudo apt-get update
