@@ -101,6 +101,9 @@ def install_from_iso():
     vmcmd(f"apk add --simulate --no-network {pkgs} >/tmp/apk-sim.txt", timeout=180)
     vmcmd("grep -q 'LiteFWM appliance installer' /etc/motd")
     vmcmd("test -x /usr/sbin/lfwctl")
+    vmcmd("test ! -e /root/litefwm-admin.txt")
+    vmcmd("printf 'TestOnlyPassword456!\\nTestOnlyPassword456!\\n' | /usr/sbin/lfw-admin-setup")
+    vmcmd("test -s /etc/litefwm/htpasswd")
     # setup-disk itself has no network override, so the absence of any NIC plus
     # a media-only repositories file makes this a hard offline installation test.
     vmcmd("cp /etc/apk/repositories /tmp/repositories.before")
@@ -136,7 +139,9 @@ def verify_installed_system():
     vmcmd("test -L /etc/runlevels/default/dnsmasq")
     vmcmd("test -L /etc/runlevels/boot/iptables")
     vmcmd("test -L /etc/runlevels/boot/litefwm-init")
-    vmcmd("test -s /root/litefwm-admin.txt")
+    vmcmd("test -s /etc/litefwm/htpasswd")
+    vmcmd("test ! -e /root/litefwm-admin.txt")
+    vmcmd("grep -q '^admin:' /etc/litefwm/htpasswd")
     stop_vm()
 
 def main():

@@ -17,6 +17,8 @@ if ! awk '
     print "print_heading2 \" LiteFWM appliance network\""
     print "print_heading2 \"--------------------------\""
     print "/usr/sbin/lfw-setup interactive || exit 1"
+    print "print_heading2 \" LiteFW2 web administrator\""
+    print "/usr/sbin/lfw-admin-setup || exit 1"
     print "echo"
     injected=1
   }

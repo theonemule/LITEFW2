@@ -18,6 +18,7 @@ install -d   "$tmp/usr/sbin" "$tmp/usr/lib/litefwm" "$tmp/usr/lib/litefwm/cgi"  
 # LiteFWM CLI and runtime library.
 install -m 0755 "$src/bin/lfwctl" "$tmp/usr/sbin/lfwctl"
 install -m 0755 "$src/bin/lfw-setup" "$tmp/usr/sbin/lfw-setup"
+install -m 0755 "$src/iso/lfw-admin-setup" "$tmp/usr/sbin/lfw-admin-setup"
 install -m 0755 "$src/iso/setup-alpine-litefwm" "$tmp/usr/local/sbin/setup-alpine"
 
 for f in "$src"/lib/*.sh "$src"/lib/*.jq "$src"/lib/*.awk; do
@@ -82,11 +83,10 @@ COMMIT
 COMMIT
 RULES
 
-# Generate a unique UI credential on first boot. The live installer creates it
-# before setup-disk packages the overlay, so it is preserved into that install.
+# Initialize runtime; never generate credentials or write a plaintext password.
 cat >"$tmp/etc/init.d/litefwm-init" <<'INIT'
 #!/sbin/openrc-run
-description="Initialize LiteFWM appliance runtime"
+description="Initialize LiteFW2 appliance runtime"
 
 depend() {
   need localmount
@@ -94,27 +94,16 @@ depend() {
 }
 
 start() {
-  ebegin "Initializing LiteFWM"
+  ebegin "Initializing LiteFW2"
   install -d -m 0755 /etc/litefwm /var/log/lighttpd
   chown lighttpd:lighttpd /var/log/lighttpd 2>/dev/null || true
-
   if [ ! -s /etc/litefwm/htpasswd ]; then
-    umask 077
-    pass=$(head -c 48 /dev/urandom | base64 | tr -dc 'A-Za-z0-9' | head -c 20)
-    printf '%s
-' "$pass" | htpasswd -ic /etc/litefwm/htpasswd admin >/dev/null 2>&1
-    cat >/root/litefwm-admin.txt <<EOF_CRED
-LiteFWM management UI
-User: admin
-Password: $pass
-EOF_CRED
-    chmod 0600 /root/litefwm-admin.txt
-    printf '
-LiteFWM UI credentials written to /root/litefwm-admin.txt
-' >/dev/console 2>/dev/null || true
+    eerror "Missing web admin password. Run lfw-admin-setup on the console."
+    eend 1
+    return 1
   fi
-  chown root:lighttpd /etc/litefwm/htpasswd 2>/dev/null || true
-  chmod 0640 /etc/litefwm/htpasswd 2>/dev/null || true
+  chown root:lighttpd /etc/litefwm/htpasswd
+  chmod 0640 /etc/litefwm/htpasswd
   eend 0
 }
 INIT
@@ -144,6 +133,7 @@ WORLD
 {
   [ ! -f "$tmp/usr/sbin/lfwctl" ] || printf '%s\n' "$tmp/usr/sbin/lfwctl"
   [ ! -f "$tmp/usr/sbin/lfw-setup" ] || printf '%s\n' "$tmp/usr/sbin/lfw-setup"
+  [ ! -f "$tmp/usr/sbin/lfw-admin-setup" ] || printf '%s\n' "$tmp/usr/sbin/lfw-admin-setup"
   find "$tmp/usr/lib/litefwm" -type f -print
   find "$tmp/usr/share/litefwm" -type f -print
   printf '%s\n' \
@@ -158,8 +148,7 @@ WORLD
     "$tmp/etc/dnsmasq.d/00-litefwm.conf" \
     "$tmp/etc/dnsmasq.d/10-dns.conf" \
     "$tmp/etc/iptables/rules-save" \
-    "$tmp/etc/litefwm/htpasswd" \
-    "$tmp/root/litefwm-admin.txt"
+    "$tmp/etc/litefwm/htpasswd"
 } | sed "s#^$tmp/#+#" >"$tmp/etc/apk/protected_paths.d/lbu.list"
 
 # Normal Alpine live-media services plus installed appliance services.
@@ -186,14 +175,16 @@ rc_add savecache shutdown
 cat >"$tmp/etc/motd" <<'MOTD'
 LiteFWM appliance installer
 
-Run: setup-alpine
+INITIAL INSTALL: run setup-alpine
+FIREWALL NETWORK CONFIGURATION AFTER INSTALL: run lfw-setup
 
 The normal Alpine setup runs first. Immediately before Disk & Install, LiteFWM
 asks which interface is the WAN / Internet edge and which is the LAN / internal
 network. The stock Alpine installer remains available as /sbin/setup-alpine.
 
-Management credentials are generated per appliance and written to:
-  /root/litefwm-admin.txt
+During setup-alpine you will set the LiteFW2 web admin password.
+To reconfigure WAN/LAN later, run: lfw-setup
+To change the web admin password later, run: lfw-admin-setup
 MOTD
 
 tar -c -C "$tmp" . | gzip -9n >"${host}.apkovl.tar.gz"

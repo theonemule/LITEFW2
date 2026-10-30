@@ -45,7 +45,9 @@ The ISO deliberately keeps Alpine's installer rather than replacing it.
 /usr/local/sbin/setup-alpine wraps the stock setup-alpine flow and inserts
 one LiteFWM step immediately before Alpine's Disk & Install phase. The
 operator selects the WAN / Internet-edge interface and then the LAN / internal
-interface.
+interface, followed by a mandatory web administrator password and confirmation.
+Only a bcrypt hash is persisted. The appliance never creates a random password
+or writes a plaintext credential file.
 
 lfw-setup applies those roles to the live network and rewrites the native
 network configuration so the normal Alpine sys install carries the selected

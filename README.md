@@ -64,8 +64,10 @@ and can reassign WAN/LAN roles even when the web UI is unreachable:
     lfw-setup wan eth0
     lfw-setup lan eth1 192.168.10.1/24
 
-The firewall starts in default-deny with the web UI and SSH reachable. The
-generated admin password is printed once.
+The firewall starts in default-deny with the web UI and SSH reachable.
+Set the web administrator password during `setup-alpine`. The password itself
+is never saved as plaintext; only its bcrypt hash is stored. Use `lfw-setup`
+from the installed console to reconfigure WAN/LAN interfaces.
 
 Upgrading from the older LiteFWM control plane preserves native BIND, OpenVPN
 and inadyn configuration where present, removes the old `/opt/litefwm` control
