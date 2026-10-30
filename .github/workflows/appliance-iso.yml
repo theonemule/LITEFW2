@@ -33,7 +33,13 @@ jobs:
           test -x tools/build-appliance-iso.sh
           test -f iso/mkimg.litefwm.sh
           test -f iso/genapkovl-litefwm.sh
-          find bin lib modules iso tools tests -type f -name '*.sh' -print0 | xargs -0 -r -n1 sh -n
+          while IFS= read -r -d '' script; do
+            if head -n 1 "$script" | grep -Eq '^#!.*(/|env )bash([[:space:]]|$)'; then
+              bash -n "$script"
+            else
+              sh -n "$script"
+            fi
+          done < <(find bin lib modules iso tools tests -type f -name '*.sh' -print0)
           python3 -m compileall -q tests
           if grep -RniE 'apt(-get)? (install|update)|debian|ubuntu' install.sh iso tools/build-appliance-iso.sh; then
             echo 'Unsupported Debian/Ubuntu dependency in appliance build path' >&2
