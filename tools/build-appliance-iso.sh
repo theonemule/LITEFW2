@@ -25,7 +25,7 @@ docker run --rm \
   -v "$OUT:/out" \
   "alpine:$ALPINE_VERSION" /bin/sh -euxc '
     apk add --no-cache abuild apk-tools alpine-conf busybox fakeroot git syslinux xorriso squashfs-tools grub mtools dosfstools
-    git clone --depth 1 --filter=blob:none --sparse --branch "$ALPINE_BRANCH" https://gitlab.alpinelinux.org/alpine/aports.git /tmp/aports
+    git clone --depth 1 --filter=blob:none --sparse --branch "$ALPINE_BRANCH" https://github.com/alpinelinux/aports.git /tmp/aports
     git -C /tmp/aports sparse-checkout set scripts
     cp /src/iso/mkimg.litefwm.sh /src/iso/genapkovl-litefwm.sh /tmp/aports/scripts/
     chmod +x /tmp/aports/scripts/genapkovl-litefwm.sh
