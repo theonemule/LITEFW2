@@ -1,0 +1,84 @@
+name: Build Alpine appliance ISO
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: appliance-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
+
+jobs:
+  appliance:
+    name: Alpine x86_64 ISO and offline installation
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Validate appliance source
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -s VERSION
+          test -x tools/build-appliance-iso.sh
+          test -f iso/mkimg.litefwm.sh
+          test -f iso/genapkovl-litefwm.sh
+          find bin lib modules iso tools tests -type f -name '*.sh' -print0 | xargs -0 -r -n1 sh -n
+          python3 -m compileall -q tests
+          if grep -RniE 'apt(-get)? (install|update)|debian|ubuntu' install.sh iso tools/build-appliance-iso.sh; then
+            echo 'Unsupported Debian/Ubuntu dependency in appliance build path' >&2
+            exit 1
+          fi
+      - name: Install ISO verification dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y xorriso qemu-system-x86 qemu-utils python3-pexpect
+      - name: Build standalone Alpine ISO
+        env:
+          ALPINE_VERSION: '3.24'
+          ARCH: x86_64
+          OUTDIR: ${{ github.workspace }}/dist
+        run: |
+          set -euo pipefail
+          ./tools/build-appliance-iso.sh
+          mapfile -t images < <(find dist -maxdepth 1 -type f -name '*litefwm*.iso')
+          test "${#images[@]}" -eq 1
+          mv "${images[0]}" "dist/litefw2-$(cat VERSION)-alpine3.24-x86_64.iso"
+          xorriso -indev dist/*.iso -report_el_torito plain
+          (cd dist && sha256sum *.iso > SHA256SUMS)
+      - name: Offline installation smoke test
+        env:
+          LITEFWM_OFFLINE_WORK: ${{ runner.temp }}/litefw2-offline
+        run: |
+          set -euo pipefail
+          python3 tests/iso-offline-install-smoke.py dist/*.iso
+      - name: Publish build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: litefw2-alpine-appliance-${{ github.run_number }}
+          path: |
+            dist/*.iso
+            dist/SHA256SUMS
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 0
+      - name: Publish immutable GitHub release assets
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$TAG" = "v$(cat VERSION)"
+          gh release create "$TAG" dist/*.iso dist/SHA256SUMS --title "LiteFW2 $TAG" --notes "Bootable Alpine Linux x86_64 firewall appliance ISO. SHA256SUMS included. ISO installation is the only supported installation method." --verify-tag

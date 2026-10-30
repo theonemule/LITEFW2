@@ -10,6 +10,7 @@
 #   filter FORWARD : established, DNAT'ed (port forwards), LFW_FWD, DROP
 #   LFW_MGMT  management UI / SSH access           (managed by System settings)
 #   LFW_SVC   DNS/DHCP/ping to the firewall from LAN segments (derived from segments)
+#   LFW_MOD   derived service openings for installed optional modules
 #   LFW_IN    user rules with destination "this firewall"
 #   LFW_FWD   user rules between segments / to the internet
 #   nat LFW_DNAT  port forwards
@@ -86,13 +87,14 @@ fw_commit() {
     echo ':INPUT DROP [0:0]'
     echo ':FORWARD DROP [0:0]'
     echo ':OUTPUT ACCEPT [0:0]'
-    for _c in LFW_MGMT LFW_SVC LFW_IN LFW_FWD; do echo ":$_c - [0:0]"; done
+    for _c in LFW_MGMT LFW_SVC LFW_MOD LFW_IN LFW_FWD; do echo ":$_c - [0:0]"; done
     echo '-A INPUT -i lo -j ACCEPT'
     echo '-A INPUT -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT'
     echo '-A INPUT -m conntrack --ctstate INVALID -j DROP'
     echo '-A INPUT -p udp -m udp --sport 67 --dport 68 -j ACCEPT'
     echo '-A INPUT -j LFW_MGMT'
     echo '-A INPUT -j LFW_SVC'
+    echo '-A INPUT -j LFW_MOD'
     echo '-A INPUT -j LFW_IN'
     echo '-A FORWARD -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT'
     echo '-A FORWARD -m conntrack --ctstate INVALID -j DROP'
@@ -100,6 +102,7 @@ fw_commit() {
     echo '-A FORWARD -j LFW_FWD'
     cat "$FWT/LFW_MGMT"
     fw_gen_svc
+    if command -v module_firewall_rules >/dev/null 2>&1; then module_firewall_rules; fi
     cat "$FWT/LFW_IN"
     cat "$FWT/LFW_FWD"
     echo 'COMMIT'

@@ -1,0 +1,157 @@
+#!/bin/sh
+# lfw-setup - console/recovery network setup for a LiteFWM appliance.
+# Reads the live kernel-backed model through lfwctl and applies changes through
+# the same segment operations as the web UI. No private configuration store.
+set -eu
+PATH=/usr/sbin:/usr/bin:/sbin:/bin
+CTL=${LFWCTL:-/usr/sbin/lfwctl}
+[ -x "$CTL" ] || CTL=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd -P)/lfwctl
+
+die(){ echo "$*" >&2; exit 1; }
+need_root(){ [ "$(id -u)" -eq 0 ] || die "lfw-setup must run as root"; }
+state(){ "$CTL" get segments; }
+candidates(){
+  state | jq -r '.interfaces[] | select((.kind=="physical" or .kind=="bridge" or .kind=="vlan") and (.master==null)) |
+    [.name,.kind,.role,.mode,((.addresses//[])|join(",")),(.gateway//""),(.label//"")] | @tsv'
+}
+show(){
+  printf '%-4s %-14s %-10s %-7s %-8s %-20s %-15s %s\n' '#' INTERFACE TYPE ROLE MODE ADDRESS GATEWAY NAME
+  n=0
+  candidates | while IFS="$(printf '\t')" read -r name kind role mode addrs gw label; do
+    n=$((n+1))
+    printf '%-4s %-14s %-10s %-7s %-8s %-20s %-15s %s\n' "$n" "$name" "$kind" "$role" "$mode" "${addrs:--}" "${gw:--}" "${label:--}"
+  done
+  echo
+  def=$(ip -4 route show default 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="dev"){print $(i+1);exit}}')
+  [ -z "$def" ] || echo "Current kernel default route leaves through: $def"
+}
+iface_json(){
+  state | jq -c --arg n "$1" '.interfaces[] | select(.name==$n)' | head -n1
+}
+valid_iface(){ [ -n "$(iface_json "$1")" ]; }
+segment_body_preserve(){ # iface role label [drop_gateway]
+  i=$1 role=$2 label=$3 drop=${4:-no}
+  j=$(iface_json "$i"); [ -n "$j" ] || die "interface $i does not exist"
+  mode=$(printf '%s' "$j" | jq -r '.mode')
+  addrs=$(printf '%s' "$j" | jq -c '.addresses // []')
+  gw=$(printf '%s' "$j" | jq -r '.gateway // ""')
+  [ "$drop" = no ] || gw=""
+  dns='[]'
+  if [ "$role" = wan ] && [ "$mode" = static ]; then
+    dns=$(awk '$1=="nameserver"{print $2}' /etc/resolv.conf 2>/dev/null | jq -R . | jq -s .)
+  fi
+  jq -nc --arg interface "$i" --arg role "$role" --arg label "$label" --arg mode "$mode" \
+    --argjson addresses "$addrs" --arg gateway "$gw" --argjson dns "$dns" \
+    '{interface:$interface,role:$role,label:$label,mode:$mode,addresses:$addresses,gateway:$gateway,dns:$dns}'
+}
+apply_body(){
+  body=$1
+  "$CTL" op segment.set "$body" | jq -e '.ok==true' >/dev/null
+}
+demote_other_wan(){
+  target=$1
+  old=$(state | jq -r --arg t "$target" '.interfaces[]|select(.role=="wan" and .name!=$t)|.name' | head -n1)
+  [ -z "$old" ] || {
+    j=$(iface_json "$old")
+    label=$(printf '%s' "$j" | jq -r '.label // ""')
+    apply_body "$(segment_body_preserve "$old" none "$label" yes)"
+  }
+}
+set_wan_preserve(){
+  i=$1; valid_iface "$i" || die "unknown WAN interface: $i"
+  demote_other_wan "$i"
+  j=$(iface_json "$i")
+  mode=$(printf '%s' "$j" | jq -r '.mode')
+  label=$(printf '%s' "$j" | jq -r '.label // ""'); [ -n "$label" ] || label=WAN
+  if [ "$mode" = none ]; then
+    body=$(jq -nc --arg i "$i" '{interface:$i,role:"wan",label:"WAN",mode:"dhcp",addresses:[],gateway:"",dns:[]}')
+  else
+    body=$(segment_body_preserve "$i" wan "$label" no)
+  fi
+  apply_body "$body"
+}
+set_lan_preserve(){
+  i=$1 cidr=${2:-}; valid_iface "$i" || die "unknown LAN interface: $i"
+  [ "$(iface_json "$i" | jq -r '.role')" != wan ] || die "$i is the WAN; choose a different LAN interface"
+  j=$(iface_json "$i")
+  mode=$(printf '%s' "$j" | jq -r '.mode')
+  label=$(printf '%s' "$j" | jq -r '.label // ""'); [ -n "$label" ] || label=LAN
+  if [ -n "$cidr" ]; then
+    body=$(jq -nc --arg i "$i" --arg cidr "$cidr" --arg label "$label" '{interface:$i,role:"lan",label:$label,mode:"static",addresses:[$cidr],gateway:"",dns:[]}')
+  elif [ "$mode" = none ]; then
+    die "$i has no IPv4 address; provide a LAN CIDR (for example 192.168.1.1/24)"
+  else
+    body=$(segment_body_preserve "$i" lan "$label" yes)
+  fi
+  apply_body "$body"
+}
+resolve_choice(){
+  choice=$1
+  case "$choice" in
+    '' ) return 1;;
+    *[!0-9]* ) printf '%s' "$choice";;
+    * ) candidates | sed -n "${choice}p" | cut -f1;;
+  esac
+}
+interactive(){
+  echo "LiteFWM console network setup"
+  echo "This changes the live network immediately. It is intended for first install and console recovery."
+  echo
+  show
+  current=$(state | jq -r '.interfaces[]|select(.role=="wan")|.name' | head -n1)
+  def=$(ip -4 route show default 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="dev"){print $(i+1);exit}}')
+  default=${current:-$def}
+  printf 'Select WAN / Internet interface by number or name [%s]: ' "${default:-}"
+  IFS= read -r pick || true
+  [ -n "$pick" ] || pick=$default
+  wan=$(resolve_choice "$pick") || die "WAN is required"
+  valid_iface "$wan" || die "unknown interface: $wan"
+  set_wan_preserve "$wan"
+  echo "WAN assigned to $wan."
+
+  echo
+  show
+  firstlan=$(candidates | awk -F '\t' -v w="$wan" '$1!=w && $3!="wan"{print $1;exit}')
+  printf 'Select primary LAN / internal interface by number or name [%s], or "none": ' "${firstlan:-none}"
+  IFS= read -r pick || true
+  [ -n "$pick" ] || pick=${firstlan:-none}
+  if [ "$pick" != none ]; then
+    lan=$(resolve_choice "$pick") || die "invalid LAN selection"
+    valid_iface "$lan" || die "unknown interface: $lan"
+    j=$(iface_json "$lan")
+    if [ "$(printf '%s' "$j" | jq -r '.mode')" = none ]; then
+      printf 'LAN IPv4 CIDR [192.168.1.1/24]: '
+      IFS= read -r cidr || true
+      cidr=${cidr:-192.168.1.1/24}
+      set_lan_preserve "$lan" "$cidr"
+    else
+      set_lan_preserve "$lan"
+    fi
+    echo "LAN assigned to $lan."
+  fi
+  echo
+  show
+  echo "Network roles applied. The WAN is the appliance Internet edge and owns outbound NAT/default egress. LAN segments are internal routed networks."
+}
+usage(){
+  cat <<'TXT'
+Usage:
+  lfw-setup                         interactive console setup
+  lfw-setup show                    show live interfaces and roles
+  lfw-setup wan INTERFACE           assign WAN; preserves addressing, or starts DHCP if unaddressed
+  lfw-setup lan INTERFACE [CIDR]    assign LAN; CIDR required if the interface is unaddressed
+
+Examples:
+  lfw-setup wan eth0
+  lfw-setup lan eth1 192.168.10.1/24
+TXT
+}
+need_root
+case "${1:-}" in
+  ''|interactive) interactive;;
+  show) show;;
+  wan) [ $# -eq 2 ] || { usage; exit 2; }; set_wan_preserve "$2"; show;;
+  lan) [ $# -ge 2 ] && [ $# -le 3 ] || { usage; exit 2; }; set_lan_preserve "$2" "${3:-}"; show;;
+  -h|--help|help) usage;;
+  *) usage >&2; exit 2;;
+esac

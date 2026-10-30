@@ -1,7 +1,8 @@
 #!/bin/sh
 # lfwctl - LiteFWM control. Reads live state, applies changes immediately.
 #
-#   lfwctl state                     live system snapshot (JSON)
+#   lfwctl state                     compatibility full-system snapshot (JSON)
+#   lfwctl get RESOURCE [ID]         resource-specific live state (JSON)
 #   lfwctl op NAME [JSON]            apply one change (JSON body from arg or stdin)
 #   lfwctl persist                   rewrite boot files from the live system
 #   lfwctl ops                       list operations
@@ -14,7 +15,7 @@ if [ -z "${LFW_LIB:-}" ]; then
   else LFW_LIB=$(CDPATH='' cd -- "$(dirname -- "$0")/../lib" && pwd -P); fi
 fi
 export LFW_LIB
-for _m in common net fw dhcp sys; do
+for _m in common net fw dhcp sys modules; do
   # shellcheck disable=SC1090
   . "$LFW_LIB/$_m.sh"
 done
@@ -35,19 +36,106 @@ lfw_state() {
   _dh=$(dhcpd_all)
   jq -n --argjson ifs "$_ifs" --argjson dhcpd "$_dh" --argjson fw "$(fw_state)" \
         --argjson leases "$(leases_json)" --argjson res "$(reservations_json)" \
-        --argjson dns "$(dns_read)" --argjson sys "$(system_json)" '
+        --argjson dns "$(dns_read)" --argjson sys "$(system_json)" --argjson modules "$(modules_json)" '
     ($res | map({(.mac): .}) | add // {}) as $rm |
     { system: $sys,
       interfaces: [ $ifs[] | . + { dhcpServer: ($dhcpd[.name] // {enabled:false}) } ],
       firewall: $fw,
       dhcp: { leases: [ $leases[] | . + { reserved: ($rm[.mac] != null), reservedIp: ($rm[.mac].ip // null) } ],
               reservations: $res },
-      dns: $dns }'
+      dns: $dns,
+      modules: $modules }'
+}
+
+lfw_identity() {
+  jq -n --arg host "$(hostname)" --arg ver "$(cat "$LFW_LIB/VERSION" 2>/dev/null || echo dev)"     '{hostname:$host,version:$ver}'
+}
+
+lfw_overview() {
+  # Overview is deliberately one compact read. The UI should not spawn several
+  # expensive CGI processes that each rediscover the same live interfaces/firewall.
+  _ifs=$(net_inventory)
+  _dh=$(dhcpd_all)
+  _fw=$(fw_state)
+  _leases=$(leases_json)
+  _sys=$(system_json)
+  jq -n --argjson ifs "$_ifs" --argjson dhcpd "$_dh" --argjson fw "$_fw" \
+        --argjson leases "$_leases" --argjson sys "$_sys" '
+    { system:$sys,
+      interfaces:[ $ifs[] | . + {dhcpServer:($dhcpd[.name] // {enabled:false})} ],
+      firewall:{policies:$fw.policies,rules:$fw.rules,forwards:$fw.forwards,masquerade:$fw.masquerade},
+      dhcp:{leases:$leases,reservations:[]} }'
+}
+
+lfw_interfaces() {
+  jq -n --argjson interfaces "$(net_inventory)" '{interfaces:$interfaces}'
+}
+
+lfw_segments() {
+  _ifs=$(net_inventory)
+  _dh=$(dhcpd_all)
+  jq -n --argjson ifs "$_ifs" --argjson dhcpd "$_dh"     '{interfaces:[ $ifs[] | . + {dhcpServer:($dhcpd[.name] // {enabled:false})} ]}'
+}
+
+lfw_firewall() {
+  fw_state | jq '{firewall:{policies:.policies,rules:.rules,masquerade:.masquerade}}'
+}
+
+lfw_forwards() {
+  fw_state | jq '{firewall:{forwards:.forwards}}'
+}
+
+lfw_dhcp() {
+  _ifs=$(net_inventory)
+  _dh=$(dhcpd_all)
+  _leases=$(leases_json)
+  _res=$(reservations_json)
+  _dns=$(dns_read)
+  jq -n --argjson ifs "$_ifs" --argjson dhcpd "$_dh" --argjson leases "$_leases"         --argjson res "$_res" --argjson dns "$_dns" '
+    ($res | map({(.mac): .}) | add // {}) as $rm |
+    { interfaces:[ $ifs[] | . + {dhcpServer:($dhcpd[.name] // {enabled:false})} ],
+      dhcp:{leases:[ $leases[] | . + {reserved:($rm[.mac] != null),reservedIp:($rm[.mac].ip // null)} ],
+            reservations:$res},
+      dns:{domain:($dns.domain // "")} }'
+}
+
+lfw_dns() {
+  jq -n --argjson dns "$(dns_read)" '{dns:$dns}'
+}
+
+lfw_system() {
+  jq -n --argjson system "$(system_json)" '{system:$system}'
+}
+
+lfw_modules() {
+  jq -n --argjson modules "$(modules_catalog_json)" '{modules:$modules}'
+}
+
+lfw_module() {
+  _mid=${1:-}
+  module_id_ok "$_mid" || die "invalid module id"
+  jq -n --argjson module "$(module_json "$_mid")" '{modules:[$module]}'
 }
 
 case "${1:-}" in
   state)
     lfw_state
+    ;;
+  get)
+    case "${2:-}" in
+      identity) lfw_identity;;
+      overview) lfw_overview;;
+      interfaces) lfw_interfaces;;
+      segments) lfw_segments;;
+      firewall) lfw_firewall;;
+      port-forwards) lfw_forwards;;
+      dhcp) lfw_dhcp;;
+      dns) lfw_dns;;
+      modules) lfw_modules;;
+      system) lfw_system;;
+      module) lfw_module "${3:-}";;
+      *) die "unknown resource: ${2:-}";;
+    esac
     ;;
   op)
     _name=${2:-}
@@ -62,7 +150,10 @@ case "${1:-}" in
     # one change at a time
     exec 9>"$LFW_RUN/lock"
     timeout 60 flock -x 9 || { jq -n '{ok:false,error:"another change is in progress"}'; exit 1; }
-    ( warn() { printf '%s\n' "$*" >>"$WARNF"; }; "$_fn" ) >/dev/null 2>"$ERR"
+    # The parent owns fd 9 for the duration of the mutation. Close it in the
+    # operation subprocess so daemons started by an operation cannot inherit
+    # the flock and poison all subsequent mutations.
+    ( exec 9>&-; warn() { printf '%s\n' "$*" >>"$WARNF"; }; "$_fn" ) >/dev/null 2>"$ERR"
     _rc=$?
     _w=$(jq -R . <"$WARNF" | jq -s .)
     _res=$(cat "$RESULT"); [ -n "$_res" ] || _res=null

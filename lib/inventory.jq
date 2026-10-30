@@ -7,6 +7,7 @@ def kindof($l):
   if $l.ifname == "lo" then "loopback"
   elif $k == "bridge" then "bridge"
   elif $k == "vlan" then "vlan"
+  elif ($k == "tun" or $k == "ovpn") then "vpn"
   elif ($k == "" or $k == "veth") and (($l.link_type // "") == "ether") then "physical"
   else "other" end;
 def meta($a):

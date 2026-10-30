@@ -20,6 +20,7 @@ iface_kind() {
   case "$_k" in
     bridge\|*) echo bridge;;
     vlan\|*) echo vlan;;
+    ovpn\|*|tun\|*) echo vpn;;
     \|ether|veth\|ether) echo physical;;
     *) echo other;;
   esac

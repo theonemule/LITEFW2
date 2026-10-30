@@ -1,0 +1,145 @@
+#!/usr/bin/env python3
+import os, pathlib, re, subprocess, sys, time
+import pexpect
+
+if len(sys.argv) != 2:
+    raise SystemExit("usage: iso-offline-install-smoke.py /path/to/litefwm.iso")
+
+ISO=os.path.abspath(sys.argv[1])
+if not os.path.isfile(ISO):
+    raise SystemExit(f"ISO not found: {ISO}")
+
+WORK=os.environ.get("LITEFWM_OFFLINE_WORK", "/dev/shm/litefwm-offline-install")
+DISK=f"{WORK}/disk.qcow2"
+LIVE_LOG=f"{WORK}/live-serial.log"
+DISK_LOG=f"{WORK}/disk-serial.log"
+pathlib.Path(WORK).mkdir(parents=True, exist_ok=True)
+q=None
+
+def sh(args, check=True):
+    p=subprocess.run(args, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+    if check and p.returncode:
+        raise RuntimeError(f"command failed: {' '.join(args)}\n{p.stdout}")
+    return p.stdout
+
+def spawn_vm(from_iso):
+    global q
+    accel="kvm" if os.path.exists("/dev/kvm") else "tcg"
+    args=[
+        "-name","litefwm-offline-install-smoke",
+        "-machine",f"accel={accel}",
+        "-cpu","host" if accel=="kvm" else "qemu64",
+        "-smp","2","-m","1024M",
+        "-drive",f"file={DISK},if=virtio,format=qcow2",
+        "-nic","none",
+        "-display","none","-monitor","none","-serial","stdio",
+        "-no-reboot",
+    ]
+    if from_iso:
+        args += ["-cdrom",ISO,"-boot","order=d"]
+        logpath=LIVE_LOG
+    else:
+        args += ["-boot","order=c"]
+        logpath=DISK_LOG
+    log=open(logpath,"w", buffering=1)
+    q=pexpect.spawn("qemu-system-x86_64", args, encoding="utf-8", codec_errors="ignore", timeout=300)
+    q.logfile=log
+    q.expect(r"(?i)login:\s*$", timeout=360)
+    q.sendline("root")
+    i=q.expect([r"#\s*$", r"(?i)password:\s*$"], timeout=60)
+    if i == 1:
+        q.sendline("")
+        q.expect(r"#\s*$", timeout=60)
+
+def vmcmd(cmd, timeout=120):
+    marker=f"__OFFRC_{int(time.time()*1000000)}__"
+    q.sendline(f"{cmd}; rc=$?; echo {marker}$rc")
+    i=q.expect([re.escape(marker)+r"(\d+)", pexpect.EOF, pexpect.TIMEOUT], timeout=timeout)
+    if i != 0:
+        raise RuntimeError(f"VM command timed out/closed: {cmd}")
+    out=q.before
+    rc=int(q.match.group(1))
+    try: q.expect(r"#\s*$", timeout=5)
+    except Exception: pass
+    if rc:
+        raise RuntimeError(f"VM command failed rc={rc}: {cmd}\n{out}")
+    return out
+
+def stop_vm():
+    global q
+    if q is not None and q.isalive():
+        q.terminate(force=True)
+    q=None
+
+def install_from_iso():
+    spawn_vm(True)
+    vmcmd("test ! -e /sys/class/net/eth0")
+    vmcmd("grep -q '/media/cdrom/apks' /etc/apk/repositories")
+    # Prove the media repository can resolve the full base install and supported
+    # optional modules with APK network access explicitly disabled.
+    pkgs=(
+        "alpine-base alpine-conf linux-lts syslinux e2fsprogs "
+        "ifupdown-ng iproute2 iptables dnsmasq jq util-linux openssh "
+        "lighttpd lighttpd-mod_auth apache2-utils sudo busybox-openrc "
+        "bind bind-tools bind-openrc openvpn openvpn-openrc easy-rsa inadyn inadyn-openrc"
+    )
+    vmcmd(f"apk add --simulate --no-network {pkgs} >/tmp/apk-sim.txt", timeout=180)
+    vmcmd("grep -q 'LiteFWM appliance installer' /etc/motd")
+    vmcmd("test -x /usr/sbin/lfwctl")
+    # setup-disk itself has no network override, so the absence of any NIC plus
+    # a media-only repositories file makes this a hard offline installation test.
+    vmcmd("cp /etc/apk/repositories /tmp/repositories.before")
+    vmcmd("grep '/media/cdrom/apks' /tmp/repositories.before")
+    q.sendline("setup-disk -m sys -s 0 /dev/vda")
+    i=q.expect([r"(?is)erase.*continue.*\(y/n\)", r"(?is)installation is complete", r"#\s*$", pexpect.EOF, pexpect.TIMEOUT], timeout=180)
+    if i == 0:
+        q.sendline("y")
+        i=q.expect([r"(?is)installation is complete", r"#\s*$", pexpect.EOF, pexpect.TIMEOUT], timeout=600)
+    if i not in (0,1):
+        raise RuntimeError("offline setup-disk did not complete")
+    if i == 0:
+        try: q.expect(r"#\s*$", timeout=60)
+        except Exception: pass
+    vmcmd("test -b /dev/vda")
+    stop_vm()
+
+def verify_installed_system():
+    spawn_vm(False)
+    for p in (
+        "alpine-base alpine-conf linux-lts ifupdown-ng iproute2 iptables dnsmasq jq "
+        "util-linux openssh lighttpd lighttpd-mod_auth apache2-utils sudo busybox-openrc"
+    ).split():
+        vmcmd(f"apk info -e {p}")
+    vmcmd("test -x /usr/sbin/lfwctl")
+    vmcmd("test -x /usr/sbin/lfw-setup")
+    vmcmd("test -x /usr/lib/litefwm/cgi/api.cgi")
+    vmcmd("test -f /usr/share/litefwm/www/index.html")
+    vmcmd("test -f /etc/lighttpd/litefwm.conf")
+    vmcmd("test -f /etc/sysctl.d/90-litefwm.conf")
+    vmcmd("test -f /etc/iptables/rules-save")
+    vmcmd("test -L /etc/runlevels/default/lighttpd")
+    vmcmd("test -L /etc/runlevels/default/dnsmasq")
+    vmcmd("test -L /etc/runlevels/boot/iptables")
+    vmcmd("test -L /etc/runlevels/boot/litefwm-init")
+    vmcmd("test -s /root/litefwm-admin.txt")
+    stop_vm()
+
+def main():
+    global q
+    try:
+        try: os.unlink(DISK)
+        except FileNotFoundError: pass
+        sh(["qemu-img","create","-f","qcow2",DISK,os.environ.get("LITEFWM_DISK_SIZE","3G")])
+        print(f"ISO: {ISO}")
+        print("Network: none (QEMU -nic none)")
+        install_from_iso()
+        print("PASS setup-disk completed with no NIC/network")
+        verify_installed_system()
+        print("PASS installed Alpine base and LiteFWM runtime packages are present")
+        print("PASS LiteFWM CLI, API, web UI, config and boot services survived disk install")
+        print("RESULT: offline ISO install smoke test passed")
+    finally:
+        stop_vm()
+
+if __name__=="__main__":
+    main()

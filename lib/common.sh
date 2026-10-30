@@ -25,7 +25,9 @@ die() { printf '%s\n' "$*" >&2; exit 1; }
 warn() { WARNINGS="${WARNINGS}${WARNINGS:+
 }$*"; }
 log_op() {
-  printf '%s %s %s\n' "$(date '+%Y-%m-%dT%H:%M:%S')" "${LFW_CLIENT:-cli}" "$*" >>"$LFW_LOG" 2>/dev/null || true
+  _msg="${LFW_CLIENT:-cli} $*"
+  printf '%s %s\n' "$(date '+%Y-%m-%dT%H:%M:%S')" "$_msg" >>"$LFW_LOG" 2>/dev/null || true
+  command -v logger >/dev/null 2>&1 && logger -t litefwm -- "$_msg" 2>/dev/null || true
 }
 
 # run CMD... : run a command, abort the operation with its stderr on failure.

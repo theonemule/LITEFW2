@@ -8,13 +8,103 @@ ssh_enabled() {
   pidof sshd >/dev/null 2>&1 || svc sshd status
 }
 
+
+# ------------------------------------------------------------- logging
+# Alpine BusyBox syslogd is the source of truth. We read and update its native
+# /etc/conf.d/syslog options instead of maintaining a LiteFWM settings database.
+syslog_conf() { echo /etc/conf.d/syslog; }
+syslog_opts() {
+  local _f
+  _f=$(syslog_conf)
+  sed -n 's/^[[:space:]]*SYSLOGD_OPTS="\([^"]*\)".*/\1/p' "$_f" 2>/dev/null | head -n1
+}
+
+logging_json() {
+  local _opts _remote _server _port _local _running
+  _opts=$(syslog_opts)
+  _remote="" _server="" _port=514 _local=true _running=false
+  set -- $_opts
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      -R)
+        shift
+        [ $# -gt 0 ] && _remote=$1
+        ;;
+      -R*) _remote=${1#-R};;
+    esac
+    shift || true
+  done
+  if [ -n "$_remote" ]; then
+    _local=false
+    printf ' %s ' "$_opts" | grep -Eq ' -L( |$)' && _local=true
+    case "$_remote" in
+      *:*) _server=${_remote%:*}; _port=${_remote##*:};;
+      *) _server=$_remote; _port=514;;
+    esac
+  fi
+  svc syslog status && _running=true
+  jq -n --arg server "$_server" --argjson port "$_port" \
+    --argjson enabled "$([ -n "$_remote" ] && echo true || echo false)" \
+    --argjson local "$_local" --argjson running "$_running" \
+    '{remoteEnabled:$enabled,server:$server,port:$port,localEnabled:$local,protocol:"udp",serviceRunning:$running}'
+}
+
+# logging.set {remoteEnabled, server, port, localEnabled}
+op_logging_set() {
+  local _enabled _server _port _local _opts _new _tok _conf _tmp
+  _enabled=$(jget remoteEnabled); [ -n "$_enabled" ] || _enabled=false
+  case "$_enabled" in true|false) :;; *) die "remoteEnabled must be true or false";; esac
+  _local=$(jget localEnabled); [ -n "$_local" ] || _local=true
+  case "$_local" in true|false) :;; *) die "localEnabled must be true or false";; esac
+  _server=$(jget server)
+  _port=$(jget port); [ -n "$_port" ] || _port=514
+  if [ "$_enabled" = true ]; then
+    [ -n "$_server" ] || die "remote syslog server is required"
+    is_ipv4 "$_server" || is_fqdn "$_server" || die "invalid remote syslog server"
+    is_port "$_port" || die "invalid remote syslog port"
+  fi
+
+  # Preserve unrelated syslogd flags while replacing remote/local-forward flags.
+  _opts=$(syslog_opts); _new=""
+  set -- $_opts
+  while [ $# -gt 0 ]; do
+    _tok=$1; shift
+    case "$_tok" in
+      -R) [ $# -gt 0 ] && shift || true;;
+      -R*|-L) :;;
+      *) _new="${_new}${_new:+ }$_tok";;
+    esac
+  done
+  if [ "$_enabled" = true ]; then
+    _new="${_new}${_new:+ }-R $_server:$_port"
+    [ "$_local" = true ] && _new="$_new -L"
+  fi
+
+  _conf=$(syslog_conf); _tmp=$(mktemp)
+  if [ -r "$_conf" ]; then
+    awk -v line="SYSLOGD_OPTS=\"$_new\"" '
+      BEGIN{done=0}
+      /^[[:space:]]*SYSLOGD_OPTS=/{if(!done){print line;done=1};next}
+      {print}
+      END{if(!done)print line}
+    ' "$_conf" >"$_tmp"
+  else
+    printf 'SYSLOGD_OPTS="%s"\n' "$_new" >"$_tmp"
+  fi
+  install -m 0644 "$_tmp" "$_conf"; rm -f "$_tmp"
+  svc_enable syslog boot
+  svc syslog restart || svc syslog start || die "syslog service failed to restart"
+  log_op "logging.set remote=$_enabled server=${_server:-none} port=$_port local=$_local"
+  logging_json >"$RESULT"
+}
+
 client_iface() { # IP -> interface the client is reached through
   [ -n "$1" ] || return 0
   ip -4 route get "$1" 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="dev") {print $(i+1); exit}}'
 }
 
 system_json() {
-  local _up _load _mem _acc _dns _sshon _dm _cif
+  local _up _load _mem _acc _dns _sshon _dm _cif _logging
   _up=$(awk '{print int($1)}' /proc/uptime)
   _load=$(cut -d' ' -f1-3 /proc/loadavg)
   _mem=$(awk '/^MemTotal/{t=$2} /^MemAvailable/{a=$2} END{printf "{\"totalKb\":%d,\"availableKb\":%d}", t, a}' /proc/meminfo)
@@ -23,16 +113,18 @@ system_json() {
   _sshon=false; ssh_enabled && _sshon=true
   _dm=false; dnsmasq_running && _dm=true
   _cif=$(client_iface "${LFW_CLIENT:-}")
+  _logging=$(logging_json)
   jq -n --arg host "$(hostname)" --arg ver "$(cat "$LFW_LIB/VERSION" 2>/dev/null || echo dev)" \
     --arg kernel "$(uname -r)" --arg os "$(cat /etc/alpine-release 2>/dev/null || echo unknown)" \
     --argjson uptime "$_up" --arg load "$_load" --argjson mem "$_mem" \
     --argjson port "$(mgmt_port)" --argjson sshPort "$(ssh_port)" --argjson ssh "$_sshon" \
     --argjson access "$_acc" --argjson resolv "$_dns" --argjson dnsmasq "$_dm" \
-    --arg fwd "$(cat /proc/sys/net/ipv4/ip_forward)" --arg cif "$_cif" --arg client "${LFW_CLIENT:-}" '
+    --arg fwd "$(cat /proc/sys/net/ipv4/ip_forward)" --arg cif "$_cif" --arg client "${LFW_CLIENT:-}" --argjson logging "$_logging" '
     { hostname: $host, version: $ver, kernel: $kernel, alpine: $os, uptime: $uptime,
       load: $load, memory: $mem, ipForward: ($fwd == "1"),
       management: { port: $port, access: $access, clientIp: $client, clientInterface: $cif },
       ssh: { enabled: $ssh, port: $sshPort },
+      logging: $logging,
       resolvers: $resolv, services: { dnsmasq: $dnsmasq } }'
 }
 

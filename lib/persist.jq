@@ -33,4 +33,4 @@ def stanza:
      "    post-up ip link set dev \(.name) alias 'lfw:role=\(.role);name=\(.label)'"
    else empty end),
   "";
-[ $I[] | select(.kind != "other") ] | sort_by(tier, .name) | .[] | stanza
+[ $I[] | select(.kind == "physical" or .kind == "bridge" or .kind == "vlan") ] | sort_by(tier, .name) | .[] | stanza

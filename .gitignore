@@ -2,3 +2,6 @@
 *.tmp
 .DS_Store
 test-output/
+dist/
+__pycache__/
+*.pyc

@@ -1,0 +1,31 @@
+#!/bin/sh
+# Preserve Alpine's stock setup-alpine flow and insert the LiteFWM network-role
+# step immediately before Alpine's Disk & Install phase.
+set -eu
+
+stock=/sbin/setup-alpine
+[ -x "$stock" ] || { echo "stock Alpine installer not found: $stock" >&2; exit 1; }
+[ -x /usr/sbin/lfw-setup ] || { echo "LiteFWM setup utility is missing" >&2; exit 1; }
+
+tmp=$(mktemp /tmp/setup-alpine-litefwm.XXXXXX)
+trap 'rm -f "$tmp"' EXIT HUP INT TERM
+
+if ! awk '
+  BEGIN { injected=0 }
+  /^[[:space:]]*print_heading2 " Disk & Install"[[:space:]]*$/ && !injected {
+    print "echo"
+    print "print_heading2 \" LiteFWM appliance network\""
+    print "print_heading2 \"--------------------------\""
+    print "/usr/sbin/lfw-setup interactive || exit 1"
+    print "echo"
+    injected=1
+  }
+  { print }
+  END { if (!injected) exit 42 }
+' "$stock" >"$tmp"; then
+  echo "The Alpine installer layout changed and the LiteFWM hook could not be inserted." >&2
+  echo "Run /sbin/setup-alpine for the stock installer, then run lfw-setup from the console." >&2
+  exit 1
+fi
+chmod 0755 "$tmp"
+exec "$tmp" "$@"
