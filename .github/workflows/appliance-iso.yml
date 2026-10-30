@@ -65,9 +65,18 @@ jobs:
       - name: Offline installation smoke test
         env:
           LITEFWM_OFFLINE_WORK: ${{ runner.temp }}/litefw2-offline
+          LITEFWM_QEMU_ACCEL: tcg
         run: |
           set -euo pipefail
           python3 tests/iso-offline-install-smoke.py dist/*.iso
+      - name: Upload serial logs on test failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: litefw2-offline-test-logs-${{ github.run_number }}
+          path: ${{ runner.temp }}/litefw2-offline/*-serial.log
+          if-no-files-found: ignore
+          retention-days: 7
       - name: Publish build artifact
         uses: actions/upload-artifact@v4
         with:

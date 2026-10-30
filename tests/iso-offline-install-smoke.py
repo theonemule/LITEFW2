@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-import os, pathlib, re, subprocess, sys, time
+import os, pathlib, re, subprocess, sys, time, fcntl
 import pexpect
 
 if len(sys.argv) != 2:
@@ -22,9 +22,24 @@ def sh(args, check=True):
         raise RuntimeError(f"command failed: {' '.join(args)}\n{p.stdout}")
     return p.stdout
 
+def usable_kvm():
+    """A visible /dev/kvm is not necessarily usable in hosted CI."""
+    try:
+        fd = os.open("/dev/kvm", os.O_RDWR | os.O_CLOEXEC)
+        try:
+            return fcntl.ioctl(fd, 0xAE00, 0) == 12  # KVM_GET_API_VERSION
+        finally:
+            os.close(fd)
+    except OSError:
+        return False
+
+
 def spawn_vm(from_iso):
     global q
-    accel="kvm" if os.path.exists("/dev/kvm") else "tcg"
+    accel = os.environ.get("LITEFWM_QEMU_ACCEL") or ("kvm" if usable_kvm() else "tcg")
+    if accel not in ("kvm", "tcg"):
+        raise ValueError("LITEFWM_QEMU_ACCEL must be kvm or tcg")
+    print(f"QEMU acceleration: {accel}", flush=True)
     args=[
         "-name","litefwm-offline-install-smoke",
         "-machine",f"accel={accel}",
