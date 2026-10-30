@@ -1,11 +1,52 @@
 #!/bin/sh
-# Preserve Alpine's stock setup-alpine flow and insert the LiteFWM network-role
-# step immediately before Alpine's Disk & Install phase.
+# Single interactive installer: Alpine base, WAN/LAN firewall configuration,
+# and management password before disk installation.
 set -eu
 
 stock=/sbin/setup-alpine
 [ -x "$stock" ] || { echo "stock Alpine installer not found: $stock" >&2; exit 1; }
-[ -x /usr/sbin/lfw-setup ] || { echo "LiteFWM setup utility is missing" >&2; exit 1; }
+[ -x /usr/sbin/lfw-setup ] || { echo "LiteFW2 network configuration is missing" >&2; exit 1; }
+
+# This is the only initial installation entry point. Support routines are
+# invoked internally, never as additional installation commands.
+configure_admin() {
+  [ "$(id -u)" -eq 0 ] || return 1
+  command -v htpasswd >/dev/null 2>&1 || { echo 'Missing apache2-utils' >&2; return 1; }
+  printf '\nLiteFW2 administrator account: admin\n'
+  old_stty=''
+  if [ -t 0 ]; then
+    old_stty=$(stty -g)
+    stty -echo
+  fi
+  while :; do
+    printf 'Set web administrator password (12+ characters): ' >&2
+    IFS= read -r password || return 1
+    printf '\n' >&2
+    if [ "${#password}" -lt 12 ]; then
+      echo 'At least 12 characters required.' >&2
+      continue
+    fi
+    printf 'Confirm web administrator password: ' >&2
+    IFS= read -r confirmation || return 1
+    printf '\n' >&2
+    if [ "$password" = "$confirmation" ]; then break; fi
+    echo 'Passwords did not match. Try again.' >&2
+  done
+  if [ -n "$old_stty" ]; then stty "$old_stty"; fi
+  install -d -m 0755 /etc/litefwm
+  umask 077
+  password_file=$(mktemp /etc/litefwm/.htpasswd.XXXXXX)
+  if ! printf '%s\n' "$password" | htpasswd -i -B -C 12 -c "$password_file" admin >/dev/null; then
+    rm -f "$password_file"
+    unset password confirmation
+    return 1
+  fi
+  unset password confirmation
+  chown root:lighttpd "$password_file"
+  chmod 0640 "$password_file"
+  mv -f "$password_file" /etc/litefwm/htpasswd
+  echo 'Web administrator password configured.'
+}
 
 tmp=$(mktemp /tmp/setup-alpine-litefwm.XXXXXX)
 trap 'rm -f "$tmp"' EXIT HUP INT TERM
@@ -18,7 +59,8 @@ if ! awk '
     print "print_heading2 \"--------------------------\""
     print "/usr/sbin/lfw-setup interactive || exit 1"
     print "print_heading2 \" LiteFW2 web administrator\""
-    print "/usr/sbin/lfw-admin-setup || exit 1"
+    print "# LiteFW2 password configuration injected after generating installer"
+    print "__LITEFW2_ADMIN_HOOK__"
     print "echo"
     injected=1
   }
@@ -26,8 +68,24 @@ if ! awk '
   END { if (!injected) exit 42 }
 ' "$stock" >"$tmp"; then
   echo "The Alpine installer layout changed and the LiteFWM hook could not be inserted." >&2
-  echo "Run /sbin/setup-alpine for the stock installer, then run lfw-setup from the console." >&2
+  echo "Unable to continue safely; the LiteFW2 installer requires an updated integration." >&2
   exit 1
 fi
+# Replace the hook marker with a single installer-local function invocation.
+# The function definition stays in this script, not in a separate setup tool.
+hook=$(mktemp /tmp/litefw2-admin-hook.XXXXXX)
+trap 'rm -f "$tmp" "$hook"' EXIT HUP INT TERM
+# Generate the function definition from this file, keeping one source of truth.
+sed -n '/^configure_admin() {/,/^}$/p' "$0" >"$hook"
+printf 'configure_admin || exit 1\n' >>"$hook"
+awk -v hook="$hook" '
+  /__LITEFW2_ADMIN_HOOK__/ {
+    while ((getline line < hook) > 0) print line
+    close(hook)
+    next
+  }
+  {print}
+' "$tmp" >"$tmp.new"
+mv -f "$tmp.new" "$tmp"
 chmod 0755 "$tmp"
 exec "$tmp" "$@"

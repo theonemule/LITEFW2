@@ -56,7 +56,9 @@ disk first; installation can erase it. See [APPLIANCE.md](APPLIANCE.md).
 The legacy `install.sh` is not a supported product installation method.
 Debian and Ubuntu are not supported appliance targets.
 
-`lfw-setup` is installed as a console recovery tool. It reads the live network
+`setup-alpine` is the single initial installer for Alpine, firewall WAN/LAN, and
+web administrator password. `lfw-setup` remains a console recovery tool for
+installed systems. It reads the live network
 and can reassign WAN/LAN roles even when the web UI is unreachable:
 
     lfw-setup
@@ -67,7 +69,7 @@ and can reassign WAN/LAN roles even when the web UI is unreachable:
 The firewall starts in default-deny with the web UI and SSH reachable.
 Set the web administrator password during `setup-alpine`. The password itself
 is never saved as plaintext; only its bcrypt hash is stored. Use `lfw-setup`
-from the installed console to reconfigure WAN/LAN interfaces.
+only for later recovery or reconfiguration, not initial installation.
 
 Upgrading from the older LiteFWM control plane preserves native BIND, OpenVPN
 and inadyn configuration where present, removes the old `/opt/litefwm` control

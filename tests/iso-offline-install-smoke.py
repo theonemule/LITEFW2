@@ -102,7 +102,11 @@ def install_from_iso():
     vmcmd("grep -q 'LiteFWM appliance installer' /etc/motd")
     vmcmd("test -x /usr/sbin/lfwctl")
     vmcmd("test ! -e /root/litefwm-admin.txt")
-    vmcmd("printf 'TestOnlyPassword456!\\nTestOnlyPassword456!\\n' | /usr/sbin/lfw-admin-setup")
+    vmcmd("test -x /usr/local/sbin/setup-alpine")
+    # This low-level setup-disk smoke bypasses the integrated setup-alpine
+    # prompts; create a test-only hash so it tests disk persistence honestly.
+    vmcmd("htpasswd -bBc 12 /etc/litefwm/htpasswd admin 'SmokeTestOnlyPassword123!' >/dev/null")
+    vmcmd("chown root:lighttpd /etc/litefwm/htpasswd && chmod 0640 /etc/litefwm/htpasswd")
     vmcmd("test -s /etc/litefwm/htpasswd")
     # setup-disk itself has no network override, so the absence of any NIC plus
     # a media-only repositories file makes this a hard offline installation test.

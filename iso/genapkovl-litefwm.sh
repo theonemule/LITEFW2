@@ -18,7 +18,6 @@ install -d   "$tmp/usr/sbin" "$tmp/usr/lib/litefwm" "$tmp/usr/lib/litefwm/cgi"  
 # LiteFWM CLI and runtime library.
 install -m 0755 "$src/bin/lfwctl" "$tmp/usr/sbin/lfwctl"
 install -m 0755 "$src/bin/lfw-setup" "$tmp/usr/sbin/lfw-setup"
-install -m 0755 "$src/iso/lfw-admin-setup" "$tmp/usr/sbin/lfw-admin-setup"
 install -m 0755 "$src/iso/setup-alpine-litefwm" "$tmp/usr/local/sbin/setup-alpine"
 
 for f in "$src"/lib/*.sh "$src"/lib/*.jq "$src"/lib/*.awk; do
@@ -133,7 +132,6 @@ WORLD
 {
   [ ! -f "$tmp/usr/sbin/lfwctl" ] || printf '%s\n' "$tmp/usr/sbin/lfwctl"
   [ ! -f "$tmp/usr/sbin/lfw-setup" ] || printf '%s\n' "$tmp/usr/sbin/lfw-setup"
-  [ ! -f "$tmp/usr/sbin/lfw-admin-setup" ] || printf '%s\n' "$tmp/usr/sbin/lfw-admin-setup"
   find "$tmp/usr/lib/litefwm" -type f -print
   find "$tmp/usr/share/litefwm" -type f -print
   printf '%s\n' \
@@ -175,16 +173,15 @@ rc_add savecache shutdown
 cat >"$tmp/etc/motd" <<'MOTD'
 LiteFWM appliance installer
 
-INITIAL INSTALL: run setup-alpine
-FIREWALL NETWORK CONFIGURATION AFTER INSTALL: run lfw-setup
+TO INSTALL ALPINE + CONFIGURE LITEFW2 FIREWALL: run setup-alpine
 
 The normal Alpine setup runs first. Immediately before Disk & Install, LiteFWM
 asks which interface is the WAN / Internet edge and which is the LAN / internal
 network. The stock Alpine installer remains available as /sbin/setup-alpine.
 
 During setup-alpine you will set the LiteFW2 web admin password.
-To reconfigure WAN/LAN later, run: lfw-setup
-To change the web admin password later, run: lfw-admin-setup
+The installer handles Alpine setup, WAN/LAN assignment, and web administrator
+password together. No second setup command is required.
 MOTD
 
 tar -c -C "$tmp" . | gzip -9n >"${host}.apkovl.tar.gz"

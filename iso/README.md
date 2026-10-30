@@ -41,11 +41,13 @@ supports.
 
 ## Installer flow
 
-The ISO deliberately keeps Alpine's installer rather than replacing it.
+Run `setup-alpine` once for the entire installation.
+The ISO keeps Alpine's installer rather than replacing it.
 /usr/local/sbin/setup-alpine wraps the stock setup-alpine flow and inserts
 one LiteFWM step immediately before Alpine's Disk & Install phase. The
 operator selects the WAN / Internet-edge interface and then the LAN / internal
-interface, followed by a mandatory web administrator password and confirmation.
+interface, followed by a mandatory web administrator password and confirmation, all within
+the same `setup-alpine` command.
 Only a bcrypt hash is persisted. The appliance never creates a random password
 or writes a plaintext credential file.
 
