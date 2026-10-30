@@ -21,6 +21,7 @@ docker run --rm \
   -e ALPINE_VERSION="$ALPINE_VERSION" \
   -e ALPINE_BRANCH="$ALPINE_BRANCH" \
   -e ARCH="$ARCH" \
+  -e HOST_UID="$(id -u)" -e HOST_GID="$(id -g)" \
   -v "$ROOT:/src:ro" \
   -v "$OUT:/out" \
   "alpine:$ALPINE_VERSION" /bin/sh -euxc '
@@ -42,6 +43,7 @@ docker run --rm \
       --tag v$ALPINE_VERSION --outdir /out --arch $ARCH --profile litefwm \
       --repository https://dl-cdn.alpinelinux.org/alpine/v$ALPINE_VERSION/main \
       --repository https://dl-cdn.alpinelinux.org/alpine/v$ALPINE_VERSION/community"
+    chown -R "$HOST_UID:$HOST_GID" /out
   '
 
 echo
