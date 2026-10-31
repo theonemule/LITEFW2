@@ -1,51 +1,74 @@
 #!/bin/sh
-# LiteFW appliance installer: Alpine keyboard/timezone/repositories/disk,
-# bounded WAN/LAN/VLAN setup, web administrator and automatic OpenSSH.
+# LiteFW's first-install wizard. Alpine supplies low-level regional and disk
+# utilities only; Alpine's account and interface wizards are never invoked.
 set -eu
-stock=/usr/sbin/setup-alpine
-[ -x "$stock" ] || { echo 'Alpine setup-alpine is unavailable.' >&2; exit 1; }
-for component in /usr/sbin/litefw-network /usr/sbin/litefw-admin; do
-  [ -x "$component" ] || { echo "Missing LiteFW component: $component" >&2; exit 1; }
+PATH=/usr/sbin:/usr/bin:/sbin:/bin
+export PATH
+
+[ "$(id -u)" -eq 0 ] || { echo "LiteFW installation requires the local administrator console." >&2; exit 1; }
+for tool in litefw-network litefw-admin setup-disk setup-keymap setup-timezone setup-apkrepos; do
+  command -v "$tool" >/dev/null 2>&1 || { echo "Missing installer component: $tool" >&2; exit 1; }
 done
-temp=$(mktemp /tmp/litefw-alpine.XXXXXX)
-trap 'rm -f "$temp"' EXIT HUP INT TERM
-# Fail closed if Alpine changes its landmarks: never run the stock
-# potentially unbounded networking wizard or an unexpected user/password step.
-if ! awk '
-  BEGIN { network=0; disk=0; user=0; skip_network=0; skip_user=0 }
-  /print_heading1 " ALPINE LINUX INSTALL"/ {
-    print "print_heading1 \" LiteFW Firewall Appliance Installation\""; next
-  }
-  /^# set Interface$/ {
-    print "echo \"== LiteFW: WAN, LAN and optional VLAN ==\""
-    print "/usr/sbin/litefw-network || exit 1"
-    network=1; skip_network=1; next
-  }
-  skip_network && /^# set root password$/ { skip_network=0 }
-  skip_network { next }
-  /^[[:space:]]*print_heading2 " User"[[:space:]]*$/ {
-    # Apache-style UI users are separate from Unix users. SSH is installed
-    # and started from the appliance image; do not prompt Alpine setup-user
-    # or setup-sshd a second time.
-    print "echo \"LiteFW: OpenSSH is preinstalled and enabled\""
-    user=1; skip_user=1; next
-  }
-  skip_user && /^[[:space:]]*print_heading2 " Disk & Install"[[:space:]]*$/ {
-    print "if [ -d /media/cdrom/apks ] && ! grep -q \"^/media/cdrom/apks\" /etc/apk/repositories; then echo /media/cdrom/apks >>/etc/apk/repositories; fi"
-    print "echo \"== LiteFW: web UI administrator ==\""
-    print "/usr/sbin/litefw-admin || exit 1"
-    disk=1; skip_user=0
-  }
-  skip_user { next }
-  { print }
-  END { if (!network || !user || !disk || skip_network || skip_user) exit 42 }
-' "$stock" >"$temp"; then
-  echo 'Alpine installer layout changed; refusing unsafe setup.' >&2
-  exit 1
+
+echo
+echo '=========================================================='
+echo '               LiteFW Firewall Installation'
+echo '=========================================================='
+echo 'This installs LiteFW, not an Alpine Linux user account.'
+echo 'WAN/LAN settings are saved as LiteFW firewall interfaces.'
+echo 'The login created below is for the LiteFW web management UI.'
+echo 'OpenSSH is installed and enabled automatically; no Linux'
+echo 'user or root password is requested during installation.'
+echo
+
+if [ "${LITEFW_INSTALL_SKIP_REGIONAL:-0}" != 1 ]; then
+  echo '--- Keyboard configuration ---'
+  setup-keymap
+  echo
+  echo '--- Timezone configuration ---'
+  setup-timezone
 fi
-chmod 0700 "$temp"
-echo 'LiteFW appliance installation'
-echo 'Choose Alpine keyboard, timezone and repositories, then the install disk.'
-echo 'LiteFW assigns one WAN and one LAN (optional tagged LAN) and sets UI credentials.'
-echo 'No Unix root password is needed on the local appliance console.'
-"$temp" -e "$@"
+
+echo
+echo '--- LiteFW WAN and LAN interface assignment ---'
+/usr/sbin/litefw-network
+
+# The ISO is a self-contained package repository, usable when WAN is
+# unavailable. Do not replace it with remote mirrors by default.
+if [ -d /media/cdrom/apks ]; then
+  if ! grep -q '^/media/cdrom/apks' /etc/apk/repositories 2>/dev/null; then
+    printf '%s\n' /media/cdrom/apks >>/etc/apk/repositories
+  fi
+fi
+echo
+echo '--- Alpine package repositories ---'
+if grep -q '^/media/.*/apks' /etc/apk/repositories 2>/dev/null; then
+  echo 'The LiteFW installation media is configured for offline packages.'
+  printf 'Add or change internet APK mirrors? [no]: '
+  IFS= read -r repositories || exit 1
+  case "$repositories" in
+    y|Y|yes|YES) setup-apkrepos ;;
+    ''|n|N|no|NO) : ;;
+    *) echo 'Invalid response; installation stopped without changing repositories.' >&2; exit 1 ;;
+  esac
+else
+  echo 'No installation-media repository found; configure APK mirrors.'
+  setup-apkrepos
+fi
+
+echo
+echo '--- LiteFW WEB ADMINISTRATOR (not an Alpine Linux account) ---'
+/usr/sbin/litefw-admin
+[ -s /etc/litefwm/htpasswd ] || { echo "LiteFW web administrator was not configured." >&2; exit 1; }
+
+echo
+echo '--- Install LiteFW to disk ---'
+echo 'The next step will erase the disk you select. Other disks are untouched.'
+if [ -n "${LITEFW_INSTALL_DISK:-}" ]; then
+  setup-disk -m sys -s 0 "$LITEFW_INSTALL_DISK"
+else
+  setup-disk -m sys -s 0
+fi
+echo
+echo 'LiteFW installation complete. Remove the ISO and reboot.'
+echo 'Use the LiteFW web administrator account to sign in to the UI.'

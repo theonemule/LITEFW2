@@ -110,6 +110,9 @@ def install_from_iso():
     vmcmd("test ! -e /root/litefwm-admin.txt")
     vmcmd("test -x /usr/local/sbin/setup-alpine")
     vmcmd("test -x /usr/sbin/setup-alpine")
+    vmcmd("grep -q 'LiteFW WEB ADMINISTRATOR' /usr/sbin/setup-alpine")
+    vmcmd("! grep -q 'setup-interfaces' /usr/sbin/setup-alpine")
+    vmcmd("cmp -s /usr/sbin/setup-alpine /usr/local/sbin/setup-alpine")
     vmcmd("test -x /usr/local/sbin/litefw2-console-login")
     vmcmd("grep -qx 'tty1::respawn:/usr/sbin/litefw-console' /etc/inittab")
     vmcmd("! grep -q '^tty0::respawn:' /etc/inittab")
@@ -119,25 +122,29 @@ def install_from_iso():
     vmcmd("test -c /dev/vcs1")
     vmcmd("i=0; until dd if=/dev/vcs1 bs=4096 count=1 2>/dev/null | tr -d '\\000' | grep -q 'LiteFW'; do i=$((i+1)); [ $i -lt 30 ] || exit 1; sleep 1; done", timeout=70)
     vmcmd("awk -F: '$1==\"root\" {exit ($2!=\"\")} END {}' /etc/shadow")
-    # This low-level setup-disk smoke bypasses the integrated setup-alpine
-    # prompts; create a test-only hash so it tests disk persistence honestly.
-    vmcmd("htpasswd -bB -C 12 -c /etc/litefwm/htpasswd admin 'SmokeTestOnlyPassword123!' >/dev/null")
-    vmcmd("chown root:lighttpd /etc/litefwm/htpasswd && chmod 0640 /etc/litefwm/htpasswd")
-    vmcmd("test -s /etc/litefwm/htpasswd")
-    # setup-disk itself has no network override, so the absence of any NIC plus
-    # a media-only repositories file makes this a hard offline installation test.
-    vmcmd("cp /etc/apk/repositories /tmp/repositories.before")
-    vmcmd("grep '/media/cdrom/apks' /tmp/repositories.before")
-    q.sendline("setup-disk -m sys -s 0 /dev/vda")
-    i=q.expect([r"(?is)erase.*continue.*\(y/n\)", r"(?is)installation is complete", ROOT_PROMPT, pexpect.EOF, pexpect.TIMEOUT], timeout=180)
+    # Exercise the actual end-to-end LiteFW installer. Regional prompts
+    # have their own integration coverage and are skipped here for determinism.
+    q.sendline("LITEFW_INSTALL_SKIP_REGIONAL=1 LITEFW_INSTALL_DISK=/dev/vda /usr/sbin/setup-alpine")
+    q.expect("No NICs found. Install can continue offline.", timeout=90)
+    q.expect(r"Add or change internet APK mirrors\?", timeout=90)
+    q.sendline("")
+    q.expect("Web administrator username", timeout=90)
+    q.sendline("admin")
+    q.expect("Web administrator password", timeout=60)
+    q.sendline("SmokeTestOnlyPassword123!")
+    q.expect("Confirm password", timeout=60)
+    q.sendline("SmokeTestOnlyPassword123!")
+    i=q.expect([r"(?is)erase.*continue.*\(y/n\)", r"LiteFW installation complete",
+                pexpect.EOF, pexpect.TIMEOUT], timeout=220)
     if i == 0:
         q.sendline("y")
-        i=q.expect([r"(?is)installation is complete", ROOT_PROMPT, pexpect.EOF, pexpect.TIMEOUT], timeout=600)
-    if i not in (0,1):
-        raise RuntimeError("offline setup-disk did not complete")
-    if i == 0:
-        try: q.expect(ROOT_PROMPT, timeout=60)
-        except Exception: pass
+        q.expect("LiteFW installation complete", timeout=600)
+    elif i != 1:
+        raise RuntimeError("LiteFW installer did not finish its disk installation")
+    q.expect(ROOT_PROMPT, timeout=60)
+    vmcmd("htpasswd -vb /etc/litefwm/htpasswd admin 'SmokeTestOnlyPassword123!' >/dev/null")
+    vmcmd("test ! -e /root/litefwm-admin.txt")
+    vmcmd("test -s /etc/litefwm/htpasswd")
     vmcmd("test -b /dev/vda")
     stop_vm()
 

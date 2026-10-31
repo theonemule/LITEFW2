@@ -22,6 +22,8 @@ for command in litefw-admin litefw-network litefw-console; do
   install -m 0755 "$src/bin/$command" "$tmp/usr/sbin/$command"
 done
 install -m 0755 "$src/iso/setup-alpine-litefwm" "$tmp/usr/local/sbin/setup-alpine"
+# Replace the Alpine installer command itself, not only the menu shortcut.
+install -m 0755 "$src/iso/setup-alpine-litefwm" "$tmp/usr/sbin/setup-alpine"
 
 for f in "$src"/lib/*.sh "$src"/lib/*.jq "$src"/lib/*.awk; do
   [ -f "$f" ] && install -m 0644 "$f" "$tmp/usr/lib/litefwm/"
@@ -200,6 +202,7 @@ WORLD
     printf '%s\n' "$tmp/usr/sbin/$command"
   done
   printf '%s\n' "$tmp/usr/local/sbin/litefw2-console-login"
+  printf '%s\n' "$tmp/usr/sbin/setup-alpine" "$tmp/usr/local/sbin/setup-alpine"
   find "$tmp/usr/lib/litefwm" -type f -print
   find "$tmp/usr/share/litefwm" -type f -print
   printf '%s\n' \
