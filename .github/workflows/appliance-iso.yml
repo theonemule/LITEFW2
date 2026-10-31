@@ -1,4 +1,4 @@
-name: Build Alpine appliance ISO
+name: Build LiteFW appliance ISO
 
 on:
   push:
@@ -16,7 +16,7 @@ concurrency:
 
 jobs:
   appliance:
-    name: Alpine x86_64 ISO and offline installation
+    name: LiteFW x86_64 ISO and offline installation
     runs-on: ubuntu-24.04
     timeout-minutes: 120
     permissions:
@@ -40,6 +40,7 @@ jobs:
               sh -n "$script"
             fi
           done < <(find bin lib modules iso tools tests -type f -name '*.sh' -print0)
+          for script in bin/litefw-* iso/setup-alpine-litefwm; do sh -n "$script"; done
           python3 -m compileall -q tests
           if grep -RniE 'apt(-get)? (install|update)|debian|ubuntu' install.sh iso tools/build-appliance-iso.sh; then
             echo 'Unsupported Debian/Ubuntu dependency in appliance build path' >&2
