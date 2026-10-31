@@ -37,27 +37,3 @@ jobs:
           install -m 0644 "$src/SHA256SUMS" "$dest/SHA256SUMS"
           (cd "$dest" && sha256sum -c SHA256SUMS)
           echo "Verified LiteFW 2.2.4 ISO staged on dev runner for Proxmox VM 107."
-      - name: Create v2.2.4 tag for the verified build
-        shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          tag="v2.2.4"
-          if ! gh api "repos/theonemule/LITEFW2/git/ref/tags/$tag" >/dev/null 2>&1; then
-            gh api -X POST "repos/theonemule/LITEFW2/git/refs" -f "ref=refs/tags/$tag" -f "sha=9e67f28092b5271e77c7af27e4a1428dfe018f18" >/dev/null
-          fi
-      - name: Publish verified LiteFW 2.2.4 GitHub Release
-        shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          src="${{ runner.temp }}/litefw-vm107-stage"
-          (cd "$src" && sha256sum -c SHA256SUMS)
-          test -s "$src/litefw2-2.2.4-alpine3.24-x86_64.iso"
-          if gh release view v2.2.4 --repo theonemule/LITEFW2 >/dev/null 2>&1; then
-            gh release upload v2.2.4 "$src/litefw2-2.2.4-alpine3.24-x86_64.iso" "$src/SHA256SUMS" --repo theonemule/LITEFW2 --clobber
-          else
-            gh release create v2.2.4 "$src/litefw2-2.2.4-alpine3.24-x86_64.iso" "$src/SHA256SUMS" --repo theonemule/LITEFW2 --verify-tag --title "LiteFW2 v2.2.4" --notes "Verified bootable Alpine-based LiteFW appliance installer. Select target disk, configure WAN/LAN, set web administrator, confirm disk erase, partition/format and install the full OS. SHA256SUMS included."
-          fi
