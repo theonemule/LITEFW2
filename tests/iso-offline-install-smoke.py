@@ -110,6 +110,7 @@ def install_from_iso():
     vmcmd("test ! -e /root/litefwm-admin.txt")
     vmcmd("test -x /usr/local/sbin/setup-alpine")
     vmcmd("test -x /usr/sbin/setup-alpine")
+    vmcmd("grep -q 'LiteFW WEB ADMINISTRATOR' /usr/local/sbin/setup-alpine")
     vmcmd("grep -q 'LiteFW WEB ADMINISTRATOR' /usr/sbin/setup-alpine")
     vmcmd("! grep -q 'setup-interfaces' /usr/sbin/setup-alpine")
     vmcmd("cmp -s /usr/sbin/setup-alpine /usr/local/sbin/setup-alpine")

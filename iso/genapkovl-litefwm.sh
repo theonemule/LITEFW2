@@ -106,6 +106,14 @@ depend() {
 start() {
   ebegin "Initializing LiteFW"
   install -d -m 0755 /etc/litefwm /var/log/lighttpd
+  # Alpine installs alpine-conf after apkovl extraction, which can overwrite
+  # /usr/sbin/setup-alpine with the stock account/network wizard. Restore the
+  # real LiteFW installer AFTER packages finish loading, on every boot.
+  if ! install -m 0755 /usr/local/sbin/setup-alpine /usr/sbin/setup-alpine; then
+    eerror "Could not activate LiteFW installation wizard"
+    eend 1
+    return 1
+  fi
   # Set the root password to empty at runtime, after the image is booted.
   # The VGA getty is configured to bypass login authentication entirely,
   # so it does not depend on timing of this operation.
