@@ -95,13 +95,6 @@ depend() {
 start() {
   ebegin "Initializing LiteFW2"
   install -d -m 0755 /etc/litefwm /var/log/lighttpd
-  # Proxmox/physical console access must not depend on a root password.
-  # SSH root password logins remain disabled separately below.
-  passwd -d root >/dev/null 2>&1 || {
-    eerror "Unable to unlock passwordless root console"
-    eend 1
-    return 1
-  }
   chown lighttpd:lighttpd /var/log/lighttpd 2>/dev/null || true
   if [ ! -s /etc/litefwm/htpasswd ]; then
     einfo "Web UI is not configured yet. Run setup-alpine to install LiteFW2."
@@ -122,6 +115,28 @@ cat >"$tmp/etc/ssh/sshd_config.d/90-litefwm-console-only.conf" <<'SSHD'
 PermitRootLogin prohibit-password
 PermitEmptyPasswords no
 SSHD
+
+# Configure the actual boot-time login files in the image, not via a service
+# which may start after the console gettys are already accepting logins.
+# A local/Proxmox console is administrator-controlled; SSH never accepts an
+# empty root password (sshd_config above).
+cp /etc/shadow "$tmp/etc/shadow"
+awk -F: 'BEGIN {OFS=":"} $1=="root" {$2=""; found=1} {print} END {if(!found) exit 1}' \
+  "$tmp/etc/shadow" > "$tmp/etc/shadow.new"
+mv "$tmp/etc/shadow.new" "$tmp/etc/shadow"
+chmod 0640 "$tmp/etc/shadow"
+
+# Alpine's BusyBox getty normally starts /bin/login, which prompted on VGA
+# even after the later boot-service password reset. Start authenticated root
+# directly at the *local* virtual terminals instead.
+cat >"$tmp/usr/local/sbin/litefw2-console-login" <<'CONSOLE'
+#!/bin/sh
+exec /bin/login -f root
+CONSOLE
+chmod 0755 "$tmp/usr/local/sbin/litefw2-console-login"
+cp /etc/inittab "$tmp/etc/inittab"
+sed -i '/^tty[1-6]::respawn:\/sbin\/getty / s#:/sbin/getty #:/sbin/getty -n -l /usr/local/sbin/litefw2-console-login #' "$tmp/etc/inittab"
+grep -q '^tty1::respawn:/sbin/getty -n -l /usr/local/sbin/litefw2-console-login ' "$tmp/etc/inittab"
 
 # Installed base appliance only. Optional module APKs are on the ISO repository
 # but deliberately not installed by default.
@@ -147,6 +162,7 @@ WORLD
 {
   [ ! -f "$tmp/usr/sbin/lfwctl" ] || printf '%s\n' "$tmp/usr/sbin/lfwctl"
   [ ! -f "$tmp/usr/sbin/lfw-setup" ] || printf '%s\n' "$tmp/usr/sbin/lfw-setup"
+  printf '%s\n' "$tmp/usr/local/sbin/litefw2-console-login"
   find "$tmp/usr/lib/litefwm" -type f -print
   find "$tmp/usr/share/litefwm" -type f -print
   printf '%s\n' \
@@ -162,6 +178,8 @@ WORLD
     "$tmp/etc/dnsmasq.d/10-dns.conf" \
     "$tmp/etc/iptables/rules-save" \
     "$tmp/etc/litefwm/htpasswd" \
+    "$tmp/etc/inittab" \
+    "$tmp/etc/shadow" \
     "$tmp/etc/ssh/sshd_config.d/90-litefwm-console-only.conf"
 } | sed "s#^$tmp/#+#" >"$tmp/etc/apk/protected_paths.d/lbu.list"
 
@@ -195,7 +213,7 @@ Alpine setup skips the root-password step. The normal Alpine setup runs first. I
 asks which interface is the WAN / Internet edge and which is the LAN / internal
 network. The stock Alpine installer remains available as /sbin/setup-alpine.
 
-Root console login: root (no password).
+Local console: root automatically logged in (no password prompt).
 During setup-alpine you will set ONLY the LiteFW2 web admin password.
 The installer handles Alpine setup, WAN/LAN assignment, and web administrator
 password together. No second setup command is required.

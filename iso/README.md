@@ -51,7 +51,8 @@ the same `setup-alpine` command.
 Only a bcrypt hash is persisted. The appliance never creates a random password
 or writes a plaintext credential file.
 
-The live ISO accepts `root` at the local console with **no root password**,
+The live ISO automatically logs `root` in on local VGA virtual consoles,
+without any login or password prompt, and
 and `setup-alpine` suppresses Alpine's separate root-password prompt.
 The installed appliance preserves passwordless local-console root access;
 remote SSH disallows empty-password authentication and root password login.
