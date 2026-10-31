@@ -41,29 +41,27 @@ supports.
 
 ## Installer flow
 
-Run `setup-alpine` once for the entire installation.
-The ISO keeps Alpine's disk installer but replaces its standard interactive
-interface/DNS step with LiteFW2 WAN/LAN configuration. The operator selects a
-WAN interface and DHCP (default), static IP, or no address. DHCP acquisition is
-bounded to an 8-second check; if no lease is obtained, the installer offers a
-static address, offline setup, or keeping DHCP for subsequent boot. The LAN
-interface defaults to static addressing. The web administrator password is
-configured before disk installation in the same `setup-alpine` command.
-Only a bcrypt hash is persisted. The appliance never creates a random password
-or writes a plaintext credential file.
+The boot console opens the LiteFW management menu automatically. Select **1) Install LiteFW to disk**
+to run the single appliance installer. This retains Alpine keyboard, timezone,
+APK repository, and disk setup, while replacing Alpine's unbounded network and
+Unix account prompts with LiteFW's setup.
 
-The live ISO automatically logs `root` in on local VGA virtual consoles,
-without any login or password prompt, and
-and `setup-alpine` suppresses Alpine's separate root-password prompt.
-The installed appliance preserves passwordless local-console root access;
-remote SSH disallows empty-password authentication and root password login.
+The network wizard selects one WAN and one LAN, even with additional NICs present.
+WAN supports bounded DHCP (8 seconds), static IPv4, and offline fallback.
+LAN supports an optional 802.1Q VLAN ID (1–4094) and static IPv4 address.
+Other physical NICs remain unassigned.
 
-lfw-setup applies those roles to the live network and rewrites the native
-network configuration so the normal Alpine sys install carries the selected
-network configuration forward.
+The operator chooses the **web UI administrator username and password**
+(12+ characters, stored only as a bcrypt hash). OpenSSH is installed and enabled
+automatically. SSH forbids empty passwords; it does not share the web UI
+credentials. The physical/VM console opens the LiteFW management menu without
+a separate root-password challenge, and exposes network, administrator, and
+recovery settings. Only trusted operators should have console access.
 
-The stock installer remains available separately, and the live image contains
-lfw-setup for console recovery.
+The disk installer persists the existing LiteFW network configuration. On an
+installed appliance the console remains available for reconfiguration.
+Versioning follows the repository `VERSION` file; the ISO is named
+`litefw2-<version>-alpine3.24-x86_64.iso`.
 
 ## Regression tests
 

@@ -4,11 +4,11 @@ LiteFW2 is distributed **only as a bootable Alpine Linux x86_64 appliance ISO**.
 
 ## Download and install
 
-Download the ISO and SHA256SUMS from the latest GitHub Release. Verify with `sha256sum -c SHA256SUMS`, boot the ISO on a dedicated machine or VM with WAN and LAN interfaces, and run `setup-alpine`. The installer uses LiteFW2's own WAN/LAN configuration instead of Alpine's default network wizard. It checks DHCP for up to 8 seconds, then offers static addressing or offline installation without stalling disk setup. Back up any target disk first; installation can erase it.
+Download the ISO and SHA256SUMS from the latest GitHub Release. Verify with `sha256sum -c SHA256SUMS`, boot the ISO on a dedicated machine or VM with WAN and LAN interfaces, and select **1) Install LiteFW to disk** on the local console menu. The installer uses LiteFW's own WAN/LAN configuration (optional 802.1Q LAN VLAN) instead of Alpine's default network wizard, and allows a custom web administrator username and password. Other NICs remain unassigned. OpenSSH is installed and enabled. It checks DHCP for up to 8 seconds, then offers static addressing or offline installation without stalling disk setup. Back up any target disk first; installation can erase it.
 
 ## CI and releases
 
-`.github/workflows/appliance-iso.yml` builds on pushes to `main`, pull requests, and manual dispatch. It tests the produced ISO by installing it into a network-disconnected QEMU VM and booting the installed disk. Successful jobs upload the ISO and checksum as GitHub Actions build artifacts. Tags matching `v*` also publish those exact files as GitHub Release assets. Use a tag matching `v$(cat VERSION)`, for example `v2.0.0` for VERSION 2.0.0. Publishing is gated by a successful offline-install smoke test.
+`.github/workflows/appliance-iso.yml` builds on pushes to `main`, pull requests, and manual dispatch. It tests the produced ISO by installing it into a network-disconnected QEMU VM and booting the installed disk. Successful jobs upload the ISO and checksum as GitHub Actions build artifacts. Tags matching `v*` also publish those exact files as GitHub Release assets. Use a tag matching `v$(cat VERSION)`, for example `v2.2.0` for VERSION 2.2.0. Publishing is gated by a successful offline-install smoke test.
 
 The pinned Alpine build base is 3.24. The ISO includes the supported optional module APKs for offline installation. Build locally with `./tools/build-appliance-iso.sh` on a Docker-capable host.
 

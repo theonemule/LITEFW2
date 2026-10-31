@@ -102,7 +102,7 @@ def install_from_iso():
         "bind bind-tools bind-openrc openvpn openvpn-openrc easy-rsa inadyn inadyn-openrc"
     )
     vmcmd(f"apk add --simulate --no-network {pkgs} >/tmp/apk-sim.txt", timeout=180)
-    vmcmd("grep -q 'LiteFWM appliance installer' /etc/motd")
+    vmcmd("grep -q 'Firewall & Network Appliance' /etc/motd")
     vmcmd("test -x /usr/sbin/lfwctl")
     vmcmd("test -x /usr/sbin/litefw-console")
     vmcmd("test -x /usr/sbin/litefw-admin")

@@ -146,7 +146,7 @@ def configure_firewall():
     # Prove the custom payload is really from the ISO.
     vmcmd("test -x /usr/sbin/lfw-setup")
     vmcmd("test -x /usr/sbin/lfwctl")
-    vmcmd("grep -q 'LiteFWM appliance installer' /etc/motd")
+    vmcmd("grep -q 'Firewall & Network Appliance' /etc/motd")
 
     # The ISO must bring up Alpine's live-media modloop itself. If this fails,
     # netfilter kernel modules will be unavailable and the appliance is invalid.
