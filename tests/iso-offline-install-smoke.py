@@ -16,9 +16,9 @@ DISK_LOG=f"{WORK}/disk-serial.log"
 pathlib.Path(WORK).mkdir(parents=True, exist_ok=True)
 q=None
 # BusyBox shells may emit an ANSI cursor-position report request (CSI 6 n)
-# after displaying the root prompt. Accept that escape without accepting
+# after displaying the root prompt, including the space before CSI. Accept it without accepting
 # a Password: challenge or any other arbitrary console text.
-ROOT_PROMPT=r"#(?:\x1b\[[0-9;]*[A-Za-z])*\s*$"
+ROOT_PROMPT=r"#(?:[ \t]|\x1b\[[0-9;]*[A-Za-z])*$"
 
 def sh(args, check=True):
     p=subprocess.run(args, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
