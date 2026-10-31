@@ -1,40 +1,51 @@
 #!/bin/sh
-# LiteFW installer: Alpine disk/keyboard/time/repositories with appliance hooks.
-# The user runs exactly one installer. Root password remains unset; only the
-# independently managed web UI administrator account is prompted.
+# LiteFW appliance installer: Alpine keyboard/timezone/repositories/disk,
+# bounded WAN/LAN/VLAN setup, web administrator and automatic OpenSSH.
 set -eu
 stock=/usr/sbin/setup-alpine
 [ -x "$stock" ] || { echo 'Alpine setup-alpine is unavailable.' >&2; exit 1; }
-for command in /usr/sbin/litefw-network /usr/sbin/litefw-admin; do
-  [ -x "$command" ] || { echo "Missing LiteFW component: $command" >&2; exit 1; }
+for component in /usr/sbin/litefw-network /usr/sbin/litefw-admin; do
+  [ -x "$component" ] || { echo "Missing LiteFW component: $component" >&2; exit 1; }
 done
 temp=$(mktemp /tmp/litefw-alpine.XXXXXX)
 trap 'rm -f "$temp"' EXIT HUP INT TERM
-# Guard upstream structure: never fall through to its unbounded interface/DHCP
-# wizard if Alpine changes the install script.
+# Fail closed if Alpine changes its landmarks: never run the stock
+# potentially unbounded networking wizard or an unexpected user/password step.
 if ! awk '
-  BEGIN { network=0; disk=0; skip=0 }
+  BEGIN { network=0; disk=0; user=0; skip_network=0; skip_user=0 }
+  /print_heading1 " ALPINE LINUX INSTALL"/ {
+    print "print_heading1 \" LiteFW Firewall Appliance Installation\""; next
+  }
   /^# set Interface$/ {
     print "echo \"== LiteFW: WAN, LAN and optional VLAN ==\""
     print "/usr/sbin/litefw-network || exit 1"
-    network=1; skip=1; next
+    network=1; skip_network=1; next
   }
-  skip && /^# set root password$/ { skip=0 }
-  skip { next }
-  /^[[:space:]]*print_heading2 " Disk & Install"[[:space:]]*$/ && !disk {
+  skip_network && /^# set root password$/ { skip_network=0 }
+  skip_network { next }
+  /^[[:space:]]*print_heading2 " User"[[:space:]]*$/ {
+    # Apache-style UI users are separate from Unix users. SSH is installed
+    # and started from the appliance image; do not prompt Alpine setup-user
+    # or setup-sshd a second time.
+    print "echo \"LiteFW: OpenSSH is preinstalled and enabled\""
+    user=1; skip_user=1; next
+  }
+  skip_user && /^[[:space:]]*print_heading2 " Disk & Install"[[:space:]]*$/ {
+    print "if [ -d /media/cdrom/apks ] && ! grep -q \"^/media/cdrom/apks\" /etc/apk/repositories; then echo /media/cdrom/apks >>/etc/apk/repositories; fi"
     print "echo \"== LiteFW: web UI administrator ==\""
     print "/usr/sbin/litefw-admin || exit 1"
-    disk=1
+    disk=1; skip_user=0
   }
+  skip_user { next }
   { print }
-  END { if (!network || !disk || skip) exit 42 }
+  END { if (!network || !user || !disk || skip_network || skip_user) exit 42 }
 ' "$stock" >"$temp"; then
-  echo 'Alpine installer layout changed; refusing unsafe network setup.' >&2
+  echo 'Alpine installer layout changed; refusing unsafe setup.' >&2
   exit 1
 fi
 chmod 0700 "$temp"
 echo 'LiteFW appliance installation'
-echo 'Alpine will configure keyboard, timezone, repositories and target disk.'
-echo 'LiteFW will configure ONLY WAN, LAN, optional LAN VLAN and web credentials.'
-echo 'A root password is not required for the local appliance console.'
+echo 'Choose Alpine keyboard, timezone and repositories, then the install disk.'
+echo 'LiteFW assigns one WAN and one LAN (optional tagged LAN) and sets UI credentials.'
+echo 'No Unix root password is needed on the local appliance console.'
 "$temp" -e "$@"
