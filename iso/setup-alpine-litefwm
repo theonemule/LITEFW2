@@ -48,46 +48,149 @@ configure_admin() {
   echo 'Web administrator password configured.'
 }
 
-tmp=$(mktemp /tmp/setup-alpine-litefwm.XXXXXX)
-trap 'rm -f "$tmp"' EXIT HUP INT TERM
 
+# LiteFW2 replaces Alpine setup-interfaces, whose DHCP wait is unbounded.
+configure_network() {
+  echo
+  echo 'LiteFW2 network setup (DHCP timeout: 8 seconds; offline setup allowed)'
+  adapters=''
+  for path in /sys/class/net/*; do
+    nic=$(basename "$path")
+    [ "$nic" = lo ] || adapters="$adapters $nic"
+  done
+  adapters=$(echo "$adapters" | sed 's/^ *//')
+  if [ -z "$adapters" ]; then
+    echo 'No adapters found. Continuing offline.'
+    return 0
+  fi
+  echo "Interfaces: $adapters"
+  first=$(echo "$adapters" | awk '{print $1}')
+  while :; do
+    printf 'WAN interface [%s] (or none): ' "$first"
+    IFS= read -r wan || return 1
+    [ -n "$wan" ] || wan=$first
+    [ "$wan" = none ] && break
+    case " $adapters " in *" $wan "*) break;; esac
+    echo 'Invalid interface.'
+  done
+  if [ "$wan" != none ]; then
+    while :; do
+      printf 'WAN mode [dhcp] (dhcp/static/none): '
+      IFS= read -r mode || return 1
+      [ -n "$mode" ] || mode=dhcp
+      case "$mode" in dhcp|static|none) break;; esac
+    done
+    if [ "$mode" = dhcp ]; then
+      # lfwctl starts bounded udhcpc in the background; a lease is optional.
+      /usr/sbin/lfwctl op segment.set "$(jq -nc --arg i "$wan" \
+        '{interface:$i,role:"wan",label:"WAN",mode:"dhcp",addresses:[],gateway:"",dns:[]}')" \
+        | jq -e '.ok == true' >/dev/null || return 1
+      elapsed=0
+      while [ "$elapsed" -lt 8 ]; do
+        if ip -4 -o addr show dev "$wan" scope global | grep -q ' inet '; then break; fi
+        sleep 1
+        elapsed=$((elapsed+1))
+      done
+      if ip -4 -o addr show dev "$wan" scope global | grep -q ' inet '; then
+        echo 'DHCP lease acquired.'
+        mode=done
+      else
+        echo 'DHCP timed out; installation can continue offline.'
+        while :; do
+          printf 'Fallback [none] (static/none/keep DHCP for next boot): '
+          IFS= read -r mode || return 1
+          [ -n "$mode" ] || mode=none
+          case "$mode" in static|none|keep) break;; esac
+        done
+        [ "$mode" != keep ] || mode=done
+      fi
+    fi
+    if [ "$mode" = static ]; then
+      printf 'WAN IPv4 CIDR (e.g. 192.168.1.2/24): '
+      IFS= read -r cidr || return 1
+      printf 'WAN gateway (blank for none): '
+      IFS= read -r gw || return 1
+      printf 'WAN DNS server (blank for none): '
+      IFS= read -r dns || return 1
+      dns_json='[]'
+      [ -z "$dns" ] || dns_json=$(jq -nc --arg n "$dns" '[$n]')
+      /usr/sbin/lfwctl op segment.set "$(jq -nc --arg i "$wan" --arg a "$cidr" \
+        --arg g "$gw" --argjson d "$dns_json" \
+        '{interface:$i,role:"wan",label:"WAN",mode:"static",addresses:[$a],gateway:$g,dns:$d}')" \
+        | jq -e '.ok == true' >/dev/null || return 1
+    elif [ "$mode" = none ]; then
+      /usr/sbin/lfwctl op segment.set "$(jq -nc --arg i "$wan" \
+        '{interface:$i,role:"wan",label:"WAN",mode:"none",addresses:[],gateway:"",dns:[]}')" \
+        | jq -e '.ok == true' >/dev/null || return 1
+    fi
+  fi
+  lan_default=none
+  for nic in $adapters; do
+    [ "$nic" = "$wan" ] || { lan_default=$nic; break; }
+  done
+  while :; do
+    printf 'LAN interface [%s] (or none): ' "$lan_default"
+    IFS= read -r lan || return 1
+    [ -n "$lan" ] || lan=$lan_default
+    [ "$lan" = none ] && break
+    [ "$lan" != "$wan" ] || { echo 'LAN must differ from WAN.'; continue; }
+    case " $adapters " in *" $lan "*) break;; esac
+    echo 'Invalid interface.'
+  done
+  if [ "$lan" != none ]; then
+    printf 'LAN IPv4 CIDR [192.168.1.1/24]: '
+    IFS= read -r cidr || return 1
+    [ -n "$cidr" ] || cidr=192.168.1.1/24
+    /usr/sbin/lfwctl op segment.set "$(jq -nc --arg i "$lan" --arg a "$cidr" \
+      '{interface:$i,role:"lan",label:"LAN",mode:"static",addresses:[$a],gateway:"",dns:[]}')" \
+      | jq -e '.ok == true' >/dev/null || return 1
+  fi
+  echo 'Network setup complete; proceeding with installation.'
+}
+
+
+tmp=$(mktemp /tmp/setup-alpine-litefwm.XXXXXX)
+network_hook=$(mktemp /tmp/litefw2-network-hook.XXXXXX)
+admin_hook=$(mktemp /tmp/litefw2-admin-hook.XXXXXX)
+trap 'rm -f "$tmp" "$network_hook" "$admin_hook"' EXIT HUP INT TERM
+# The stock installer remains in charge of disk, time, hostname, and packages,
+# but its Interface/DNS step is replaced by LiteFW2's bounded network setup.
 if ! awk '
-  BEGIN { injected=0 }
-  /^[[:space:]]*print_heading2 " Disk & Install"[[:space:]]*$/ && !injected {
-    print "echo"
-    print "print_heading2 \" LiteFWM appliance network\""
-    print "print_heading2 \"--------------------------\""
-    print "/usr/sbin/lfw-setup interactive || exit 1"
-    print "print_heading2 \" LiteFW2 web administrator\""
-    print "# LiteFW2 password configuration injected after generating installer"
+  BEGIN { network=0; disk=0; skip=0 }
+  /^# set Interface$/ {
+    print "__LITEFW2_NETWORK_HOOK__"
+    network=1; skip=1; next
+  }
+  skip && /^# set root password$/ { skip=0 }
+  skip { next }
+  /^[[:space:]]*print_heading2 " Disk & Install"[[:space:]]*$/ && !disk {
     print "__LITEFW2_ADMIN_HOOK__"
-    print "echo"
-    injected=1
+    disk=1
   }
   { print }
-  END { if (!injected) exit 42 }
+  END { if (!network || !disk || skip) exit 42 }
 ' "$stock" >"$tmp"; then
-  echo "The Alpine installer layout changed and the LiteFWM hook could not be inserted." >&2
-  echo "Unable to continue safely; the LiteFW2 installer requires an updated integration." >&2
+  echo 'Alpine installer layout changed; refusing unbounded network setup.' >&2
   exit 1
 fi
-# Replace the hook marker with a single installer-local function invocation.
-# The function definition stays in this script, not in a separate setup tool.
-hook=$(mktemp /tmp/litefw2-admin-hook.XXXXXX)
-trap 'rm -f "$tmp" "$hook"' EXIT HUP INT TERM
-# Generate the function definition from this file, keeping one source of truth.
-sed -n '/^configure_admin() {/,/^}$/p' "$0" >"$hook"
-printf 'configure_admin || exit 1\n' >>"$hook"
-awk -v hook="$hook" '
-  /__LITEFW2_ADMIN_HOOK__/ {
-    while ((getline line < hook) > 0) print line
-    close(hook)
-    next
+sed -n '/^configure_network() {/,/^}$/p' "$0" >"$network_hook"
+printf 'configure_network || exit 1\n' >>"$network_hook"
+sed -n '/^configure_admin() {/,/^}$/p' "$0" >"$admin_hook"
+printf 'configure_admin || exit 1\n' >>"$admin_hook"
+awk -v nh="$network_hook" -v ah="$admin_hook" '
+  /__LITEFW2_NETWORK_HOOK__/ {
+    while ((getline line < nh) > 0) print line
+    close(nh); next
   }
-  {print}
+  /__LITEFW2_ADMIN_HOOK__/ {
+    while ((getline line < ah) > 0) print line
+    close(ah); next
+  }
+  { print }
 ' "$tmp" >"$tmp.new"
 mv -f "$tmp.new" "$tmp"
 chmod 0755 "$tmp"
+
 # Alpine's -e option suppresses its root-password prompt. LiteFW2 only
 # asks for the management UI administrator password.
 "$tmp" -e "$@"

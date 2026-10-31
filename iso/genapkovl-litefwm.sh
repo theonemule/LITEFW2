@@ -35,6 +35,12 @@ find "$tmp/usr/share/litefwm/www" -type d -exec chmod 0755 {} +
 find "$tmp/usr/share/litefwm/www" -type f -exec chmod 0644 {} +
 
 # Base appliance configuration.
+# Boot the installer with no automatic DHCP on any NIC.
+cat >"$tmp/etc/network/interfaces" <<'NET'
+auto lo
+iface lo inet loopback
+NET
+
 install -m 0644 "$src/etc/dnsmasq.conf" "$tmp/etc/dnsmasq.conf"
 install -m 0644 "$src/etc/dnsmasq-base.conf" "$tmp/etc/dnsmasq.d/00-litefwm.conf"
 cat >"$tmp/etc/dnsmasq.d/10-dns.conf" <<'DNS'
@@ -234,9 +240,9 @@ LiteFWM appliance installer
 
 TO INSTALL ALPINE + CONFIGURE LITEFW2 FIREWALL: run setup-alpine
 
-Alpine setup skips the root-password step. The normal Alpine setup runs first. Immediately before Disk & Install, LiteFWM
-asks which interface is the WAN / Internet edge and which is the LAN / internal
-network. The stock Alpine installer remains available as /sbin/setup-alpine.
+Alpine setup skips the root-password step. LiteFW2 replaces Alpine's
+network wizard with WAN/LAN setup, an 8-second DHCP check, and static/offline
+fallback. The appliance network is configured before Disk & Install. The stock Alpine installer remains available as /sbin/setup-alpine.
 
 Local console: root automatically logged in (no password prompt).
 During setup-alpine you will set ONLY the LiteFW2 web admin password.

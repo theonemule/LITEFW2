@@ -22,7 +22,7 @@ def stanza:
      "    hwaddress \(.mac)"
    else empty end),
   (if .mtu != 1500 then "    mtu \(.mtu)" else empty end),
-  (if .mode == "dhcp" then "    dhcp-program udhcpc"
+  (if .mode == "dhcp" then "    dhcp-program udhcpc", "    udhcpc-opts -t 2 -T 3 -A 3"
    elif .mode == "static" then (.addresses[] | "    address \(.)"),
                                (if .gateway != "" then "    gateway \(.gateway)" else empty end)
    else empty end),

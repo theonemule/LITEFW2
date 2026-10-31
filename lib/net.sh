@@ -117,9 +117,9 @@ dhcp_start() {
   if [ "${3:-}" = keep ]; then : >"$LFW_RUN/keep.$1"; else rm -f "$LFW_RUN/keep.$1"; fi
   set -- "$1" "${2:-}"
   if [ -n "$2" ]; then
-    udhcpc -b -R -p "/var/run/udhcpc.$1.pid" -i "$1" -s "$LFW_UDHCPC_SCRIPT" -r "$2" >/dev/null 2>&1 </dev/null 9>&-
+    udhcpc -b -t 2 -T 3 -A 3 -R -p "/var/run/udhcpc.$1.pid" -i "$1" -s "$LFW_UDHCPC_SCRIPT" -r "$2" >/dev/null 2>&1 </dev/null 9>&-
   else
-    udhcpc -b -R -p "/var/run/udhcpc.$1.pid" -i "$1" -s "$LFW_UDHCPC_SCRIPT" >/dev/null 2>&1 </dev/null 9>&-
+    udhcpc -b -t 2 -T 3 -A 3 -R -p "/var/run/udhcpc.$1.pid" -i "$1" -s "$LFW_UDHCPC_SCRIPT" >/dev/null 2>&1 </dev/null 9>&-
   fi
   dhcp_running "$1" || die "could not start DHCP client on $1"
 }

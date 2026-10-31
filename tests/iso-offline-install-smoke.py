@@ -15,6 +15,10 @@ LIVE_LOG=f"{WORK}/live-serial.log"
 DISK_LOG=f"{WORK}/disk-serial.log"
 pathlib.Path(WORK).mkdir(parents=True, exist_ok=True)
 q=None
+# BusyBox shells may emit an ANSI cursor-position report request (CSI 6 n)
+# after displaying the root prompt. Accept that escape without accepting
+# a Password: challenge or any other arbitrary console text.
+ROOT_PROMPT=r"#(?:\x1b\[[0-9;]*[A-Za-z])*\s*$"
 
 def sh(args, check=True):
     p=subprocess.run(args, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
@@ -61,7 +65,7 @@ def spawn_vm(from_iso):
     q.logfile=log
     q.expect(r"(?i)login:\s*$", timeout=360)
     q.sendline("root")
-    i=q.expect([r"#\s*$", r"(?i)password:\s*$"], timeout=60)
+    i=q.expect([ROOT_PROMPT, r"(?i)password:\s*$"], timeout=60)
     if i == 1:
         raise RuntimeError("ISO or installed system requested a root password; local console login must be passwordless")
 
@@ -73,7 +77,7 @@ def vmcmd(cmd, timeout=120):
         raise RuntimeError(f"VM command timed out/closed: {cmd}")
     out=q.before
     rc=int(q.match.group(1))
-    try: q.expect(r"#\s*$", timeout=5)
+    try: q.expect(ROOT_PROMPT, timeout=5)
     except Exception: pass
     if rc:
         raise RuntimeError(f"VM command failed rc={rc}: {cmd}\n{out}")
@@ -122,14 +126,14 @@ def install_from_iso():
     vmcmd("cp /etc/apk/repositories /tmp/repositories.before")
     vmcmd("grep '/media/cdrom/apks' /tmp/repositories.before")
     q.sendline("setup-disk -m sys -s 0 /dev/vda")
-    i=q.expect([r"(?is)erase.*continue.*\(y/n\)", r"(?is)installation is complete", r"#\s*$", pexpect.EOF, pexpect.TIMEOUT], timeout=180)
+    i=q.expect([r"(?is)erase.*continue.*\(y/n\)", r"(?is)installation is complete", ROOT_PROMPT, pexpect.EOF, pexpect.TIMEOUT], timeout=180)
     if i == 0:
         q.sendline("y")
-        i=q.expect([r"(?is)installation is complete", r"#\s*$", pexpect.EOF, pexpect.TIMEOUT], timeout=600)
+        i=q.expect([r"(?is)installation is complete", ROOT_PROMPT, pexpect.EOF, pexpect.TIMEOUT], timeout=600)
     if i not in (0,1):
         raise RuntimeError("offline setup-disk did not complete")
     if i == 0:
-        try: q.expect(r"#\s*$", timeout=60)
+        try: q.expect(ROOT_PROMPT, timeout=60)
         except Exception: pass
     vmcmd("test -b /dev/vda")
     stop_vm()

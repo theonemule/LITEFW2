@@ -16,8 +16,8 @@ command -v docker >/dev/null 2>&1 || {
   exit 1
 }
 
+# Use disk-backed container scratch instead of a RAM tmpfs that starves the host.
 docker run --rm \
-  --tmpfs /tmp:rw,exec,size=7g \
   -e ALPINE_VERSION="$ALPINE_VERSION" \
   -e ALPINE_BRANCH="$ALPINE_BRANCH" \
   -e ARCH="$ARCH" \
@@ -26,6 +26,13 @@ docker run --rm \
   -v "$OUT:/out" \
   "alpine:$ALPINE_VERSION" /bin/sh -euxc '
     apk add --no-cache abuild apk-tools alpine-conf busybox fakeroot git syslinux xorriso squashfs-tools grub mtools dosfstools
+    # Limit squashfs compression concurrency and RAM. The default worker
+    # count can exhaust a 16 GiB CI/dev box while building the kernel modloop.
+    mv /usr/bin/mksquashfs /usr/bin/mksquashfs.real
+    printf "%s\n" "#!/bin/sh" \
+      "exec /usr/bin/mksquashfs.real \"\$@\" -processors 2 -mem 512M" \
+      > /usr/bin/mksquashfs
+    chmod 0755 /usr/bin/mksquashfs
     git clone --depth 1 --filter=blob:none --sparse --branch "$ALPINE_BRANCH" https://github.com/alpinelinux/aports.git /tmp/aports
     git -C /tmp/aports sparse-checkout set scripts
     cp /src/iso/mkimg.litefwm.sh /src/iso/genapkovl-litefwm.sh /tmp/aports/scripts/

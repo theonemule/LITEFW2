@@ -42,12 +42,13 @@ supports.
 ## Installer flow
 
 Run `setup-alpine` once for the entire installation.
-The ISO keeps Alpine's installer rather than replacing it.
-/usr/local/sbin/setup-alpine wraps the stock setup-alpine flow and inserts
-one LiteFWM step immediately before Alpine's Disk & Install phase. The
-operator selects the WAN / Internet-edge interface and then the LAN / internal
-interface, followed by a mandatory web administrator password and confirmation, all within
-the same `setup-alpine` command.
+The ISO keeps Alpine's disk installer but replaces its standard interactive
+interface/DNS step with LiteFW2 WAN/LAN configuration. The operator selects a
+WAN interface and DHCP (default), static IP, or no address. DHCP acquisition is
+bounded to an 8-second check; if no lease is obtained, the installer offers a
+static address, offline setup, or keeping DHCP for subsequent boot. The LAN
+interface defaults to static addressing. The web administrator password is
+configured before disk installation in the same `setup-alpine` command.
 Only a bcrypt hash is persisted. The appliance never creates a random password
 or writes a plaintext credential file.
 

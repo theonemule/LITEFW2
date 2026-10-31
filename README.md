@@ -49,8 +49,8 @@ the live system so the same state comes back after a reboot. See ARCHITECTURE.md
 
 LiteFW2 is distributed only as an Alpine x86_64 appliance ISO. Download the
 ISO and SHA256SUMS from GitHub Releases, verify the checksum, boot it on a
-dedicated firewall host or VM, and run `setup-alpine`. The appliance prompts
-for WAN and LAN network roles before installing to disk. Back up the target
+dedicated firewall host or VM, and run `setup-alpine`. LiteFW2 replaces Alpine's default interface/DHCP prompts with WAN/LAN configuration
+(including an 8-second DHCP check and static/offline fallback) before installing to disk. Back up the target
 disk first; installation can erase it. See [APPLIANCE.md](APPLIANCE.md).
 
 The legacy `install.sh` is not a supported product installation method.

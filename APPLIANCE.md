@@ -4,7 +4,7 @@ LiteFW2 is distributed **only as a bootable Alpine Linux x86_64 appliance ISO**.
 
 ## Download and install
 
-Download the ISO and SHA256SUMS from the latest GitHub Release. Verify with `sha256sum -c SHA256SUMS`, boot the ISO on a dedicated machine or VM with WAN and LAN interfaces, and run `setup-alpine`. The appliance setup asks for WAN/LAN assignments before disk installation. Back up any target disk first; installation can erase it.
+Download the ISO and SHA256SUMS from the latest GitHub Release. Verify with `sha256sum -c SHA256SUMS`, boot the ISO on a dedicated machine or VM with WAN and LAN interfaces, and run `setup-alpine`. The installer uses LiteFW2's own WAN/LAN configuration instead of Alpine's default network wizard. It checks DHCP for up to 8 seconds, then offers static addressing or offline installation without stalling disk setup. Back up any target disk first; installation can erase it.
 
 ## CI and releases
 
