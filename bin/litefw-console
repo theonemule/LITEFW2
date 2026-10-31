@@ -1,0 +1,62 @@
+#!/bin/sh
+# pfSense-style local LiteFW appliance management console.
+set -u
+PATH=/usr/sbin:/usr/bin:/sbin:/bin
+VERSION=$(cat /usr/lib/litefwm/VERSION 2>/dev/null || echo unknown)
+while :; do
+  clear 2>/dev/null || true
+  echo '======================================================'
+  printf '                   LiteFW  v%s\n' "$VERSION"
+  echo '             Firewall & Network Appliance'
+  echo '======================================================'
+  echo
+  if [ -s /etc/litefwm/htpasswd ]; then
+    echo 'Web UI: configured'
+  else
+    echo 'Web UI: administrator setup required'
+  fi
+  ip -4 -brief address 2>/dev/null || true
+  echo
+  if grep -q '/media/.*/apks' /etc/apk/repositories 2>/dev/null; then
+    echo '  1) Install LiteFW to disk (Alpine + appliance setup)'
+  else
+    echo '  1) Install LiteFW to disk (live ISO only)'
+  fi
+  echo '  2) Assign WAN / LAN interfaces (optional LAN VLAN)'
+  echo '  3) Set or reset web administrator username/password'
+  echo '  4) Show network status'
+  echo '  5) Alpine keyboard / timezone / repository settings'
+  echo '  6) Restart web management service'
+  echo '  7) Open system shell'
+  echo '  8) Reboot'
+  echo '  9) Shut down'
+  echo
+  printf 'Select an option: '
+  IFS= read -r answer || exit 0
+  case "$answer" in
+    1)
+      if grep -q '/media/.*/apks' /etc/apk/repositories 2>/dev/null; then
+        /usr/local/sbin/setup-alpine
+      else
+        echo 'Boot the LiteFW installation ISO to install the appliance.'
+      fi;;
+    2) /usr/sbin/litefw-network;;
+    3) /usr/sbin/litefw-admin;;
+    4) /usr/sbin/lfw-setup show; ip route show;;
+    5)
+      echo '1) Keyboard  2) Timezone  3) APK repositories'
+      printf 'Select setting: '; IFS= read -r item || exit 0
+      case "$item" in
+        1) setup-keymap;;
+        2) setup-timezone;;
+        3) setup-apkrepos;;
+      esac;;
+    6) rc-service lighttpd restart;;
+    7) echo 'Type exit to return to LiteFW console.'; /bin/sh;;
+    8) reboot;;
+    9) poweroff;;
+    *) echo 'Invalid selection.';;
+  esac
+  printf '\nPress Enter to return to LiteFW console...'
+  IFS= read -r unused || exit 0
+done
