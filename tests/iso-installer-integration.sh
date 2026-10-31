@@ -20,6 +20,10 @@ setup-interfaces -r
 setup-dns
 # set root password
 echo ROOT_PASSWORD_SECTION_PASSED
+print_heading2 " User"
+echo STOCK_USER_WAS_CALLED
+setup-user
+setup-sshd
 print_heading2 " Disk & Install"
 echo ALPINE_DISK_INSTALL_REACHED
 MOCK
@@ -59,6 +63,7 @@ MOCK
   grep -q "DHCP did not return" /tmp/installer.log
   grep -q "ALPINE_DISK_INSTALL_REACHED" /tmp/installer.log
   ! grep -q "STOCK_NETWORK_WAS_CALLED" /tmp/installer.log
+  ! grep -q "STOCK_USER_WAS_CALLED" /tmp/installer.log
   grep -q "wan.*dhcp" /tmp/segment-ops
   grep -q "wan.*none" /tmp/segment-ops
   htpasswd -vb /etc/litefwm/htpasswd Operator SmokeTestOnlyPassword123! >/dev/null
