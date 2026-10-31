@@ -1,0 +1,39 @@
+name: Stage verified LiteFW ISO for Proxmox VM 107
+
+on:
+  push:
+    paths:
+      - .github/workflows/stage-iso-to-proxmox.yml
+  workflow_dispatch:
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  stage-iso:
+    name: Download and verify GitHub ISO on LiteFW dev runner
+    runs-on: [self-hosted, Linux, X64]
+    timeout-minutes: 30
+    steps:
+      - name: Download successful LiteFW 2.2.0 build artifact
+        uses: actions/download-artifact@v4
+        with:
+          repository: theonemule/LITEFW2
+          run-id: 41226446645
+          name: litefw2-alpine-appliance-43
+          github-token: ${{ github.token }}
+          path: ${{ runner.temp }}/litefw-vm107-stage
+      - name: Verify SHA256 checksum and stage ISO for Proxmox
+        shell: bash
+        run: |
+          set -euo pipefail
+          src="${{ runner.temp }}/litefw-vm107-stage"
+          dest="/opt/github-actions-runner/LITEFW2/_work/_litefw_iso_transfer"
+          (cd "$src" && sha256sum -c SHA256SUMS)
+          test -s "$src/litefw2-2.2.0-alpine3.24-x86_64.iso"
+          install -d -m 0755 "$dest"
+          install -m 0644 "$src/litefw2-2.2.0-alpine3.24-x86_64.iso" "$dest/litefw2-2.2.0-alpine3.24-x86_64.iso"
+          install -m 0644 "$src/SHA256SUMS" "$dest/SHA256SUMS"
+          (cd "$dest" && sha256sum -c SHA256SUMS)
+          echo "Verified LiteFW 2.2.0 ISO staged on dev runner for Proxmox VM 107."
