@@ -104,11 +104,11 @@ def install_from_iso():
     vmcmd("test -x /usr/local/sbin/setup-alpine")
     vmcmd("test -x /usr/sbin/setup-alpine")
     vmcmd("test -x /usr/local/sbin/litefw2-console-login")
-    vmcmd("grep -q '^tty1::respawn:/sbin/getty -n -l /usr/local/sbin/litefw2-console-login ' /etc/inittab")
+    vmcmd("grep -qx 'tty1::respawn:-/bin/sh' /etc/inittab")
     # Confirm a real root shell is rendered on VGA tty1, not a login/password
     # challenge. /dev/vcs1 exposes the guest virtual console text buffer.
     vmcmd("test -c /dev/vcs1")
-    vmcmd("dd if=/dev/vcs1 bs=4096 count=1 2>/dev/null | tr -d '\\000' | grep -q 'localhost:~#'")
+    vmcmd("i=0; until dd if=/dev/vcs1 bs=4096 count=1 2>/dev/null | tr -d '\\000' | grep -q 'localhost:~#'; do i=$((i+1)); [ $i -lt 30 ] || exit 1; sleep 1; done", timeout=70)
     vmcmd("awk -F: '$1==\"root\" {exit ($2!=\"\")} END {}' /etc/shadow")
     # This low-level setup-disk smoke bypasses the integrated setup-alpine
     # prompts; create a test-only hash so it tests disk persistence honestly.
@@ -142,11 +142,11 @@ def verify_installed_system():
     vmcmd("test -x /usr/sbin/lfwctl")
     vmcmd("test -x /usr/sbin/lfw-setup")
     vmcmd("test -x /usr/local/sbin/litefw2-console-login")
-    vmcmd("grep -q '^tty1::respawn:/sbin/getty -n -l /usr/local/sbin/litefw2-console-login ' /etc/inittab")
+    vmcmd("grep -qx 'tty1::respawn:-/bin/sh' /etc/inittab")
     # Confirm a real root shell is rendered on VGA tty1, not a login/password
     # challenge. /dev/vcs1 exposes the guest virtual console text buffer.
     vmcmd("test -c /dev/vcs1")
-    vmcmd("dd if=/dev/vcs1 bs=4096 count=1 2>/dev/null | tr -d '\\000' | grep -q 'localhost:~#'")
+    vmcmd("i=0; until dd if=/dev/vcs1 bs=4096 count=1 2>/dev/null | tr -d '\\000' | grep -q 'localhost:~#'; do i=$((i+1)); [ $i -lt 30 ] || exit 1; sleep 1; done", timeout=70)
     vmcmd("test -x /usr/lib/litefwm/cgi/api.cgi")
     vmcmd("test -f /usr/share/litefwm/www/index.html")
     vmcmd("test -f /etc/lighttpd/litefwm.conf")

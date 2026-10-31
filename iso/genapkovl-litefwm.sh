@@ -143,8 +143,12 @@ exec /bin/login -f root
 CONSOLE
 chmod 0755 "$tmp/usr/local/sbin/litefw2-console-login"
 cp /etc/inittab "$tmp/etc/inittab"
-sed -i '/^tty[1-6]::respawn:\/sbin\/getty / s#:/sbin/getty #:/sbin/getty -n -l /usr/local/sbin/litefw2-console-login #' "$tmp/etc/inittab"
-grep -q '^tty1::respawn:/sbin/getty -n -l /usr/local/sbin/litefw2-console-login ' "$tmp/etc/inittab"
+# tty1 is the Proxmox VGA terminal. Do not run getty or login at all;
+# BusyBox init directly starts an interactive root login shell on tty1.
+sed -i 's#^tty1::respawn:/sbin/getty .*#tty1::respawn:-/bin/sh#' "$tmp/etc/inittab"
+# Other local VTs use the usual autologin adapter for console recovery.
+sed -i '/^tty[2-6]::respawn:\/sbin\/getty / s#:/sbin/getty #:/sbin/getty -n -l /usr/local/sbin/litefw2-console-login #' "$tmp/etc/inittab"
+grep -qx 'tty1::respawn:-/bin/sh' "$tmp/etc/inittab"
 
 # Installed base appliance only. Optional module APKs are on the ISO repository
 # but deliberately not installed by default.
