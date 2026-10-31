@@ -18,6 +18,9 @@ install -d   "$tmp/usr/sbin" "$tmp/usr/lib/litefwm" "$tmp/usr/lib/litefwm/cgi"  
 # LiteFWM CLI and runtime library.
 install -m 0755 "$src/bin/lfwctl" "$tmp/usr/sbin/lfwctl"
 install -m 0755 "$src/bin/lfw-setup" "$tmp/usr/sbin/lfw-setup"
+for command in litefw-admin litefw-network litefw-console; do
+  install -m 0755 "$src/bin/$command" "$tmp/usr/sbin/$command"
+done
 install -m 0755 "$src/iso/setup-alpine-litefwm" "$tmp/usr/local/sbin/setup-alpine"
 
 for f in "$src"/lib/*.sh "$src"/lib/*.jq "$src"/lib/*.awk; do
@@ -91,7 +94,7 @@ RULES
 # Initialize runtime; never generate credentials or write a plaintext password.
 cat >"$tmp/etc/init.d/litefwm-init" <<'INIT'
 #!/sbin/openrc-run
-description="Initialize LiteFW2 appliance runtime"
+description="Initialize LiteFW appliance runtime"
 
 depend() {
   need localmount
@@ -99,7 +102,7 @@ depend() {
 }
 
 start() {
-  ebegin "Initializing LiteFW2"
+  ebegin "Initializing LiteFW"
   install -d -m 0755 /etc/litefwm /var/log/lighttpd
   # Set the root password to empty at runtime, after the image is booted.
   # The VGA getty is configured to bypass login authentication entirely,
@@ -128,7 +131,7 @@ start() {
   chvt 1 >/dev/null 2>&1 || true
   chown lighttpd:lighttpd /var/log/lighttpd 2>/dev/null || true
   if [ ! -s /etc/litefwm/htpasswd ]; then
-    einfo "Web UI is not configured yet. Run setup-alpine to install LiteFW2."
+    einfo "Web UI is not configured yet. Open the LiteFW console to configure it."
     eend 0
     return 0
   fi
@@ -163,12 +166,11 @@ exec /bin/login -f root
 CONSOLE
 chmod 0755 "$tmp/usr/local/sbin/litefw2-console-login"
 cp /etc/inittab "$tmp/etc/inittab"
-# tty1 is the Proxmox VGA terminal. Do not run getty or login at all;
-# BusyBox init directly starts an interactive root login shell on tty1.
-sed -i 's#^tty1::respawn:/sbin/getty .*#tty1::respawn:-/bin/sh#' "$tmp/etc/inittab"
+# tty1 opens the LiteFW appliance console rather than an Alpine login shell.
+sed -i 's#^tty1::respawn:/sbin/getty .*#tty1::respawn:/usr/sbin/litefw-console#' "$tmp/etc/inittab"
 # Other local VTs use the usual autologin adapter for console recovery.
 sed -i '/^tty[2-6]::respawn:\/sbin\/getty / s#:/sbin/getty #:/sbin/getty -n -l /usr/local/sbin/litefw2-console-login #' "$tmp/etc/inittab"
-grep -qx 'tty1::respawn:-/bin/sh' "$tmp/etc/inittab"
+grep -qx 'tty1::respawn:/usr/sbin/litefw-console' "$tmp/etc/inittab"
 
 # Installed base appliance only. Optional module APKs are on the ISO repository
 # but deliberately not installed by default.
@@ -194,6 +196,9 @@ WORLD
 {
   [ ! -f "$tmp/usr/sbin/lfwctl" ] || printf '%s\n' "$tmp/usr/sbin/lfwctl"
   [ ! -f "$tmp/usr/sbin/lfw-setup" ] || printf '%s\n' "$tmp/usr/sbin/lfw-setup"
+  for command in litefw-admin litefw-network litefw-console; do
+    printf '%s\n' "$tmp/usr/sbin/$command"
+  done
   printf '%s\n' "$tmp/usr/local/sbin/litefw2-console-login"
   find "$tmp/usr/lib/litefwm" -type f -print
   find "$tmp/usr/share/litefwm" -type f -print
@@ -231,23 +236,21 @@ rc_add iptables boot
 rc_add litefwm-init boot
 rc_add dnsmasq default
 rc_add lighttpd default
+rc_add sshd default
 rc_add mount-ro shutdown
 rc_add killprocs shutdown
 rc_add savecache shutdown
 
-cat >"$tmp/etc/motd" <<'MOTD'
-LiteFWM appliance installer
+cat >"$tmp/etc/motd" <<MOTD
+LiteFW $(cat "$src/VERSION") - Firewall & Network Appliance
 
-TO INSTALL ALPINE + CONFIGURE LITEFW2 FIREWALL: run setup-alpine
-
-Alpine setup skips the root-password step. LiteFW2 replaces Alpine's
-network wizard with WAN/LAN setup, an 8-second DHCP check, and static/offline
-fallback. The appliance network is configured before Disk & Install. The stock Alpine installer remains available as /sbin/setup-alpine.
-
-Local console: root automatically logged in (no password prompt).
-During setup-alpine you will set ONLY the LiteFW2 web admin password.
-The installer handles Alpine setup, WAN/LAN assignment, and web administrator
-password together. No second setup command is required.
+Local VGA: automatic LiteFW management menu (no root password prompt).
+Use option 1 to install LiteFW. Alpine keyboard, timezone, repositories
+and disk selection are included; WAN/LAN/VLAN and web administrator setup
+run as part of the same installer. SSH is installed automatically.
 MOTD
+cat >"$tmp/etc/issue" <<ISSUE
+LiteFW $(cat "$src/VERSION") - Firewall & Network Appliance
+ISSUE
 
 tar -c -C "$tmp" . | gzip -9n >"${host}.apkovl.tar.gz"
