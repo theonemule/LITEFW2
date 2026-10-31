@@ -10,14 +10,57 @@ DHCP_WAIT=${LITEFW_DHCP_WAIT:-8}
 command -v jq >/dev/null 2>&1 || exit 1
 apply() {
   operation=$1; payload=$2
-  result=$(timeout 12 "$CTL" op "$operation" "$payload") || {
-    echo "LiteFW $operation failed or timed out." >&2
+  error_output=$(mktemp) || return 1
+  if result=$(timeout "${LITEFW_APPLY_TIMEOUT:-45}" "$CTL" op "$operation" "$payload" 2>"$error_output"); then
+    :
+  else
+    status=$?
+    echo "LiteFW $operation failed (exit $status):" >&2
+    [ -z "$result" ] || printf '%s\n' "$result" >&2
+    [ ! -s "$error_output" ] || cat "$error_output" >&2
+    [ "$status" -ne 124 ] || echo "Firewall operation timed out." >&2
+    rm -f "$error_output"
     return 1
-  }
-  printf '%s\n' "$result" | jq -e '.ok == true' >/dev/null || {
-    printf '%s\n' "$result" >&2
+  fi
+  rm -f "$error_output"
+  if ! printf '%s\n' "$result" | jq -e '.ok == true' >/dev/null 2>&1; then
+    printf 'LiteFW %s rejected configuration:\n%s\n' "$operation" "$result" >&2
     return 1
-  }
+  fi
+}
+valid_ipv4() {
+  printf '%s\n' "$1" | awk -F. 'NF != 4 {exit 1} {for (i=1;i<=4;i++) if ($i !~ /^[0-9]+$/ || length($i)>3 || $i+0>255) exit 1}'
+}
+valid_cidr() {
+  case "$1" in */*) :;; *) return 1;; esac
+  addr=${1%/*}; prefix=${1#*/}
+  valid_ipv4 "$addr" || return 1
+  case "$prefix" in ''|*[!0-9]*) return 1;; esac
+  [ "$prefix" -ge 0 ] && [ "$prefix" -le 32 ]
+}
+read_cidr() {
+  description=$1; default_cidr=${2:-}
+  while :; do
+    if [ -n "$default_cidr" ]; then
+      printf '%s IPv4/CIDR [%s]: ' "$description" "$default_cidr"
+    else
+      printf '%s IPv4/CIDR (e.g. 10.0.0.2/24): ' "$description"
+    fi
+    IFS= read -r CIDR || return 1
+    CIDR=${CIDR:-$default_cidr}
+    if valid_cidr "$CIDR"; then return 0; fi
+    if valid_ipv4 "$CIDR"; then
+      printf 'Subnet prefix length [24]: '
+      IFS= read -r requested_prefix || return 1
+      requested_prefix=${requested_prefix:-24}
+      if valid_cidr "$CIDR/$requested_prefix"; then
+        CIDR="$CIDR/$requested_prefix"
+        echo "Using $CIDR"
+        return 0
+      fi
+    fi
+    echo 'Invalid IPv4/CIDR. Example: 10.0.1.190/24' >&2
+  done
 }
 segment() {
   i=$1 role=$2 mode=$3; cidr=${4:-}; gateway=${5:-}; dns=${6:-}
@@ -101,8 +144,8 @@ if [ "$wan" != none ]; then
     fi
   fi
   if [ "$mode" = static ]; then
-    printf 'WAN IPv4/CIDR (e.g. 10.0.0.2/24): '
-    IFS= read -r cidr || exit 1
+    read_cidr WAN '' || exit 1
+    cidr=$CIDR
     printf 'WAN gateway (blank for none): '
     IFS= read -r gw || exit 1
     printf 'WAN DNS server (blank for none): '
@@ -130,9 +173,8 @@ if [ "$lan" != none ]; then
     lan=$logical
     ;;
   esac
-  printf 'LAN IPv4/CIDR [192.168.1.1/24]: '
-  IFS= read -r cidr || exit 1
-  cidr=${cidr:-192.168.1.1/24}
+  read_cidr LAN '192.168.1.1/24' || exit 1
+  cidr=$CIDR
   segment "$lan" lan static "$cidr"
 fi
 echo
