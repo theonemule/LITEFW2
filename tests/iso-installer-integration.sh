@@ -116,7 +116,7 @@ MOCK
     mkdir -p "/tmp/mocknet/$i"; : >"/tmp/mocknet/$i/device"; echo 1 >"/tmp/mocknet/$i/type"
   done
   rm -f /tmp/segment-ops /tmp/alpine-tools-called /tmp/setup-disk-ran /etc/litefwm/htpasswd
-  printf "2\n\n\nstatic\n192.168.50.2/24\n192.168.50.1\n9.9.9.9\nyes\n20\n192.168.20.1/24\n\nNewAdmin\nSmokeTestOnlyPassword123!\nSmokeTestOnlyPassword123!\nERASE\n" \
+  printf "2\n\n\nstatic\n192.168.50.2/24\n192.168.50.1\n9.9.9.9\nyes\n20\n10.0.1.190\n\n\nNewAdmin\nSmokeTestOnlyPassword123!\nSmokeTestOnlyPassword123!\nERASE\n" \
     | LITEFW_MOCK_TWO_DISKS=1 timeout 40 /usr/local/sbin/setup-alpine >/tmp/static.log 2>&1 \
     || { cat /tmp/static.log; exit 1; }
   grep -q "setup-disk -m sys -s 0 /dev/vdb" /tmp/alpine-tools-called
@@ -125,6 +125,7 @@ MOCK
   grep -q "parent.*eth1" /tmp/segment-ops
   grep -q "vid.*20" /tmp/segment-ops
   grep -q "interface.*eth1.20.*role.*lan" /tmp/segment-ops
+  grep -q "10.0.1.190/24" /tmp/segment-ops
   grep -q "192.168.50.2/24" /tmp/segment-ops
   grep -q "192.168.50.1" /tmp/segment-ops
   grep -q "9.9.9.9" /tmp/segment-ops
