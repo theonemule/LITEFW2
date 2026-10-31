@@ -53,7 +53,7 @@ MOCK
   : >/tmp/mocknet/eth0/device
   echo 1 >/tmp/mocknet/eth0/type
   # One-NIC offline case: DHCP fails, administrator chooses no WAN address.
-  printf "\n\n\nnone\n\nOperator\nSmokeTestOnlyPassword123!\nSmokeTestOnlyPassword123!\n" \
+  printf "\n\n\nnone\nOperator\nSmokeTestOnlyPassword123!\nSmokeTestOnlyPassword123!\n" \
     | timeout 30 /usr/local/sbin/setup-alpine >/tmp/installer.log 2>&1 \
     || { cat /tmp/installer.log; exit 1; }
   grep -q "DHCP did not return" /tmp/installer.log
