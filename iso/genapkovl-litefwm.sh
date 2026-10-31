@@ -95,6 +95,14 @@ depend() {
 start() {
   ebegin "Initializing LiteFW2"
   install -d -m 0755 /etc/litefwm /var/log/lighttpd
+  # Set the root password to empty at runtime, after the image is booted.
+  # The VGA getty is configured to bypass login authentication entirely,
+  # so it does not depend on timing of this operation.
+  passwd -d root >/dev/null 2>&1 || {
+    eerror "Unable to clear root console password"
+    eend 1
+    return 1
+  }
   chown lighttpd:lighttpd /var/log/lighttpd 2>/dev/null || true
   if [ ! -s /etc/litefwm/htpasswd ]; then
     einfo "Web UI is not configured yet. Run setup-alpine to install LiteFW2."
@@ -120,11 +128,8 @@ SSHD
 # which may start after the console gettys are already accepting logins.
 # A local/Proxmox console is administrator-controlled; SSH never accepts an
 # empty root password (sshd_config above).
-cp /etc/shadow "$tmp/etc/shadow"
-awk -F: 'BEGIN {OFS=":"} $1=="root" {$2=""; found=1} {print} END {if(!found) exit 1}' \
-  "$tmp/etc/shadow" > "$tmp/etc/shadow.new"
-mv "$tmp/etc/shadow.new" "$tmp/etc/shadow"
-chmod 0640 "$tmp/etc/shadow"
+# The image builder is unprivileged and cannot read the builder's shadow
+# database; the root password is cleared on boot (see litefwm-init above).
 
 # Alpine's BusyBox getty normally starts /bin/login, which prompted on VGA
 # even after the later boot-service password reset. Start authenticated root
@@ -179,7 +184,6 @@ WORLD
     "$tmp/etc/iptables/rules-save" \
     "$tmp/etc/litefwm/htpasswd" \
     "$tmp/etc/inittab" \
-    "$tmp/etc/shadow" \
     "$tmp/etc/ssh/sshd_config.d/90-litefwm-console-only.conf"
 } | sed "s#^$tmp/#+#" >"$tmp/etc/apk/protected_paths.d/lbu.list"
 
