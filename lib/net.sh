@@ -112,6 +112,8 @@ dhcp_stop() {
 # dhcp_start IFACE [REQUEST_IP] [keep]: keep = skip the initial address flush so
 # an address copied onto IFACE stays reachable while the lease is renewed.
 dhcp_start() {
+  # The ISO boots with loopback only. Raise WAN before seeking a lease.
+  run ip link set dev "$1" up
   dhcp_stop "$1" kill
   mkdir -p "$LFW_RUN"
   if [ "${3:-}" = keep ]; then : >"$LFW_RUN/keep.$1"; else rm -f "$LFW_RUN/keep.$1"; fi
