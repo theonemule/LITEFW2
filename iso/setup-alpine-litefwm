@@ -22,7 +22,7 @@ echo 'No Alpine network, Unix user, or Unix password wizard runs.'
 echo
 
 # Never allow Alpine setup-disk to return success on "none" or no disks.
-available_disks=$(lsblk -dnpo NAME,SIZE,TYPE 2>/dev/null | awk '$3=="disk" {print $1 " " $2}') ||
+available_disks=$(lsblk -dnpo NAME,SIZE,TYPE 2>/dev/null | awk '$3=="disk" && $1 ~ /^\/dev\/(sd[a-z]+|vd[a-z]+|xvd[a-z]+|hd[a-z]+|nvme[0-9]+n[0-9]+|mmcblk[0-9]+)$/ {print $1 " " $2}') ||
   die "Cannot enumerate installation disks."
 [ -n "$available_disks" ] || die "No installation disk detected. No changes made."
 

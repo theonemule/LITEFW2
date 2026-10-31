@@ -11,8 +11,8 @@ docker run --rm \
   apk add --quiet --no-cache alpine-conf apache2-utils lighttpd jq iproute2 util-linux >/dev/null
   mkdir -p /media/cdrom/apks /tmp/mocknet /etc/litefwm
   echo /media/cdrom/apks >>/etc/apk/repositories
-  mknod /dev/litefw_test_disk b 7 200
-  mknod /dev/litefw_other_disk b 7 201
+  mknod /dev/vda b 7 200
+  mknod /dev/vdb b 7 201
   for tool in setup-interfaces setup-user setup-sshd passwd; do
     cat >"/usr/sbin/$tool" <<MOCK
 #!/bin/sh
@@ -40,10 +40,11 @@ MOCK
 #!/bin/sh
 if [ "\$1" = -dnpo ]; then
   [ "\${LITEFW_MOCK_NO_DISKS:-0}" != 1 ] || exit 0
-  echo "/dev/litefw_test_disk 3G disk"
-  [ "\${LITEFW_MOCK_TWO_DISKS:-0}" != 1 ] || echo "/dev/litefw_other_disk 5G disk"
+  echo "/dev/fd0 1.4M disk"
+  echo "/dev/vda 3G disk"
+  [ "\${LITEFW_MOCK_TWO_DISKS:-0}" != 1 ] || echo "/dev/vdb 5G disk"
 elif [ "\$1" = -dno ]; then
-  echo "litefw_test_disk 3G disk"
+  echo "vda 3G disk"
 elif [ "\$1" = -nr ]; then
   echo disk
   if [ -e /tmp/setup-disk-ran ] && [ "\${LITEFW_MOCK_NO_PARTITIONS:-0}" != 1 ]; then echo part; fi
@@ -84,8 +85,9 @@ MOCK
     | timeout 40 /usr/local/sbin/setup-alpine >/tmp/install.log 2>&1 \
     || { cat /tmp/install.log; exit 1; }
   grep -q "DHCP did not return" /tmp/install.log
-  grep -q "SUCCESS: LiteFW installed to /dev/litefw_test_disk" /tmp/install.log
-  grep -q "setup-disk -m sys -s 0 /dev/litefw_test_disk" /tmp/alpine-tools-called
+  grep -q "SUCCESS: LiteFW installed to /dev/vda" /tmp/install.log
+  ! grep -q "/dev/fd0" /tmp/install.log
+  grep -q "setup-disk -m sys -s 0 /dev/vda" /tmp/alpine-tools-called
   ! grep -q FORBIDDEN_STOCK_WIZARD /tmp/install.log
   ! grep -q SmokeTestOnlyPassword123 /tmp/install.log
   grep -q "wan.*dhcp" /tmp/segment-ops
@@ -117,8 +119,8 @@ MOCK
   printf "2\n\n\nstatic\n192.168.50.2/24\n192.168.50.1\n9.9.9.9\nyes\n20\n192.168.20.1/24\n\nNewAdmin\nSmokeTestOnlyPassword123!\nSmokeTestOnlyPassword123!\nERASE\n" \
     | LITEFW_MOCK_TWO_DISKS=1 timeout 40 /usr/local/sbin/setup-alpine >/tmp/static.log 2>&1 \
     || { cat /tmp/static.log; exit 1; }
-  grep -q "setup-disk -m sys -s 0 /dev/litefw_other_disk" /tmp/alpine-tools-called
-  grep -q "SUCCESS: LiteFW installed to /dev/litefw_other_disk" /tmp/static.log
+  grep -q "setup-disk -m sys -s 0 /dev/vdb" /tmp/alpine-tools-called
+  grep -q "SUCCESS: LiteFW installed to /dev/vdb" /tmp/static.log
   grep -q "vlan.create" /tmp/segment-ops
   grep -q "parent.*eth1" /tmp/segment-ops
   grep -q "vid.*20" /tmp/segment-ops
