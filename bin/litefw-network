@@ -1,0 +1,140 @@
+#!/bin/sh
+# First-install and recovery network wizard: WAN + one LAN, optional tagged LAN.
+# All changes use LiteFW native operations, never Alpine setup-interfaces.
+set -eu
+PATH=/usr/sbin:/usr/bin:/sbin:/bin
+CTL=${LFWCTL:-/usr/sbin/lfwctl}
+SYS_NET=${LITEFW_SYS_NET:-/sys/class/net}
+DHCP_WAIT=${LITEFW_DHCP_WAIT:-8}
+[ "$(id -u)" -eq 0 ] || { echo 'Run as root' >&2; exit 1; }
+command -v jq >/dev/null 2>&1 || exit 1
+apply() {
+  operation=$1; payload=$2
+  result=$(timeout 12 "$CTL" op "$operation" "$payload") || {
+    echo "LiteFW $operation failed or timed out." >&2
+    return 1
+  }
+  printf '%s\n' "$result" | jq -e '.ok == true' >/dev/null || {
+    printf '%s\n' "$result" >&2
+    return 1
+  }
+}
+segment() {
+  i=$1 role=$2 mode=$3; cidr=${4:-}; gateway=${5:-}; dns=${6:-}
+  addresses='[]'; nameservers='[]'
+  [ -z "$cidr" ] || addresses=$(jq -nc --arg c "$cidr" '[$c]')
+  [ -z "$dns" ] || nameservers=$(jq -nc --arg d "$dns" '[$d]')
+  body=$(jq -nc --arg i "$i" --arg r "$role" --arg m "$mode" --arg a "$cidr" --arg g "$gateway"     --argjson ips "$addresses" --argjson ns "$nameservers" \
+    '{interface:$i,role:$r,label:(if $r=="wan" then "WAN" elif $r=="lan" then "LAN" else "" end),mode:$m,addresses:$ips,gateway:$g,dns:$ns}')
+  apply segment.set "$body"
+}
+demote_roles() {
+  [ "$1" = none ] && return 0
+  old=$("$CTL" get segments | jq -r --arg role "$1" '.interfaces[] | select(.role==$role) | .name' 2>/dev/null || true)
+  for i in $old; do segment "$i" none none; done
+}
+devices=''
+for p in "$SYS_NET"/*; do
+  [ -e "$p" ] || continue
+  i=${p##*/}
+  [ "$i" = lo ] && continue
+  # Only physical Ethernet NICs/virtio ports, not bridges/VLANs/tunnels.
+  if [ -e "$p/type" ] && [ "$(cat "$p/type")" != 1 ]; then continue; fi
+  [ -e "$p/device" ] || [ "$SYS_NET" != /sys/class/net ] || continue
+  devices="$devices $i"
+done
+devices=${devices# }
+echo
+echo '================== LiteFW network setup =================='
+echo "Available physical adapters: ${devices:-none}"
+echo 'Only WAN and LAN are assigned. Other adapters remain unassigned.'
+[ -n "$devices" ] || { echo 'No NICs found. Install can continue offline.'; exit 0; }
+first=${devices%% *}
+choose() {
+  prompt=$1 default=$2 exclude=${3:-}
+  while :; do
+    printf '%s [%s]: ' "$prompt" "$default" >&2
+    IFS= read -r choice || return 1
+    choice=${choice:-$default}
+    [ "$choice" = none ] && { CHOICE=none; return 0; }
+    [ "$choice" != "$exclude" ] || { echo 'WAN and LAN must be different.' >&2; continue; }
+    case " $devices " in *" $choice "*) CHOICE=$choice; return 0;; esac
+    echo 'Select a listed adapter, or none.' >&2
+  done
+}
+choose 'WAN adapter (or none)' "$first"
+wan=$CHOICE
+lan_default=none
+for i in $devices; do [ "$i" = "$wan" ] || { lan_default=$i; break; }; done
+choose 'LAN adapter (or none)' "$lan_default" "$wan"
+lan=$CHOICE
+if [ "$wan" != none ]; then
+  demote_roles wan
+  while :; do
+    printf 'WAN mode: dhcp / static / none [dhcp]: '
+    IFS= read -r mode || exit 1
+    mode=${mode:-dhcp}
+    case "$mode" in dhcp|static|none) break;; *) echo 'Invalid mode.';; esac
+  done
+  if [ "$mode" = dhcp ]; then
+    # Any foreground lfwctl/udhcpc blocking is bounded by apply's timeout.
+    if apply segment.set "$(jq -nc --arg i "$wan" '{interface:$i,role:"wan",label:"WAN",mode:"dhcp",addresses:[],gateway:"",dns:[]}')"; then
+      elapsed=0
+      while [ "$elapsed" -lt "$DHCP_WAIT" ]; do
+        if ip -4 -o addr show dev "$wan" scope global | grep -q ' inet '; then break; fi
+        sleep 1
+        elapsed=$((elapsed+1))
+      done
+    fi
+    if ip -4 -o addr show dev "$wan" scope global | grep -q ' inet '; then
+      echo 'WAN DHCP address acquired.'
+      mode=done
+    else
+      echo 'DHCP did not return an address within the time limit.'
+      while :; do
+        printf 'Fallback: keep DHCP on boot / static / none [keep]: '
+        IFS= read -r mode || exit 1
+        mode=${mode:-keep}
+        case "$mode" in keep|static|none) break;; esac
+      done
+      [ "$mode" != keep ] || mode=done
+    fi
+  fi
+  if [ "$mode" = static ]; then
+    printf 'WAN IPv4/CIDR (e.g. 10.0.0.2/24): '
+    IFS= read -r cidr || exit 1
+    printf 'WAN gateway (blank for none): '
+    IFS= read -r gw || exit 1
+    printf 'WAN DNS server (blank for none): '
+    IFS= read -r dns || exit 1
+    segment "$wan" wan static "$cidr" "$gw" "$dns"
+  elif [ "$mode" = none ]; then segment "$wan" wan none; fi
+fi
+if [ "$lan" != none ]; then
+  demote_roles lan
+  printf 'Tag the LAN interface with a VLAN? [no] (yes/no): '
+  IFS= read -r tagged || exit 1
+  case "$tagged" in y|Y|yes|YES)
+    while :; do
+      printf 'LAN VLAN ID (1-4094): '
+      IFS= read -r vid || exit 1
+      case "$vid" in ''|*[!0-9]*) echo 'Invalid VLAN ID.';; *)
+        [ "$vid" -ge 1 ] && [ "$vid" -le 4094 ] && break || echo 'VLAN ID must be 1-4094.';;
+      esac
+    done
+    logical="$lan.$vid"
+    [ "${#logical}" -le 15 ] || { echo 'VLAN interface name too long.' >&2; exit 1; }
+    if ! ip link show dev "$logical" >/dev/null 2>&1; then
+      apply vlan.create "$(jq -nc --arg parent "$lan" --arg name "$logical" --argjson vid "$vid" '{parent:$parent,name:$name,vid:$vid}')"
+    fi
+    lan=$logical
+    ;;
+  esac
+  printf 'LAN IPv4/CIDR [192.168.1.1/24]: '
+  IFS= read -r cidr || exit 1
+  cidr=${cidr:-192.168.1.1/24}
+  segment "$lan" lan static "$cidr"
+fi
+echo
+echo "Configured WAN: $wan; LAN: $lan"
+echo 'Unselected NICs were not configured. All settings survive reboot.'
