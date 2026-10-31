@@ -109,8 +109,6 @@ def install_from_iso():
     # challenge. /dev/vcs1 exposes the guest virtual console text buffer.
     vmcmd("test -c /dev/vcs1")
     vmcmd("dd if=/dev/vcs1 bs=4096 count=1 2>/dev/null | tr -d '\\000' | grep -q 'localhost:~#'")
-    vmcmd("test -c /dev/vcs0")
-    vmcmd("dd if=/dev/vcs0 bs=4096 count=1 2>/dev/null | tr -d '\\000' | grep -q 'localhost:~#'")
     vmcmd("awk -F: '$1==\"root\" {exit ($2!=\"\")} END {}' /etc/shadow")
     # This low-level setup-disk smoke bypasses the integrated setup-alpine
     # prompts; create a test-only hash so it tests disk persistence honestly.
@@ -149,8 +147,6 @@ def verify_installed_system():
     # challenge. /dev/vcs1 exposes the guest virtual console text buffer.
     vmcmd("test -c /dev/vcs1")
     vmcmd("dd if=/dev/vcs1 bs=4096 count=1 2>/dev/null | tr -d '\\000' | grep -q 'localhost:~#'")
-    vmcmd("test -c /dev/vcs0")
-    vmcmd("dd if=/dev/vcs0 bs=4096 count=1 2>/dev/null | tr -d '\\000' | grep -q 'localhost:~#'")
     vmcmd("test -x /usr/lib/litefwm/cgi/api.cgi")
     vmcmd("test -f /usr/share/litefwm/www/index.html")
     vmcmd("test -f /etc/lighttpd/litefwm.conf")

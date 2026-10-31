@@ -103,6 +103,9 @@ start() {
     eend 1
     return 1
   }
+  # The bootloader also exposes tty0. Make VGA tty1 (the autologin shell)
+  # the active console for Proxmox noVNC instead of leaving tty0 selected.
+  chvt 1 >/dev/null 2>&1 || true
   chown lighttpd:lighttpd /var/log/lighttpd 2>/dev/null || true
   if [ ! -s /etc/litefwm/htpasswd ]; then
     einfo "Web UI is not configured yet. Run setup-alpine to install LiteFW2."
