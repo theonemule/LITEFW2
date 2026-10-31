@@ -103,8 +103,22 @@ start() {
     eend 1
     return 1
   }
-  # The bootloader also exposes tty0. Make VGA tty1 (the autologin shell)
-  # the active console for Proxmox noVNC instead of leaving tty0 selected.
+  # Alpine's initramfs appends a new getty on the kernel's console=tty0
+  # AFTER the apkovl inittab is loaded. That getty steals the VGA console
+  # and prompts for a password even when tty1 already has a root shell.
+  # Remove it on each boot and reload BusyBox init so the getty is killed.
+  if grep -q '^tty0::respawn:' /etc/inittab; then
+    sed -i '/^tty0::respawn:/d' /etc/inittab || {
+      eerror "Unable to remove unexpected VGA login prompt"
+      eend 1
+      return 1
+    }
+    kill -HUP 1 || {
+      eerror "Unable to reload VGA console configuration"
+      eend 1
+      return 1
+    }
+  fi
   chvt 1 >/dev/null 2>&1 || true
   chown lighttpd:lighttpd /var/log/lighttpd 2>/dev/null || true
   if [ ! -s /etc/litefwm/htpasswd ]; then

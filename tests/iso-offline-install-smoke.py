@@ -105,6 +105,8 @@ def install_from_iso():
     vmcmd("test -x /usr/sbin/setup-alpine")
     vmcmd("test -x /usr/local/sbin/litefw2-console-login")
     vmcmd("grep -qx 'tty1::respawn:-/bin/sh' /etc/inittab")
+    vmcmd("! grep -q '^tty0::respawn:' /etc/inittab")
+    vmcmd("! ps -eo args | grep -q '[g]etty .*tty0'")
     # Confirm a real root shell is rendered on VGA tty1, not a login/password
     # challenge. /dev/vcs1 exposes the guest virtual console text buffer.
     vmcmd("test -c /dev/vcs1")
@@ -143,6 +145,8 @@ def verify_installed_system():
     vmcmd("test -x /usr/sbin/lfw-setup")
     vmcmd("test -x /usr/local/sbin/litefw2-console-login")
     vmcmd("grep -qx 'tty1::respawn:-/bin/sh' /etc/inittab")
+    vmcmd("! grep -q '^tty0::respawn:' /etc/inittab")
+    vmcmd("! ps -eo args | grep -q '[g]etty .*tty0'")
     # Confirm a real root shell is rendered on VGA tty1, not a login/password
     # challenge. /dev/vcs1 exposes the guest virtual console text buffer.
     vmcmd("test -c /dev/vcs1")
