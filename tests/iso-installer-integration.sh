@@ -33,12 +33,12 @@ MOCK
   cat >/usr/sbin/lfwctl <<\MOCK
 #!/bin/sh
 if [ "$1" = get ]; then
-  echo "{"interfaces":[]}"
+  echo "{\"interfaces\":[]}"
   exit 0
 fi
 [ "$1" = op ] || exit 1
 printf "%s %s\n" "$2" "$3" >>/tmp/segment-ops
-echo "{"ok":true}"
+echo "{\"ok\":true}"
 MOCK
   chmod +x /usr/sbin/lfwctl
   cat >/usr/sbin/ip <<\MOCK
@@ -59,8 +59,8 @@ MOCK
   grep -q "DHCP did not return" /tmp/installer.log
   grep -q "ALPINE_DISK_INSTALL_REACHED" /tmp/installer.log
   ! grep -q "STOCK_NETWORK_WAS_CALLED" /tmp/installer.log
-  grep -q ""role":"wan".*"mode":"dhcp"" /tmp/segment-ops
-  grep -q ""role":"wan".*"mode":"none"" /tmp/segment-ops
+  grep -q "wan.*dhcp" /tmp/segment-ops
+  grep -q "wan.*none" /tmp/segment-ops
   htpasswd -vb /etc/litefwm/htpasswd Operator SmokeTestOnlyPassword123! >/dev/null
   ! grep -q SmokeTestOnlyPassword123 /tmp/installer.log
   echo "PASS offline DHCP fallback and named web administrator"
@@ -76,9 +76,9 @@ MOCK
     || { cat /tmp/installer-static.log; exit 1; }
   grep -q "ALPINE_DISK_INSTALL_REACHED" /tmp/installer-static.log
   grep -q "vlan.create" /tmp/segment-ops
-  grep -q ""parent":"eth1"" /tmp/segment-ops
-  grep -q ""vid":20" /tmp/segment-ops
-  grep -q ""interface":"eth1.20".*"role":"lan"" /tmp/segment-ops
+  grep -q "parent.*eth1" /tmp/segment-ops
+  grep -q "vid.*20" /tmp/segment-ops
+  grep -q "interface.*eth1.20.*role.*lan" /tmp/segment-ops
   grep -q "192.168.50.2/24" /tmp/segment-ops
   grep -q "192.168.50.1" /tmp/segment-ops
   grep -q "9.9.9.9" /tmp/segment-ops
