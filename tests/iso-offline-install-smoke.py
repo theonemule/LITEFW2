@@ -125,7 +125,9 @@ def install_from_iso():
     vmcmd("awk -F: '$1==\"root\" {exit ($2!=\"\")} END {}' /etc/shadow")
     # Exercise the actual end-to-end LiteFW installer. Regional prompts
     # have their own integration coverage and are skipped here for determinism.
-    q.sendline("LITEFW_INSTALL_SKIP_REGIONAL=1 LITEFW_INSTALL_DISK=/dev/vda /usr/sbin/setup-alpine")
+    q.sendline("LITEFW_INSTALL_SKIP_REGIONAL=1 /usr/sbin/setup-alpine")
+    q.expect(r"Disk number or device path", timeout=90)
+    q.sendline("1")
     q.expect("No NICs found. Install can continue offline.", timeout=90)
     q.expect(r"Add or change internet APK mirrors\?", timeout=90)
     q.sendline("")
@@ -135,6 +137,8 @@ def install_from_iso():
     q.sendline("SmokeTestOnlyPassword123!")
     q.expect("Confirm password", timeout=60)
     q.sendline("SmokeTestOnlyPassword123!")
+    q.expect("Type ERASE to partition, format and install LiteFW", timeout=90)
+    q.sendline("ERASE")
     i=q.expect([r"(?is)erase.*continue.*\(y/n\)", r"LiteFW installation complete",
                 pexpect.EOF, pexpect.TIMEOUT], timeout=220)
     if i == 0:
@@ -147,6 +151,7 @@ def install_from_iso():
     vmcmd("test ! -e /root/litefwm-admin.txt")
     vmcmd("test -s /etc/litefwm/htpasswd")
     vmcmd("test -b /dev/vda")
+    vmcmd("lsblk -nr -o TYPE /dev/vda | grep -qx part")
     stop_vm()
 
 def verify_installed_system():

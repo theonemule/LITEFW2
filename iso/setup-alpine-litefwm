@@ -1,74 +1,125 @@
 #!/bin/sh
-# LiteFW's first-install wizard. Alpine supplies low-level regional and disk
-# utilities only; Alpine's account and interface wizards are never invoked.
+# LiteFW appliance installer. Alpine supplies low-level tools only.
+# A selected target disk and a completed sys-mode install are mandatory.
 set -eu
 PATH=/usr/sbin:/usr/bin:/sbin:/bin
 export PATH
 
-[ "$(id -u)" -eq 0 ] || { echo "LiteFW installation requires the local administrator console." >&2; exit 1; }
-for tool in litefw-network litefw-admin setup-disk setup-keymap setup-timezone setup-apkrepos; do
-  command -v "$tool" >/dev/null 2>&1 || { echo "Missing installer component: $tool" >&2; exit 1; }
+die() { echo "LiteFW installation FAILED: $*" >&2; exit 1; }
+[ "$(id -u)" -eq 0 ] || die "Run from the local administrative console."
+for tool in litefw-network litefw-admin setup-disk setup-keymap setup-timezone setup-apkrepos lsblk; do
+  command -v "$tool" >/dev/null 2>&1 || die "Missing required component: $tool"
 done
 
 echo
 echo '=========================================================='
 echo '               LiteFW Firewall Installation'
 echo '=========================================================='
-echo 'This installs LiteFW, not an Alpine Linux user account.'
-echo 'WAN/LAN settings are saved as LiteFW firewall interfaces.'
-echo 'The login created below is for the LiteFW web management UI.'
-echo 'OpenSSH is installed and enabled automatically; no Linux'
-echo 'user or root password is requested during installation.'
+echo 'This installer partitions, formats and installs LiteFW onto'
+echo 'one disk you explicitly select. The disk WILL BE ERASED.'
+echo 'The account you create is for the LiteFW WEB UI, not Linux.'
+echo 'No Alpine network, Unix user, or Unix password wizard runs.'
 echo
 
+# Never allow Alpine setup-disk to return success on "none" or no disks.
+available_disks=$(lsblk -dnpo NAME,SIZE,TYPE 2>/dev/null | awk '$3=="disk" {print $1 " " $2}') ||
+  die "Cannot enumerate installation disks."
+[ -n "$available_disks" ] || die "No installation disk detected. No changes made."
+
+echo '[1/6] SELECT TARGET DISK'
+echo 'Available installation disks (CD/DVD and loop devices excluded):'
+printf '%s\n' "$available_disks" | awk '{printf "  %d) %-18s %s\n", NR, $1, $2}'
+disk_count=$(printf '%s\n' "$available_disks" | awk 'END {print NR}')
+selected=''
+if [ -n "${LITEFW_INSTALL_DISK:-}" ]; then
+  selection=$LITEFW_INSTALL_DISK
+else
+  while :; do
+    if [ "$disk_count" -eq 1 ]; then
+      printf 'Disk number or device path [1] (or cancel): '
+    else
+      printf 'Disk number or device path (or cancel): '
+    fi
+    IFS= read -r selection || die "Disk selection interrupted; no disk erased."
+    [ -n "$selection" ] || {
+      if [ "$disk_count" -eq 1 ]; then selection=1
+      else echo 'Select one disk explicitly.' >&2; continue
+      fi
+    }
+    case "$selection" in cancel|abort|none) die 'Installation cancelled; no disk erased.' ;; esac
+    break
+  done
+fi
+
+case "$selection" in
+  *[!0-9]*|'') selected=$selection ;;
+  *) selected=$(printf '%s\n' "$available_disks" | awk -v n="$selection" 'NR==n {print $1}') ;;
+esac
+[ -n "$selected" ] || die "Invalid disk selection '$selection'."
+disk=$(printf '%s\n' "$available_disks" | awk -v target="$selected" '$1==target {print $1}')
+[ -n "$disk" ] && [ -b "$disk" ] || die "Selected disk is not a usable block disk: $selected"
+echo "Selected target: $disk"
+echo 'Other drives will not be partitioned.'
+
 if [ "${LITEFW_INSTALL_SKIP_REGIONAL:-0}" != 1 ]; then
-  echo '--- Keyboard configuration ---'
-  setup-keymap
   echo
-  echo '--- Timezone configuration ---'
-  setup-timezone
+  echo '[2/6] KEYBOARD AND TIMEZONE'
+  setup-keymap || die 'Keyboard configuration failed.'
+  setup-timezone || die 'Timezone configuration failed.'
 fi
 
 echo
-echo '--- LiteFW WAN and LAN interface assignment ---'
-/usr/sbin/litefw-network
+echo '[3/6] LITEFW WAN / LAN INTERFACE ASSIGNMENT'
+/usr/sbin/litefw-network || die 'LiteFW WAN/LAN configuration failed.'
 
-# The ISO is a self-contained package repository, usable when WAN is
-# unavailable. Do not replace it with remote mirrors by default.
+# ISO package repository remains usable offline.
 if [ -d /media/cdrom/apks ]; then
   if ! grep -q '^/media/cdrom/apks' /etc/apk/repositories 2>/dev/null; then
     printf '%s\n' /media/cdrom/apks >>/etc/apk/repositories
   fi
 fi
 echo
-echo '--- Alpine package repositories ---'
+echo '[4/6] PACKAGE REPOSITORIES'
 if grep -q '^/media/.*/apks' /etc/apk/repositories 2>/dev/null; then
-  echo 'The LiteFW installation media is configured for offline packages.'
+  echo 'LiteFW installation ISO provides all required offline packages.'
   printf 'Add or change internet APK mirrors? [no]: '
-  IFS= read -r repositories || exit 1
+  IFS= read -r repositories || die 'Repository configuration interrupted.'
   case "$repositories" in
-    y|Y|yes|YES) setup-apkrepos ;;
+    y|Y|yes|YES) setup-apkrepos || die 'APK repository setup failed.' ;;
     ''|n|N|no|NO) : ;;
-    *) echo 'Invalid response; installation stopped without changing repositories.' >&2; exit 1 ;;
+    *) die 'Invalid APK mirror response.' ;;
   esac
 else
-  echo 'No installation-media repository found; configure APK mirrors.'
-  setup-apkrepos
+  echo 'No ISO package repository found; online mirror setup is required.'
+  setup-apkrepos || die 'APK repository setup failed.'
 fi
 
 echo
-echo '--- LiteFW WEB ADMINISTRATOR (not an Alpine Linux account) ---'
-/usr/sbin/litefw-admin
-[ -s /etc/litefwm/htpasswd ] || { echo "LiteFW web administrator was not configured." >&2; exit 1; }
+echo '[5/6] LITEFW WEB ADMINISTRATOR (NOT AN ALPINE USER)'
+/usr/sbin/litefw-admin || die 'Web administrator setup failed.'
+[ -s /etc/litefwm/htpasswd ] || die 'Web administrator credentials were not written.'
 
 echo
-echo '--- Install LiteFW to disk ---'
-echo 'The next step will erase the disk you select. Other disks are untouched.'
-if [ -n "${LITEFW_INSTALL_DISK:-}" ]; then
-  setup-disk -m sys -s 0 "$LITEFW_INSTALL_DISK"
-else
-  setup-disk -m sys -s 0
+echo '[6/6] PARTITION, FORMAT AND INSTALL LITEFW'
+printf 'TARGET: %s\n' "$disk"
+lsblk -dno NAME,SIZE,TYPE "$disk" || die 'Could not recheck selected disk.'
+echo 'ALL DATA ON THIS DISK WILL BE DESTROYED.'
+printf 'Type ERASE to partition, format and install LiteFW onto %s: ' "$disk"
+IFS= read -r approval || die 'Install confirmation interrupted.'
+[ "$approval" = ERASE ] || die 'Install was not confirmed; disk unchanged.'
+echo "Starting full LiteFW sys-mode installation on $disk ..."
+if ! setup-disk -m sys -s 0 "$disk"; then
+  die "Disk installation failed for $disk."
 fi
+# setup-disk returns 0 on no-op paths. Require a real partition table.
+if ! lsblk -nr -o TYPE "$disk" | grep -qx part; then
+  die "Disk installer returned without creating partitions on $disk."
+fi
+
 echo
-echo 'LiteFW installation complete. Remove the ISO and reboot.'
-echo 'Use the LiteFW web administrator account to sign in to the UI.'
+echo '=========================================================='
+echo "SUCCESS: LiteFW installed to $disk"
+echo 'System partitions were created and the operating system installed.'
+echo 'Remove/eject the LiteFW installation ISO, then reboot.'
+echo 'Log into the web UI with your LiteFW administrator credentials.'
+echo '=========================================================='
