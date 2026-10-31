@@ -103,18 +103,18 @@ def install_from_iso():
     )
     vmcmd(f"apk add --simulate --no-network {pkgs} >/tmp/apk-sim.txt", timeout=180)
     vmcmd("grep -q 'LiteFWM appliance installer' /etc/motd")
-    vmcmd("test -x /usr/sbin/lfwctl")
+    vmcmd("test -x /usr/sbin/lfwctl")\n    vmcmd("test -x /usr/sbin/litefw-console")\n    vmcmd("test -x /usr/sbin/litefw-admin")\n    vmcmd("test -x /usr/sbin/litefw-network")
     vmcmd("test ! -e /root/litefwm-admin.txt")
     vmcmd("test -x /usr/local/sbin/setup-alpine")
     vmcmd("test -x /usr/sbin/setup-alpine")
     vmcmd("test -x /usr/local/sbin/litefw2-console-login")
-    vmcmd("grep -qx 'tty1::respawn:-/bin/sh' /etc/inittab")
+    vmcmd("grep -qx 'tty1::respawn:/usr/sbin/litefw-console' /etc/inittab")
     vmcmd("! grep -q '^tty0::respawn:' /etc/inittab")
     vmcmd("! ps -eo args | grep -q '[g]etty .*tty0'")
-    # Confirm a real root shell is rendered on VGA tty1, not a login/password
+    # Confirm the LiteFW management menu appears on VGA tty1, not a login/password
     # challenge. /dev/vcs1 exposes the guest virtual console text buffer.
     vmcmd("test -c /dev/vcs1")
-    vmcmd("i=0; until dd if=/dev/vcs1 bs=4096 count=1 2>/dev/null | tr -d '\\000' | grep -q 'localhost:~#'; do i=$((i+1)); [ $i -lt 30 ] || exit 1; sleep 1; done", timeout=70)
+    vmcmd("i=0; until dd if=/dev/vcs1 bs=4096 count=1 2>/dev/null | tr -d '\\000' | grep -q 'LiteFW'; do i=$((i+1)); [ $i -lt 30 ] || exit 1; sleep 1; done", timeout=70)
     vmcmd("awk -F: '$1==\"root\" {exit ($2!=\"\")} END {}' /etc/shadow")
     # This low-level setup-disk smoke bypasses the integrated setup-alpine
     # prompts; create a test-only hash so it tests disk persistence honestly.
@@ -145,23 +145,23 @@ def verify_installed_system():
         "util-linux openssh lighttpd lighttpd-mod_auth apache2-utils sudo busybox-openrc"
     ).split():
         vmcmd(f"apk info -e {p}")
-    vmcmd("test -x /usr/sbin/lfwctl")
+    vmcmd("test -x /usr/sbin/lfwctl")\n    vmcmd("test -x /usr/sbin/litefw-console")\n    vmcmd("test -x /usr/sbin/litefw-admin")\n    vmcmd("test -x /usr/sbin/litefw-network")
     vmcmd("test -x /usr/sbin/lfw-setup")
     vmcmd("test -x /usr/local/sbin/litefw2-console-login")
-    vmcmd("grep -qx 'tty1::respawn:-/bin/sh' /etc/inittab")
+    vmcmd("grep -qx 'tty1::respawn:/usr/sbin/litefw-console' /etc/inittab")
     vmcmd("! grep -q '^tty0::respawn:' /etc/inittab")
     vmcmd("! ps -eo args | grep -q '[g]etty .*tty0'")
-    # Confirm a real root shell is rendered on VGA tty1, not a login/password
+    # Confirm the LiteFW management menu appears on VGA tty1, not a login/password
     # challenge. /dev/vcs1 exposes the guest virtual console text buffer.
     vmcmd("test -c /dev/vcs1")
-    vmcmd("i=0; until dd if=/dev/vcs1 bs=4096 count=1 2>/dev/null | tr -d '\\000' | grep -q 'localhost:~#'; do i=$((i+1)); [ $i -lt 30 ] || exit 1; sleep 1; done", timeout=70)
+    vmcmd("i=0; until dd if=/dev/vcs1 bs=4096 count=1 2>/dev/null | tr -d '\\000' | grep -q 'LiteFW'; do i=$((i+1)); [ $i -lt 30 ] || exit 1; sleep 1; done", timeout=70)
     vmcmd("test -x /usr/lib/litefwm/cgi/api.cgi")
     vmcmd("test -f /usr/share/litefwm/www/index.html")
     vmcmd("test -f /etc/lighttpd/litefwm.conf")
     vmcmd("test -f /etc/sysctl.d/90-litefwm.conf")
     vmcmd("test -f /etc/iptables/rules-save")
     vmcmd("test -L /etc/runlevels/default/lighttpd")
-    vmcmd("test -L /etc/runlevels/default/dnsmasq")
+    vmcmd("test -L /etc/runlevels/default/dnsmasq")\n    vmcmd("test -L /etc/runlevels/default/sshd")
     vmcmd("test -L /etc/runlevels/boot/iptables")
     vmcmd("test -L /etc/runlevels/boot/litefwm-init")
     vmcmd("test -s /etc/litefwm/htpasswd")
