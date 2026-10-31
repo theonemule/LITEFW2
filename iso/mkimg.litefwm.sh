@@ -2,8 +2,8 @@
 profile_litefwm() {
 	profile_standard
 	profile_abbrev="litefwm"
-	title="LiteFWM"
-	desc="Alpine Linux installer with LiteFWM appliance network setup."
+	title="LiteFW $(cat "$LITEFWM_SOURCE/VERSION")"
+	desc="LiteFW firewall appliance - Alpine Linux base."
 	arch="x86_64"
 	hostname="litefwm"
 	syslinux_serial="0 115200"
