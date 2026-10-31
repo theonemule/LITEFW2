@@ -110,8 +110,8 @@ def install_from_iso():
     vmcmd("test ! -e /root/litefwm-admin.txt")
     vmcmd("test -x /usr/local/sbin/setup-alpine")
     vmcmd("test -x /usr/sbin/setup-alpine")
-    vmcmd("grep -q 'LiteFW WEB ADMINISTRATOR' /usr/local/sbin/setup-alpine")
-    vmcmd("grep -q 'LiteFW WEB ADMINISTRATOR' /usr/sbin/setup-alpine")
+    vmcmd("grep -q 'LITEFW WEB ADMINISTRATOR' /usr/local/sbin/setup-alpine")
+    vmcmd("grep -q 'LITEFW WEB ADMINISTRATOR' /usr/sbin/setup-alpine")
     vmcmd("! grep -q 'setup-interfaces' /usr/sbin/setup-alpine")
     vmcmd("cmp -s /usr/sbin/setup-alpine /usr/local/sbin/setup-alpine")
     vmcmd("test -x /usr/local/sbin/litefw2-console-login")
@@ -139,11 +139,11 @@ def install_from_iso():
     q.sendline("SmokeTestOnlyPassword123!")
     q.expect("Type ERASE to partition, format and install LiteFW", timeout=90)
     q.sendline("ERASE")
-    i=q.expect([r"(?is)erase.*continue.*\(y/n\)", r"LiteFW installation complete",
+    i=q.expect([r"(?is)erase.*continue.*\(y/n\)", r"SUCCESS: LiteFW installed to /dev/vda",
                 pexpect.EOF, pexpect.TIMEOUT], timeout=220)
     if i == 0:
         q.sendline("y")
-        q.expect("LiteFW installation complete", timeout=600)
+        q.expect("SUCCESS: LiteFW installed to /dev/vda", timeout=600)
     elif i != 1:
         raise RuntimeError("LiteFW installer did not finish its disk installation")
     q.expect(ROOT_PROMPT, timeout=60)
