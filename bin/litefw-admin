@@ -1,0 +1,45 @@
+#!/bin/sh
+# Set or replace the LiteFW web UI account. Passwords never appear in arguments.
+set -eu
+[ "$(id -u)" -eq 0 ] || { echo 'Run as root.' >&2; exit 1; }
+command -v htpasswd >/dev/null 2>&1 || { echo 'apache2-utils is required' >&2; exit 1; }
+file=${LITEFW_HTPASSWD:-/etc/litefwm/htpasswd}
+current=admin
+if [ -s "$file" ]; then current=$(sed -n '1s/:.*//p' "$file"); fi
+printf 'Web administrator username [%s]: ' "$current"
+IFS= read -r user || exit 1
+user=${user:-$current}
+printf '%s' "$user" | grep -Eq '^[A-Za-z][A-Za-z0-9_.-]{0,31}$' || {
+  echo 'Use 1-32 characters: start with a letter, then letters, digits, _ . -' >&2
+  exit 1
+}
+old_stty=''
+if [ -t 0 ]; then old_stty=$(stty -g); stty -echo; fi
+trap '[ -z "$old_stty" ] || stty "$old_stty"' EXIT HUP INT TERM
+while :; do
+  printf 'Web administrator password (12+ characters): ' >&2
+  IFS= read -r password || exit 1
+  printf '\n' >&2
+  if [ "${#password}" -lt 12 ]; then echo 'Password must be at least 12 characters.' >&2; continue; fi
+  printf 'Confirm password: ' >&2
+  IFS= read -r confirm || exit 1
+  printf '\n' >&2
+  if [ "$password" = "$confirm" ]; then break; fi
+  echo 'Passwords did not match.' >&2
+done
+[ -z "$old_stty" ] || { stty "$old_stty"; old_stty=''; }
+dir=${file%/*}
+install -d -m 0755 "$dir"
+umask 077
+temp=$(mktemp "$dir/.htpasswd.XXXXXX")
+trap 'rm -f "$temp"; [ -z "$old_stty" ] || stty "$old_stty"' EXIT HUP INT TERM
+if ! printf '%s\n' "$password" | htpasswd -i -B -C 12 -c "$temp" "$user" >/dev/null; then
+  echo 'Failed to write the password hash.' >&2
+  exit 1
+fi
+unset password confirm
+if getent group lighttpd >/dev/null 2>&1; then chown root:lighttpd "$temp"; fi
+chmod 0640 "$temp"
+mv -f "$temp" "$file"
+trap - EXIT HUP INT TERM
+echo "LiteFW web administrator '$user' configured."
