@@ -92,13 +92,31 @@ jobs:
           if-no-files-found: error
           retention-days: 30
           compression-level: 0
-      - name: Publish immutable GitHub release assets
-        if: startsWith(github.ref, 'refs/tags/v')
+      - name: Publish versioned GitHub release assets
+        # Main builds create the version tag/release after successful ISO verification.
+        # Tagged builds remain supported; PRs never publish releases.
+        if: github.event_name != 'pull_request' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
         env:
           GH_TOKEN: ${{ github.token }}
-          TAG: ${{ github.ref_name }}
+          SOURCE_REF: ${{ github.ref }}
+          SOURCE_NAME: ${{ github.ref_name }}
         shell: bash
         run: |
           set -euo pipefail
-          test "$TAG" = "v$(cat VERSION)"
-          gh release create "$TAG" dist/*.iso dist/SHA256SUMS --title "LiteFW2 $TAG" --notes "Bootable Alpine Linux x86_64 firewall appliance ISO. SHA256SUMS included. ISO installation is the only supported installation method." --verify-tag
+          tag="v$(cat VERSION)"
+          if [[ "$SOURCE_REF" == refs/tags/* ]]; then
+            test "$SOURCE_NAME" = "$tag" || { echo "Tag $SOURCE_NAME does not match VERSION ($tag)" >&2; exit 1; }
+          fi
+          if gh release view "$tag" >/dev/null 2>&1; then
+            echo "Release $tag already exists; preserving its immutable assets."
+            exit 0
+          fi
+          if [[ "$SOURCE_REF" == refs/heads/main ]]; then
+            if gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$tag" >/dev/null 2>&1; then
+              echo "Tag $tag exists without a release; run the workflow on that tag to publish its matching ISO." >&2
+              exit 1
+            fi
+            gh release create "$tag" dist/*.iso dist/SHA256SUMS --target "$GITHUB_SHA" --title "LiteFW2 $tag" --notes "Bootable Alpine Linux x86_64 firewall appliance ISO. SHA256SUMS included. ISO installation is the only supported installation method."
+          else
+            gh release create "$tag" dist/*.iso dist/SHA256SUMS --title "LiteFW2 $tag" --notes "Bootable Alpine Linux x86_64 firewall appliance ISO. SHA256SUMS included. ISO installation is the only supported installation method." --verify-tag
+          fi
