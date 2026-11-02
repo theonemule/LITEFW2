@@ -103,6 +103,7 @@ async function load() {
     }
 
     S = next;
+    if (view === 'firewall' && (!fwDraft || !fwDirty)) initFwDraft(next.firewall);
     if (S.system) {
       $('#hostName').textContent = S.system.hostname;
       $('#version').textContent = 'LiteFWM ' + S.system.version;
@@ -120,6 +121,7 @@ function opPath(name, body) {
   const parts = name.split('.'), family = parts[0], action = parts[1];
   if (['iface', 'bridge', 'vlan'].includes(family)) return '/api/interfaces/' + family + '/' + action;
   if (family === 'segment') return '/api/segments/set';
+  if (family === 'firewall') return '/api/firewall/' + action;
   if (family === 'rule') return '/api/firewall/rules/' + action;
   if (family === 'forward') return '/api/port-forwards/' + action;
   if (family === 'dhcpd') return '/api/dhcp/server/set';
@@ -740,6 +742,40 @@ views.modules = () => {
   ];
 };
 
+// Firewall rules editor: ALL edits remain in browser memory until Apply.
+let fwDraft = null, fwBaseline = null, fwDirty = false;
+function initFwDraft(fw) {
+  fwBaseline = {
+    rules: fw.rules.map(r => ({id:r.id, chain:r.chain, raw:r.raw, managed:r.managed})),
+    forwards: fw.forwards.map(f => ({id:f.id, raw:f.raw, managed:f.managed}))
+  };
+  fwDraft = {
+    rules: fw.rules.map((r, origin) => Object.assign({origin, changed:false}, r)),
+    forwards: fw.forwards.map((f, origin) => Object.assign({origin, changed:false}, f))
+  };
+  fwDirty = false;
+}
+function markFwDraft() { fwDirty = true; render(); }
+window.addEventListener('beforeunload', e => {
+  if (fwDirty) { e.preventDefault(); e.returnValue = ''; }
+});
+async function applyFwDraft() {
+  if (!fwDirty) return;
+  if (!confirm('Apply ALL staged firewall rules and port forwards? You must confirm the connection within 120 seconds or the firewall will restore its old rules.')) return;
+  try {
+    const result = await op('firewall.batch', {baseline:fwBaseline, rules:fwDraft.rules, forwards:fwDraft.forwards});
+    if (!confirm('The new firewall rules are temporarily active. Is LiteFW still accessible? Press OK to KEEP them, Cancel to let the previous rules return automatically.')) {
+      toast('No confirmation received. Old rules will automatically return in up to 120 seconds.', 'warning');
+      return;
+    }
+    await op('firewall.confirm', {token:result.result.token});
+    fwDirty = false;
+    toast('Firewall changes confirmed and saved', 'success');
+    await load();
+  } catch(e) {
+    toast('Firewall apply/confirmation failed: ' + e.message + '. Automatic recovery remains available.', 'warning');
+  }
+}
 // ---------- firewall
 function editRule(r, chain) {
   const isNew = !r; r = r || { chain, action: 'accept', in: '', out: '', src: '', dst: '', proto: 'any', ports: '', description: '' };
@@ -757,11 +793,21 @@ function editRule(r, chain) {
   if (isNew) fields.push({ k: 'position', label: 'Position', type: 'select', value: '', options: [['', 'Bottom of the list'], ['0', 'Top of the list']] });
   form(isNew ? 'New firewall rule' : 'Edit firewall rule', fields, v => {
     if (v.chain === 'input') delete v.out;
-    return isNew ? apply('rule.add', v, 'Rule added') : apply('rule.update', Object.assign({ id: r.id }, v), 'Rule updated');
+    if (isNew) {
+      const item = Object.assign({id:'', origin:-1, changed:true, managed:true}, v);
+      const pos = item.position; delete item.position;
+      if (pos === '0') {
+        const first = fwDraft.rules.findIndex(x => x.chain === item.chain);
+        if (first >= 0) fwDraft.rules.splice(first, 0, item);
+        else fwDraft.rules.push(item);
+      } else fwDraft.rules.push(item);
+    } else Object.assign(r, v, {changed:true});
+    markFwDraft();
+    return Promise.resolve();
   }, { note: 'Rules are evaluated top to bottom; the first match wins. Anything not allowed is dropped. Replies to allowed traffic are allowed automatically.' });
 }
 function ruleTable(chain) {
-  const rs = S.firewall.rules.filter(r => r.chain === chain);
+  const rs = fwDraft.rules.filter(r => r.chain === chain);
   const acts = { accept: 'text-bg-success', drop: 'text-bg-danger', reject: 'text-bg-warning' };
   const ep = (i, a) => [h('div', {}, disp(i)), a && h('div', { class: 'mono small' }, a)];
   return table(['#', 'Action', 'From', chain === 'forward' ? 'To' : 'Destination', 'Service', 'Description', ''],
@@ -808,17 +854,22 @@ function editForward(f) {
     { k: 'toPort', label: 'Internal port', value: f.toPort, placeholder: 'same as external' },
     { k: 'src', label: 'Allowed sources', value: f.src, placeholder: 'anyone — or an IP / CIDR' },
     { k: 'description', label: 'Description', value: f.description }
-  ], v => isNew ? apply('forward.add', v, 'Port forward added') : apply('forward.update', Object.assign({ id: f.id }, v), 'Port forward updated'),
+  ], v => {
+    if (isNew) fwDraft.forwards.push(Object.assign({id:'', origin:-1, managed:true, changed:true}, v));
+    else Object.assign(f, v, {changed:true});
+    markFwDraft();
+    return Promise.resolve();
+  },
   { note: 'Forwarded traffic is allowed through the firewall automatically; no extra rule is needed.' });
 }
 const forwardsTable = () => card('Port forwards (destination NAT, nat PREROUTING)', [btn('Add port forward', () => editForward(null), 'btn-primary')],
   table(['Interface', 'Protocol', 'External port', 'Internal host', 'Sources', 'Description', ''],
-    S.firewall.forwards.map(f => h('tr', {},
+    fwDraft.forwards.map(f => h('tr', {},
       h('td', {}, disp(f.in)), h('td', {}, f.proto === 'both' ? 'tcp+udp' : f.proto), h('td', { class: 'mono' }, f.port),
       h('td', { class: 'mono' }, f.to + (f.toPort ? ':' + f.toPort : '')), h('td', { class: 'mono small' }, f.src || 'anyone'),
       h('td', {}, f.managed ? dash(f.description) : h('span', { class: 'mono small text-secondary' }, f.raw)),
       h('td', { class: 'text-end text-nowrap' }, f.managed && [btn('Edit', () => editForward(f)), ' ',
-        btn('Delete', () => confirmDo('Delete port forward', `Delete the forward of port ${f.port}?`, () => apply('forward.delete', { id: f.id }, 'Port forward deleted'), 'Delete'), 'btn-outline-danger')]))),
+        btn('Delete', () => confirmDo('Delete port forward', `Delete the forward of port ${f.port}?`, () => { fwDraft.forwards.splice(fwDraft.forwards.indexOf(f), 1); markFwDraft(); }, 'Delete'), 'btn-outline-danger')]))),
     'No port forwards.'));
 
 // ---------- firewall: plain-language view + guided rule wizard
@@ -866,19 +917,25 @@ function plainRule(r) {
 }
 function moveRule(r, list, index, step) {
   const next = list[index + step];
-  if (!r.id || !next || !next.id) return;
-  const change = () => apply('rule.move', { id: r.id, position: index + step }, 'Rule reordered');
+  if (!next) return;
+  const move = () => {
+    const old = fwDraft.rules.indexOf(r), other = fwDraft.rules.indexOf(next);
+    fwDraft.rules[old] = next; fwDraft.rules[other] = r;
+    markFwDraft();
+  };
   if (isInvertedSourceRule(r) || isInvertedSourceRule(next))
     return confirmDo('Move an anti-spoofing rule?',
-      'Firewall rules are checked top to bottom. Moving an anti-spoofing rule past an allow rule can expose networks. Move this rule anyway?', change, 'Move rule');
-  return change();
+      'A rule moved past an anti-spoofing rule may expose networks. Continue?',
+      move, 'Move rule');
+  move();
 }
-function ruleActions(r, list, n, advanced = false) {
+function ruleActions(r, list, n) {
   return [
-    btn('↑', () => moveRule(r, list, n, -1), n === 0 || !r.id ? 'btn-outline-secondary disabled' : null), ' ',
-    btn('↓', () => moveRule(r, list, n, 1), n === list.length - 1 || !r.id ? 'btn-outline-secondary disabled' : null), ' ',
+    btn('↑', () => moveRule(r, list, n, -1), n === 0 ? 'btn-outline-secondary disabled' : null), ' ',
+    btn('↓', () => moveRule(r, list, n, 1), n === list.length - 1 ? 'btn-outline-secondary disabled' : null), ' ',
     r.managed && btn('Edit', () => editRule(r)), ' ',
-    r.managed && btn('Delete', () => confirmDo('Delete rule', `Delete: ${ruleSentence(r)}?`, () => apply('rule.delete', { id: r.id }, 'Rule deleted'), 'Delete'), 'btn-outline-danger')
+    r.managed && btn('Delete', () => confirmDo('Delete rule', 'Remove this rule from the draft?',
+      () => { fwDraft.rules.splice(fwDraft.rules.indexOf(r), 1); markFwDraft(); }, 'Remove'), 'btn-outline-danger')
   ];
 }
 const descOf = s => s.replace(/[^A-Za-z0-9 _.,:/()+#@-]/g, '').replace(/\s+/g, ' ').trim().slice(0, 64);
@@ -895,28 +952,33 @@ function ruleItems(rules, emptyText) {
 }
 
 views.firewall = () => {
-  const fwd = S.firewall.rules.filter(r => r.chain === 'forward'), inp = S.firewall.rules.filter(r => r.chain === 'input');
+  const fwd = fwDraft.rules.filter(r => r.chain === 'forward'), inp = fwDraft.rules.filter(r => r.chain === 'input');
   const head = h('div', { class: 'd-flex flex-wrap gap-2 align-items-center mb-3' },
     btn('+ New rule…', () => wizard(), 'btn-primary'),
-    h('span', { class: 'small text-secondary' }, 'Use the guided editor to describe what traffic to allow or block. Reorder with ↑ / ↓ (first match wins).'),
+    btn('Apply changes', applyFwDraft, fwDirty ? 'btn-success' : 'btn-outline-success disabled'),
+    btn('Discard edits', async () => { fwDirty = false; await load(); }, 'btn-outline-secondary'),
+    h('span', { class: 'small text-secondary' }, 'Edit, add or move rules locally. Nothing changes on the firewall until Apply changes.'),
     h('div', { class: 'form-check form-switch ms-auto' },
       h('input', { class: 'form-check-input', type: 'checkbox', id: 'advToggle', checked: fwAdvanced, onchange: e => { fwAdvanced = e.target.checked; render(); } }),
       h('label', { class: 'form-check-label small', for: 'advToggle' }, 'Advanced (manual rules)')));
-  if (fwAdvanced) return [head, advancedFirewall()];
+  const notice = h('div', { class: fwDirty ? 'alert alert-warning' : 'alert alert-light border' },
+    fwDirty ? 'UNSAVED DRAFT — the firewall is still running its previous rules.' :
+      'Read from the live firewall. Stage changes here and use Apply changes once; old rules automatically return if not confirmed in 120 seconds.');
+  if (fwAdvanced) return [head, notice, advancedFirewall()];
   const explain = h('div', { class: 'alert alert-light border explain py-2' },
     h('b', {}, 'Everything is blocked unless allowed. '),
     h('b', {}, 'Traffic rules'), ' say what devices inside may reach (the internet, other segments). ',
     h('b', {}, 'Port forwards'), ' open a door from the internet to one device inside. ',
     h('b', {}, 'Firewall access'), ' covers traffic to the firewall itself. Replies to allowed traffic always come back.');
   const b = builtins();
-  return [head, explain,
+  return [head, notice, explain,
     card('Traffic rules — what may go where', h('span', { class: 'small text-secondary fw-normal' }, 'checked top to bottom, first match wins'),
       ruleItems(fwd, 'Nothing is allowed yet: devices cannot reach the internet or each other. Use “New rule…” → “Let devices reach the internet”.')),
-    card('Port forwards — services published to the internet', null, S.firewall.forwards.length
-      ? h('ol', { class: 'rule-list' }, S.firewall.forwards.map((f, n) => h('li', {}, h('span', { class: 'num' }, n + 1), badge('forward', 'text-bg-info'),
-          h('span', { class: 'what' }, f.managed ? forwardSentence(f) : h('span', { class: 'mono small' }, f.raw), f.managed && f.description && h('small', {}, f.description)),
+    card('Port forwards — services published to the internet', null, fwDraft.forwards.length
+      ? h('ol', { class: 'rule-list' }, fwDraft.forwards.map((f, n) => h('li', {}, h('span', { class: 'num' }, n + 1), badge('forward', 'text-bg-info'),
+          h('span', { class: 'what' }, forwardSentence(f), f.managed && f.description && h('small', {}, f.description)),
           h('span', { class: 'acts' }, f.managed && [btn('Edit', () => editForward(f)),
-            btn('Delete', () => confirmDo('Delete port forward', `Delete: ${forwardSentence(f)}?`, () => apply('forward.delete', { id: f.id }, 'Port forward deleted'), 'Delete'), 'btn-outline-danger')]))))
+            btn('Delete', () => confirmDo('Delete port forward', `Delete: ${forwardSentence(f)}?`, () => { fwDraft.forwards.splice(fwDraft.forwards.indexOf(f), 1); markFwDraft(); }, 'Delete'), 'btn-outline-danger')]))))
       : h('div', { class: 'card-body text-secondary small' }, 'Nothing is reachable from the internet. Use “New rule…” → “Publish a service to the internet”.')),
     card('Access to this firewall', [btn('Management settings', () => location.hash = '#system')], [
       ruleItems(inp, 'No extra access rules.'),
@@ -1092,15 +1154,30 @@ function wizard(startId) {
     dlgChrome('New rule — review', p.items.length > 1 ? `Create ${p.items.length} changes` : 'Create');
     back.classList.remove('d-none'); back.onclick = details;
     setBody(steps(2),
-      h('p', { class: 'mb-2' }, 'LiteFWM will apply these changes to the firewall now:'),
+      h('p', { class: 'mb-2' }, 'These changes will be added to a draft. Nothing is applied until you press Apply changes:'),
       h('ol', { class: 'review' }, p.items.map(it => h('li', {}, it.text, h('div', {}, h('code', {}, `${it.op} ${JSON.stringify(it.body)}`))))),
       p.notes.map(n => h('div', { class: 'alert alert-info py-2 small mb-2' }, n)));
     dlgApply = async () => {
-      let n = 0;
-      try { for (const it of p.items) { await op(it.op, it.body); n++; } }
-      catch (e) { await load(); throw new Error((n ? `${n} of ${p.items.length} changes were applied, then: ` : '') + e.message); }
-      toast(p.items.length > 1 ? `${p.items.length} changes applied` : 'Applied', 'success');
-      await load();
+      let count = 0;
+      for (const it of p.items) {
+        if (it.op === 'rule.add') {
+          const item = Object.assign({id:'', origin:-1, changed:true, managed:true}, it.body);
+          const pos = item.position; delete item.position;
+          if (pos === 0) {
+            const first = fwDraft.rules.findIndex(x => x.chain === item.chain);
+            if (first >= 0) fwDraft.rules.splice(first, 0, item);
+            else fwDraft.rules.push(item);
+          } else fwDraft.rules.push(item);
+          count++;
+        } else if (it.op === 'forward.add') {
+          fwDraft.forwards.push(Object.assign({id:'', origin:-1, changed:true, managed:true}, it.body));
+          count++;
+        } else if (it.op === 'reservation.add') {
+          toast('Reserve the suggested IP separately under DHCP. Firewall changes remain a draft.', 'warning');
+        }
+      }
+      if (count) markFwDraft();
+      toast(count + ' changes added to draft. Press Apply changes to activate.', 'success');
     };
   };
   const it = INTENTS.find(x => x.id === startId);

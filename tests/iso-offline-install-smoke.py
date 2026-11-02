@@ -187,6 +187,7 @@ def verify_installed_system():
     vmcmd("test -s /etc/litefwm/htpasswd")
     vmcmd("test -x /usr/sbin/litefw-web-bind")
     vmcmd("test -x /usr/sbin/litefw-ssh-access")
+    vmcmd("test -x /usr/sbin/litefw-recovery")
     vmcmd("test -x /usr/sbin/litefw-upgrade")
     vmcmd("test ! -e /etc/ssh/sshd_config.d/00-litefw-temporary-root.conf")
     vmcmd("test -e /etc/litefwm/installed")

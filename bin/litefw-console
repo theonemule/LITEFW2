@@ -28,6 +28,11 @@ while :; do
   else
     echo 'Temporary root SSH password login: OFF'
   fi
+  if /usr/sbin/litefw-recovery status >/dev/null 2>&1; then
+    echo 'Emergency firewall bypass: ACTIVE (restore using this menu)'
+  else
+    echo 'Emergency firewall bypass: OFF'
+  fi
   echo
   if installed; then
     mode=installed
@@ -39,8 +44,10 @@ while :; do
     echo '  6) Open system shell'
     echo '  7) Enable temporary root SSH access (set password)'
     echo '  8) Disable temporary root SSH access (no reboot)'
-    echo '  9) Reboot'
-    echo ' 10) Shut down'
+    echo '  9) Emergency: bypass firewall filtering (temporary)'
+    echo ' 10) Restore firewall rules (no reboot)'
+    echo ' 11) Reboot'
+    echo ' 12) Shut down'
   else
     mode=live
     echo '  1) Install LiteFW to disk (Alpine + appliance setup)'
@@ -52,14 +59,16 @@ while :; do
     echo '  7) Open system shell'
     echo '  8) Enable temporary root SSH access (set password)'
     echo '  9) Disable temporary root SSH access (no reboot)'
-    echo ' 10) Reboot'
-    echo ' 11) Shut down'
+    echo ' 10) Emergency: bypass firewall filtering (temporary)'
+    echo ' 11) Restore firewall rules (no reboot)'
+    echo ' 12) Reboot'
+    echo ' 13) Shut down'
   fi
   echo
   printf 'Select an option: '
   IFS= read -r answer || exit 0
   if [ "$mode" = installed ]; then
-    case "$answer" in [1-9]|10) answer=$((answer + 1));; *) answer=invalid;; esac
+    case "$answer" in [1-9]|10|11|12) answer=$((answer + 1));; *) answer=invalid;; esac
   fi
   case "$answer" in
     1)
@@ -79,8 +88,10 @@ while :; do
     7) echo 'Type exit to return to LiteFW console.'; /bin/sh;;
     8) /usr/sbin/litefw-ssh-access enable;;
     9) /usr/sbin/litefw-ssh-access disable;;
-    10) reboot;;
-    11) poweroff;;
+    10) /usr/sbin/litefw-recovery enable;;
+    11) /usr/sbin/litefw-recovery disable;;
+    12) reboot;;
+    13) poweroff;;
     *) echo 'Invalid selection.';;
   esac
   printf '\nPress Enter to return to LiteFW console...'

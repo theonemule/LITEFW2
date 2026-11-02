@@ -157,3 +157,34 @@ change the firewall's own DNS resolver configuration or its BIND zones.
 Those remain configurable separately under DNS.
 
 2.2.8 was already published, so this feature is released as 2.2.9.
+
+## 2.2.10 — Staged firewall changes and console break-glass
+
+The Firewall screen reads the live firewall policy on entry. All edits,
+reordering, new rules and port forwards remain **local browser drafts** until
+Apply changes is pressed. Discard edits restores the previously read policy.
+The browser sends its original live-rule baseline with the draft; concurrent
+changes made from SSH or another browser cause a conflict instead of silently
+overwriting newer rules. Existing imported/unmanaged iptables rules are kept
+exactly as-is when reordered; they are not rewritten through the simplified
+editor. Edits of managed rules use the normal native rule validation.
+
+The backend builds one complete iptables-restore transaction covering
+LFW_FWD, LFW_IN and LFW_DNAT, atomically applies the change, and requires
+an explicit in-browser Keep confirmation within 120 seconds. Until that
+confirmation, the old policy remains the boot policy and a watchdog
+restores the old live policy if the browser disconnects or confirmation
+is omitted. Confirmed policies are saved for reboot. DHCP and BIND
+configuration are never touched by applying firewall rules.
+
+The Proxmox/physical LiteFW console has two new options:
+
+- Emergency: bypass firewall filtering (temporary), with explicit YES warning
+- Restore firewall rules (no reboot)
+
+The temporary bypass adds top-priority ACCEPT to INPUT and FORWARD, preserving
+NAT and all original rules in a volatile snapshot; it is **very permissive**
+and potentially exposes services beyond the LAN. Only an administrator at
+the local console can activate it; it is not exposed over HTTP. Restoration
+removes the bypass immediately. Boot always restores the last confirmed
+firewall rules from disk. The console also shows whether bypass is active.

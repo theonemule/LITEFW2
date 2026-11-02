@@ -1,0 +1,50 @@
+#!/bin/sh
+# Proxmox/physical-console break-glass recovery. NOT exposed in Web/API.
+# Emergency bypass is VOLATILE: reboot restores normal firewall.
+set -eu
+PATH=/usr/sbin:/usr/bin:/sbin:/bin
+[ "$(id -u)" = 0 ] || { echo "Local root console required"; exit 1; }
+state=/run/litefwm/breakglass
+case "${1:-}" in
+  status)
+    if [ -s "$state/snapshot" ]; then echo enabled; exit 0; fi
+    echo disabled; exit 1
+    ;;
+  enable)
+    [ ! -s "$state/snapshot" ] || { echo "Emergency bypass already active"; exit 0; }
+    echo "WARNING: bypass temporarily allows ALL incoming and forwarded traffic."
+    echo "NAT is preserved. Use only from a trusted physical/Proxmox console."
+    echo "Restore from this menu after access is recovered. No reboot needed."
+    printf "Type YES to temporarily bypass firewall filtering: "
+    IFS= read -r reply
+    [ "$reply" = YES ] || { echo "Cancelled"; exit 1; }
+    pending=/run/litefwm/fw-pending
+    if [ -f "$pending/pending" ]; then
+      echo 'Cancelling pending firewall edit before emergency recovery.'
+      iptables-restore <"$pending/before" || exit 1
+      cp "$pending/boot" /etc/iptables/rules-save || exit 1
+      rm -f "$pending/pending" "$pending/before" "$pending/boot"
+    fi
+    install -d -m 0700 "$state"
+    iptables-save >"$state/snapshot" || { rm -rf "$state"; exit 1; }
+    chmod 0600 "$state/snapshot"
+    if ! iptables -I INPUT 1 -j ACCEPT || ! iptables -I FORWARD 1 -j ACCEPT; then
+      iptables-restore <"$state/snapshot" || true
+      rm -rf "$state"
+      echo "Bypass failed; previous rules restored" >&2
+      exit 1
+    fi
+    echo "EMERGENCY FIREWALL BYPASS ENABLED until restored or rebooted."
+    ;;
+  disable)
+    [ -s "$state/snapshot" ] || { echo "Emergency bypass already OFF"; exit 0; }
+    iptables-restore <"$state/snapshot" || {
+      echo "Unable to restore rules! Emergency bypass still active." >&2
+      exit 1
+    }
+    rm -rf "$state"
+    echo "Original firewall rules RESTORED immediately; no reboot needed."
+    ;;
+  *)
+    echo "Usage: litefw-recovery enable|disable|status" >&2; exit 2;;
+esac

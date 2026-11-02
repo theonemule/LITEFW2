@@ -359,3 +359,139 @@ op_forward_delete() {
   fw_commit
   log_op "forward.delete $_id"
 }
+
+# Firewall ruleset staging: one atomic iptables-restore for all user rules and NAT.
+# The raw baseline blocks overwriting changes from another administrator.
+fw_pending_dir() { printf '%s/fw-pending' "$LFW_RUN"; }
+fw_baseline() {
+  fw_state | jq -c '{rules:[.rules[]|{id,chain,raw,managed}],forwards:[.forwards[]|{id,raw,managed}]}'
+}
+op_firewall_batch() {
+  local base live orig item old index id chain file line changed before saved pending token
+  local bodytmp seen entry kind oldchain oldid
+  pending=$(fw_pending_dir)
+  [ ! -f "$pending/pending" ] || die 'A firewall change is awaiting confirmation.'
+  jq -e '(.baseline|type=="object") and (.rules|type=="array" and length<=200) and (.forwards|type=="array" and length<=100)' "$BODY" >/dev/null ||
+    die 'Invalid firewall draft'
+  base=$(jq -c '.baseline' "$BODY")
+  live=$(fw_baseline)
+  [ "$base" = "$live" ] ||
+    die 'Firewall state has changed since opening this page. Discard edits and reload.'
+  orig=$BODY
+  before=$(mktemp); iptables-save >"$before" || die 'Cannot back up firewall'
+  saved=$(mktemp)
+  if [ -f "$LFW_FW_SAVE" ]; then cp "$LFW_FW_SAVE" "$saved"; else cp "$before" "$saved"; fi
+  seen=$(mktemp); : >"$seen"
+  bodytmp=$(mktemp)
+  fw_snapshot
+  : >"$FWT/LFW_FWD.new"; : >"$FWT/LFW_IN.new"; : >"$FWT/LFW_DNAT.new"
+  while IFS= read -r item; do
+    [ -n "$item" ] || continue
+    chain=$(printf '%s' "$item" | jq -r '.chain')
+    file=$(chain_for "$chain")
+    index=$(printf '%s' "$item" | jq -r '.origin // -1')
+    id=$(printf '%s' "$item" | jq -r '.id // ""')
+    changed=$(printf '%s' "$item" | jq -r '.changed // false')
+    if [ "$index" -ge 0 ]; then
+      old=$(printf '%s' "$base" | jq -c --argjson i "$index" '.rules[$i] // empty')
+      [ -n "$old" ] || die 'Unrecognized original rule'
+      [ "$id" = "$(printf '%s' "$old" | jq -r .id)" ] || die 'Rule identifier mismatch'
+      ! grep -Fxq "rule:$index" "$seen" || die 'Duplicate rule'
+      echo "rule:$index" >>"$seen"
+      if [ "$changed" = true ]; then
+        printf '%s' "$old" | jq -e '.managed==true' >/dev/null || die 'Imported rule cannot be edited'
+      else
+        [ "$chain" = "$(printf '%s' "$old" | jq -r .chain)" ] || die 'Rule chain changed without editing'
+      fi
+    else
+      [ -z "$id" ] || die 'New rule cannot supply an ID'
+      id=$(new_id)
+    fi
+    if [ "$changed" = true ] || [ "$index" -lt 0 ]; then
+      printf '%s
+' "$item" >"$bodytmp"
+      BODY=$bodytmp
+      line=$(fw_rule_line "$file" "$id") || die 'Invalid rule'
+      BODY=$orig
+    else
+      line=$(printf '%s' "$old" | jq -r .raw)
+    fi
+    printf '%s
+' "$line" >>"$FWT/$file.new"
+  done <<EOF
+$(jq -c '.rules[]' "$orig")
+EOF
+  while IFS= read -r item; do
+    [ -n "$item" ] || continue
+    index=$(printf '%s' "$item" | jq -r '.origin // -1')
+    id=$(printf '%s' "$item" | jq -r '.id // ""')
+    changed=$(printf '%s' "$item" | jq -r '.changed // false')
+    if [ "$index" -ge 0 ]; then
+      old=$(printf '%s' "$base" | jq -c --argjson i "$index" '.forwards[$i] // empty')
+      [ -n "$old" ] || die 'Unrecognized original port forward'
+      [ "$id" = "$(printf '%s' "$old" | jq -r .id)" ] || die 'Forward identifier mismatch'
+      ! grep -Fxq "forward:$index" "$seen" || die 'Duplicate forward'
+      echo "forward:$index" >>"$seen"
+      if [ "$changed" = true ]; then
+        printf '%s' "$old" | jq -e '.managed==true' >/dev/null || die 'Imported port forward cannot be edited'
+      fi
+    else
+      [ -z "$id" ] || die 'New port forward cannot supply an ID'
+      id=$(new_id)
+    fi
+    if [ "$changed" = true ] || [ "$index" -lt 0 ]; then
+      printf '%s
+' "$item" >"$bodytmp"
+      BODY=$bodytmp
+      line=$(fw_forward_lines "$id") || die 'Invalid forward'
+      BODY=$orig
+    else
+      line=$(printf '%s' "$old" | jq -r .raw)
+    fi
+    printf '%s
+' "$line" >>"$FWT/LFW_DNAT.new"
+  done <<EOF
+$(jq -c '.forwards[]' "$orig")
+EOF
+  mv "$FWT/LFW_FWD.new" "$FWT/LFW_FWD"
+  mv "$FWT/LFW_IN.new" "$FWT/LFW_IN"
+  mv "$FWT/LFW_DNAT.new" "$FWT/LFW_DNAT"
+  mkdir -p "$pending"
+  cp "$before" "$pending/before"
+  cp "$saved" "$pending/boot"
+  token=$(new_id)$(new_id)
+  printf '%s
+' "$token" >"$pending/pending"
+  if ! (fw_commit); then
+    rm -f "$pending/pending" "$pending/before" "$pending/boot"
+    iptables-restore <"$before" || true
+    cp "$saved" "$LFW_FW_SAVE"
+    die 'Firewall apply rejected; previous rules restored'
+  fi
+  # Before browser confirmation, reboot also recovers the old rules.
+  cp "$saved" "$LFW_FW_SAVE"
+  rm -f "$before" "$saved" "$bodytmp" "$seen"
+  (
+    exec 9>&- 2>/dev/null
+    sleep "${LFW_FW_CONFIRM_TIMEOUT:-120}"
+    if [ -f "$pending/pending" ] && [ "$(cat "$pending/pending")" = "$token" ]; then
+      iptables-restore <"$pending/before" &&
+        cp "$pending/boot" "$LFW_FW_SAVE"
+      rm -f "$pending/pending" "$pending/before" "$pending/boot"
+    fi
+  ) </dev/null >/dev/null 2>&1 &
+  log_op 'firewall.batch applied; awaiting confirmation'
+  jq -n --arg token "$token" --argjson seconds "${LFW_FW_CONFIRM_TIMEOUT:-120}" '{token:$token,confirmationSeconds:$seconds}' >"$RESULT"
+}
+op_firewall_confirm() {
+  local pending token
+  pending=$(fw_pending_dir)
+  [ -f "$pending/pending" ] || die 'No firewall changes awaiting confirmation'
+  token=$(jget token)
+  [ -n "$token" ] && [ "$token" = "$(cat "$pending/pending")" ] ||
+    die 'Confirmation token mismatch'
+  iptables-save >"$LFW_FW_SAVE.tmp" &&
+    mv "$LFW_FW_SAVE.tmp" "$LFW_FW_SAVE" || die 'Unable to save rules'
+  rm -f "$pending/pending" "$pending/before" "$pending/boot"
+  log_op 'firewall.batch confirmed'
+}

@@ -39,6 +39,8 @@ jobs:
           ./tests/inplace-upgrade-smoke.sh
           ./tests/upgrade-check-test.sh
           ./tests/dhcp-per-interface-options.sh
+          ./tests/firewall-staged-apply.sh
+          ./tests/firewall-recovery.sh
           while IFS= read -r -d '' script; do
             if head -n 1 "$script" | grep -Eq '^#!.*(/|env )bash([[:space:]]|$)'; then
               bash -n "$script"

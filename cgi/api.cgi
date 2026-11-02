@@ -137,6 +137,8 @@ case "$method:$path" in
     esac
     ;;
 
+  POST:/firewall/batch) op_request firewall.batch;;
+  POST:/firewall/confirm) op_request firewall.confirm;;
   POST:/system/set) op_request system.set;;
   POST:/system/management) op_request mgmt.set;;
   POST:/system/logging) op_request logging.set;;

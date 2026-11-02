@@ -45,7 +45,7 @@ new_patch=$(printf '%s' "$new" | cut -d. -f3)
   echo "Only upgrades to newer compatible 2.2.x releases are supported ($old -> $new)" >&2; exit 1;
 }
 for f in bin/lfwctl bin/lfw-setup bin/litefw-admin bin/litefw-network \
-  bin/litefw-console bin/litefw-web-bind bin/litefw-ssh-access bin/litefw-upgrade \
+  bin/litefw-console bin/litefw-web-bind bin/litefw-ssh-access bin/litefw-recovery bin/litefw-upgrade \
   cgi/api.cgi www/app.js www/app.css www/index.html lib/dhcp.sh lib/fw.sh; do
   [ -s "$stage/$f" ] || { echo "Missing runtime file: $f" >&2; exit 1; }
 done
