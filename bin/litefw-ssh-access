@@ -1,0 +1,95 @@
+#!/bin/sh
+# Local LiteFW console emergency SSH access. Never requires a reboot.
+set -eu
+PATH=${LITEFW_PATH:-/usr/sbin:/usr/bin:/sbin:/bin}
+conf=${LITEFW_TEMP_SSH_CONF:-/etc/ssh/sshd_config.d/00-litefw-temporary-root.conf}
+sysnet=${LITEFW_SYS_NET:-/sys/class/net}
+[ "$(id -u)" -eq 0 ] || { echo "Root console required" >&2; exit 1; }
+
+lan_address() {
+  addresses=$(
+    for p in "$sysnet"/*; do
+      [ -e "$p" ] || continue
+      name=${p##*/}
+      alias=$(cat "$p/ifalias" 2>/dev/null || true)
+      case "$alias" in lfw:role=lan\;*) : ;; *) continue ;; esac
+      ip -4 -o addr show dev "$name" scope global 2>/dev/null |
+        awk '$3=="inet" {split($4,a,"/"); print a[1]}'
+    done
+  )
+  [ -n "$addresses" ] || return 1
+  if printf '%s\n' "$addresses" | grep -Fxq 10.0.1.199; then
+    echo 10.0.1.199
+  else
+    printf '%s\n' "$addresses" | sed -n '/./{p;q;}'
+  fi
+}
+
+case "${1:-}" in
+  status)
+    if [ -f "$conf" ]; then
+      echo "enabled: $(sed -n 's/^ListenAddress //p' "$conf" | head -1)"
+      exit 0
+    fi
+    echo disabled
+    exit 1
+    ;;
+  enable)
+    [ ! -e "$conf" ] || { echo "Temporary root SSH access already enabled."; exit 0; }
+    address=$(lan_address) || {
+      echo "No configured LAN IPv4 address. Assign LAN first." >&2
+      exit 1
+    }
+    echo "Set the temporary root SSH password for LAN $address:"
+    passwd root || { echo "Password not set. SSH unchanged." >&2; exit 1; }
+    temp=$(mktemp "${conf}.XXXXXX")
+    trap 'rm -f "$temp"' EXIT HUP INT TERM
+    {
+      echo "# Temporary local-console recovery; disable from LiteFW menu."
+      echo "PermitRootLogin yes"
+      echo "PasswordAuthentication yes"
+      echo "PermitEmptyPasswords no"
+      printf 'ListenAddress %s\n' "$address"
+    } >"$temp"
+    chmod 0600 "$temp"
+    mv "$temp" "$conf"
+    trap - EXIT HUP INT TERM
+    if ! sshd -t; then
+      rm -f "$conf"
+      echo "SSH config failed validation; key-only policy restored." >&2
+      exit 1
+    fi
+    rc-update add sshd default >/dev/null 2>&1 || true
+    if ! rc-service sshd restart; then
+      rm -f "$conf"
+      rc-service sshd restart >/dev/null 2>&1 || true
+      echo "SSH restart failed; key-only policy restored." >&2
+      exit 1
+    fi
+    echo "Temporary root SSH login ENABLED on $address."
+    echo "IMPORTANT: Use the console menu to DISABLE when finished."
+    echo "No reboot required."
+    ;;
+  disable)
+    if [ -f "$conf" ]; then
+      mv "$conf" "${conf}.disabled"
+      if ! sshd -t || ! rc-service sshd restart; then
+        mv "${conf}.disabled" "$conf"
+        rc-service sshd restart >/dev/null 2>&1 || true
+        echo "Could not restore key-only policy; access still enabled." >&2
+        exit 1
+      fi
+      rm -f "${conf}.disabled"
+      passwd -d root >/dev/null || {
+        echo "SSH password login disabled, but root password not cleared." >&2
+        exit 1
+      }
+    fi
+    echo "Root SSH password login DISABLED; key-only policy restored."
+    echo "No reboot required."
+    ;;
+  *)
+    echo "Usage: litefw-ssh-access enable|disable|status" >&2
+    exit 2
+    ;;
+esac

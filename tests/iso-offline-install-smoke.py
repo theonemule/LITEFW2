@@ -186,6 +186,8 @@ def verify_installed_system():
     vmcmd("test -L /etc/runlevels/boot/litefwm-init")
     vmcmd("test -s /etc/litefwm/htpasswd")
     vmcmd("test -x /usr/sbin/litefw-web-bind")
+    vmcmd("test -x /usr/sbin/litefw-ssh-access")
+    vmcmd("test ! -e /etc/ssh/sshd_config.d/00-litefw-temporary-root.conf")
     vmcmd("test -e /etc/litefwm/installed")
     vmcmd("grep -Fxq 'server.bind = \"127.0.0.1\"' /etc/lighttpd/litefwm-bind.conf")
     vmcmd("i=0; until dd if=/dev/vcs1 bs=4096 count=1 2>/dev/null | tr -d '\\000' | grep -q 'Assign WAN / LAN interfaces'; do i=$((i+1)); [ $i -lt 30 ] || exit 1; sleep 1; done", timeout=70)

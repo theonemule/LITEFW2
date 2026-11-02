@@ -15,6 +15,8 @@ docker run --rm \
   : >/etc/litefwm/installed
   printf "invalid\n\n" | timeout 5 /usr/sbin/litefw-console >/tmp/menu-installed.txt
   grep -q "1) Assign WAN / LAN interfaces" /tmp/menu-installed.txt
+  grep -q "7) Enable temporary root SSH access (set password)" /tmp/menu-installed.txt
+  grep -q "8) Disable temporary root SSH access (no reboot)" /tmp/menu-installed.txt
   ! grep -q "Install LiteFW to disk" /tmp/menu-installed.txt
   if /usr/local/sbin/setup-alpine >/tmp/reinstall.txt 2>&1; then
     echo "FAIL: installed appliance allows reinstall" >&2; exit 1
@@ -23,6 +25,8 @@ docker run --rm \
   rm -f /etc/litefwm/installed
   printf "invalid\n\n" | timeout 5 /usr/sbin/litefw-console >/tmp/menu-live.txt
   grep -q "1) Install LiteFW to disk" /tmp/menu-live.txt
+  grep -q "8) Enable temporary root SSH access (set password)" /tmp/menu-live.txt
+  grep -q "9) Disable temporary root SSH access (no reboot)" /tmp/menu-live.txt
   echo "PASS: installed console hides installer and direct reinstall is blocked"
   echo /media/cdrom/apks >>/etc/apk/repositories
   mknod /dev/vda b 7 200

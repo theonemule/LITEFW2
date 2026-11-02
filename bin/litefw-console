@@ -23,6 +23,12 @@ while :; do
   fi
   ip -4 -brief address 2>/dev/null || true
   echo
+  if /usr/sbin/litefw-ssh-access status >/dev/null 2>&1; then
+    echo 'Temporary root SSH password login: ENABLED (disable from this menu)'
+  else
+    echo 'Temporary root SSH password login: OFF'
+  fi
+  echo
   if installed; then
     mode=installed
     echo '  1) Assign WAN / LAN interfaces (optional LAN VLAN)'
@@ -31,8 +37,10 @@ while :; do
     echo '  4) Alpine keyboard / timezone / repository settings'
     echo '  5) Restart LAN-only web management service'
     echo '  6) Open system shell'
-    echo '  7) Reboot'
-    echo '  8) Shut down'
+    echo '  7) Enable temporary root SSH access (set password)'
+    echo '  8) Disable temporary root SSH access (no reboot)'
+    echo '  9) Reboot'
+    echo ' 10) Shut down'
   else
     mode=live
     echo '  1) Install LiteFW to disk (Alpine + appliance setup)'
@@ -42,14 +50,16 @@ while :; do
     echo '  5) Alpine keyboard / timezone / repository settings'
     echo '  6) Restart LAN-only web management service'
     echo '  7) Open system shell'
-    echo '  8) Reboot'
-    echo '  9) Shut down'
+    echo '  8) Enable temporary root SSH access (set password)'
+    echo '  9) Disable temporary root SSH access (no reboot)'
+    echo ' 10) Reboot'
+    echo ' 11) Shut down'
   fi
   echo
   printf 'Select an option: '
   IFS= read -r answer || exit 0
   if [ "$mode" = installed ]; then
-    case "$answer" in [1-8]) answer=$((answer + 1));; *) answer=invalid;; esac
+    case "$answer" in [1-9]|10) answer=$((answer + 1));; *) answer=invalid;; esac
   fi
   case "$answer" in
     1)
@@ -67,8 +77,10 @@ while :; do
       esac;;
     6) /usr/sbin/litefw-web-bind && rc-service lighttpd restart;;
     7) echo 'Type exit to return to LiteFW console.'; /bin/sh;;
-    8) reboot;;
-    9) poweroff;;
+    8) /usr/sbin/litefw-ssh-access enable;;
+    9) /usr/sbin/litefw-ssh-access disable;;
+    10) reboot;;
+    11) poweroff;;
     *) echo 'Invalid selection.';;
   esac
   printf '\nPress Enter to return to LiteFW console...'

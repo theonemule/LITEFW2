@@ -58,6 +58,19 @@ credentials. The physical/VM console opens the LiteFW management menu without
 a separate root-password challenge, and exposes network, administrator, and
 recovery settings. Only trusted operators should have console access.
 
+## Temporary root SSH console access
+
+On an installed appliance, choose **7) Enable temporary root SSH access (set password)**.
+The console asks for a Linux root password and restarts SSH immediately. While
+enabled, sshd listens on a LAN IPv4 address only (preferably 10.0.1.199) and
+accepts root password login. The screen clearly shows that temporary access
+is ENABLED and reminds the operator to disable it when finished.
+
+Choose **8) Disable temporary root SSH access (no reboot)** to restore SSH
+key-only policy and clear the root password immediately, without rebooting.
+At boot, LiteFW also revokes any unclosed temporary access as a safety fallback.
+This is independent of the Web UI administrator password and never enables DHCP.
+
 The disk installer persists the network configuration and an installed-system marker. An installed appliance never shows the installation option; calling the disk installer directly also fails. Its console starts with WAN/LAN administration.
 
 The Web UI listens exclusively on IPv4 addresses belonging to LAN segments, never on WAN or unassigned NICs. If there is no LAN address, it binds only to loopback. The firewall independently drops non-LAN management TCP traffic before conntrack and arbitrary user rules, so an explicit WAN firewall allow cannot expose the Web UI. Network role changes regenerate the listener configuration.

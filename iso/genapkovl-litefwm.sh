@@ -18,7 +18,7 @@ install -d   "$tmp/usr/sbin" "$tmp/usr/lib/litefwm" "$tmp/usr/lib/litefwm/cgi"  
 # LiteFWM CLI and runtime library.
 install -m 0755 "$src/bin/lfwctl" "$tmp/usr/sbin/lfwctl"
 install -m 0755 "$src/bin/lfw-setup" "$tmp/usr/sbin/lfw-setup"
-for command in litefw-admin litefw-network litefw-console litefw-web-bind; do
+for command in litefw-admin litefw-network litefw-console litefw-web-bind litefw-ssh-access; do
   install -m 0755 "$src/bin/$command" "$tmp/usr/sbin/$command"
 done
 install -m 0755 "$src/iso/setup-alpine-litefwm" "$tmp/usr/local/sbin/setup-alpine"
@@ -115,6 +115,9 @@ start() {
     eend 1
     return 1
   fi
+  # Revoke any temporary root SSH password access at boot for recovery safety.
+  # The console menu can also revoke it instantly, with no reboot.
+  rm -f /etc/ssh/sshd_config.d/00-litefw-temporary-root.conf
   # Set the root password to empty at runtime, after the image is booted.
   # The VGA getty is configured to bypass login authentication entirely,
   # so it does not depend on timing of this operation.
@@ -158,8 +161,8 @@ start() {
 INIT
 chmod 0755 "$tmp/etc/init.d/litefwm-init"
 
-# No root password is ever accepted via SSH. The console is controlled by the
-# VM/hardware administrator, not the network-facing SSH daemon.
+# Default SSH root login is key-only. The local console can temporarily
+# allow a root SSH password, then reverse the change immediately.
 install -d "$tmp/etc/ssh/sshd_config.d"
 cat >"$tmp/etc/ssh/sshd_config.d/90-litefwm-console-only.conf" <<'SSHD'
 PermitRootLogin prohibit-password
@@ -212,7 +215,7 @@ WORLD
 {
   [ ! -f "$tmp/usr/sbin/lfwctl" ] || printf '%s\n' "$tmp/usr/sbin/lfwctl"
   [ ! -f "$tmp/usr/sbin/lfw-setup" ] || printf '%s\n' "$tmp/usr/sbin/lfw-setup"
-  for command in litefw-admin litefw-network litefw-console litefw-web-bind; do
+  for command in litefw-admin litefw-network litefw-console litefw-web-bind litefw-ssh-access; do
     printf '%s\n' "$tmp/usr/sbin/$command"
   done
   printf '%s\n' "$tmp/usr/local/sbin/litefw2-console-login"
@@ -266,6 +269,7 @@ Local VGA: automatic LiteFW management menu (no root password prompt).
 On the live ISO use option 1 to install LiteFW. Disk installations have no
 installer option. Web management binds only to LAN addresses.
 SSH is installed automatically.
+Temporary root SSH can be enabled and disabled from the console menu.
 MOTD
 cat >"$tmp/etc/issue" <<ISSUE
 LiteFW $(cat "$src/VERSION") - Firewall & Network Appliance
