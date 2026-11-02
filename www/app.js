@@ -408,22 +408,58 @@ views.segments = () => {
 
 // ---------- DHCP
 function editDhcpd(i) {
-  const d = i.dhcpServer, c = i.addresses[0];
-  let s = d.start, e = d.end;
-  if (!d.enabled && c) { const [n, p] = c.split('/'); if (+p <= 24) { const b = ip2int(n) - ip2int(n) % 256; s = int2ip(b + 100); e = int2ip(b + 199); } }
+  const d = i.dhcpServer || { enabled: false }, c = i.addresses[0] || '';
+  let start = d.start || '', end = d.end || '';
+  if (!start && c) {
+    const [n, prefix] = c.split('/');
+    if (+prefix <= 24) {
+      const base = ip2int(n) - ip2int(n) % 256;
+      start = int2ip(base + 100);
+      end = int2ip(base + 199);
+    }
+  }
   const own = c ? c.split('/')[0] : '';
-  form('DHCP server on ' + disp(i.name), [
-    { k: 'enabled', label: 'Enable DHCP server', type: 'check', value: !!d.enabled,
-      help: 'OFF by default. Saving settings with this unchecked does not start DHCP.' },
-    { k: 'start', label: 'Range start', value: s, show: v => v.enabled },
-    { k: 'end', label: 'Range end', value: e, show: v => v.enabled },
-    { k: 'leaseTime', label: 'Lease time', value: d.leaseTime || '12h', help: 'e.g. 3600, 30m, 12h, 7d', show: v => v.enabled },
-    { k: 'router', label: 'Gateway handed to clients', value: d.router === own ? '' : d.router, placeholder: own + ' (this firewall)', show: v => v.enabled },
-    { k: 'dns', label: 'DNS servers handed to clients', type: 'list', value: (d.dns || []).join() === own ? [] : d.dns, placeholder: own + ' (this firewall)', show: v => v.enabled },
-    { k: 'domain', label: 'Domain name', value: d.domain, placeholder: S.dns.domain || 'lan', show: v => v.enabled },
-    { k: 'ntp', label: 'NTP servers', type: 'list', value: d.ntp, show: v => v.enabled }
-  ], v => apply('dhcpd.set', Object.assign({ interface: i.name }, v), v.enabled ? 'DHCP enabled on ' + i.name : 'DHCP remains OFF on ' + i.name),
-  { note: 'This configuration belongs only to ' + i.name + '. DHCP will not start unless you check Enable DHCP server. Reservations can exist even with DHCP switched off.' });
+  const canEnable = i.role === 'lan' && i.mode === 'static' && !!c;
+  form('DHCP options — ' + disp(i.name), [
+    { k: 'enabled', label: 'Enable DHCP server on this interface', type: 'check',
+      value: !!d.enabled, help: 'OFF by default. Save these options without starting DHCP; enable it only when this segment is ready.' },
+    { k: 'start', label: 'Dynamic address pool: first IP', value: start, placeholder: '192.168.10.100',
+      help: 'Addresses offered to clients. Static MAC reservations can be outside this range.' },
+    { k: 'end', label: 'Dynamic address pool: last IP', value: end, placeholder: '192.168.10.199' },
+    { k: 'leaseTime', label: 'Lease duration', value: d.leaseTime || '12h',
+      help: 'Examples: 30m, 12h, 1d, 7d. Clients renew automatically.' },
+    { k: 'router', label: 'Default gateway handed to clients (option 3)',
+      value: d.router && d.router !== own ? d.router : '', placeholder: own || 'LAN interface IP',
+      help: 'Leave blank to give clients the firewall address for this subnet.' },
+    { k: 'dns', label: 'DNS servers handed to clients (option 6)', type: 'list',
+      value: (d.dns || []).length === 1 && d.dns[0] === own ? [] : (d.dns || []),
+      placeholder: own || '192.168.10.1',
+      help: 'One or more DNS server IPs, separated by commas. Leave blank for the firewall LAN address (including BIND if installed).' },
+    { k: 'domain', label: 'DNS domain / suffix (option 15)',
+      value: d.domain || '', placeholder: S.dns.domain || 'home.arpa',
+      help: 'Domain name clients append to unqualified hostnames, e.g. home.arpa.' },
+    { k: 'searchDomains', label: 'Additional DNS search domains (option 119)', type: 'list',
+      value: d.searchDomains || [], placeholder: 'home.arpa, office.example',
+      help: 'Optional ordered domain suffixes clients may search.' },
+    { k: 'ntp', label: 'NTP time servers (option 42)', type: 'list',
+      value: d.ntp || [], placeholder: '10.0.1.1',
+      help: 'Optional time synchronization server IPs.' },
+    { k: 'wins', label: 'WINS / NetBIOS name servers (option 44)', type: 'list',
+      value: d.wins || [], placeholder: '10.0.1.10',
+      help: 'Optional for legacy Windows environments.' },
+    { k: 'bootFile', label: 'Network boot filename (PXE / option 67)',
+      value: d.bootFile || '', placeholder: 'pxelinux.0', help: 'Optional PXE boot file; leave blank if not booting devices over the network.' },
+    { k: 'nextServer', label: 'Network boot / TFTP server IP (option 66)',
+      value: d.nextServer || '', placeholder: own || '10.0.1.10',
+      help: 'Optional server hosting the PXE boot image; requires a boot filename.' }
+  ], v => {
+    if (v.enabled && !d.enabled && !confirm('Enable DHCP on ' + i.name +
+      '? This will begin issuing IP leases on this interface.')) return;
+    return apply('dhcpd.set', Object.assign({ interface: i.name }, v),
+      v.enabled ? 'DHCP enabled on ' + i.name : 'DHCP options saved; DHCP remains OFF on ' + i.name);
+  }, { note: canEnable
+    ? 'All settings are per-interface. Saving with Enable DHCP unchecked stores the configuration but never starts DHCP.'
+    : 'This interface is not a configured static LAN. You can save its DHCP options now, but must configure a static LAN before DHCP can be enabled.' });
 }
 function reserve(mac, ip, hostname, isEdit) {
   form(isEdit ? 'Edit reservation' : 'Make this address static', [
@@ -440,18 +476,18 @@ views.dhcp = () => {
   return [
     card('DHCP by interface', null, [
       h('div', { class: 'card-body py-2 small text-secondary' },
-        'Every network interface has its own DHCP configuration. Unassigned interfaces must be configured as LAN with a static IP first. All servers remain OFF until explicitly enabled.'),
+        'Each interface has independent DHCP settings: IP range, gateway, DNS, domain and more. You can save them with DHCP OFF. DNS here means the addresses handed to clients; the DNS page configures the firewall itself.'),
       table(['Interface', 'Role', 'Subnet', 'DHCP server', 'Range / lease', 'Gateway / DNS', ''],
-        segments.map(i => { const d = i.dhcpServer || { enabled: false }; const canSet = i.role === 'lan' && i.mode === 'static' && i.addresses.length > 0; return h('tr', {},
+        segments.map(i => { const d = i.dhcpServer || { enabled: false }; return h('tr', {},
           h('td', { class: 'mono' }, disp(i.name)),
           h('td', {}, roleBadge(i.role)),
           h('td', { class: 'mono small' }, i.addresses.join(', ') || 'not configured'),
           h('td', {}, badge(d.enabled ? 'ON' : 'OFF', d.enabled ? 'text-bg-success' : 'text-bg-secondary')),
-          h('td', { class: 'mono small' }, d.enabled ? `${d.start} – ${d.end} · ${d.leaseTime}` : '—'),
-          h('td', { class: 'mono small' }, d.enabled ? `${d.router} / ${(d.dns || []).join(', ')}` : '—'),
-          h('td', { class: 'text-end text-nowrap' }, canSet
-            ? btn('Configure DHCP', () => editDhcpd(i))
-            : btn('Configure interface', () => { location.hash = '#segments'; toast('Set ' + i.name + ' to LAN with a static IP before configuring its DHCP server.', 'warning'); }))); }),
+          h('td', { class: 'mono small' }, d.start ? `${d.start} – ${d.end} · ${d.leaseTime || '12h'}` : 'not configured'),
+          h('td', { class: 'mono small' }, d.router || (i.addresses[0] || '').split('/')[0] || 'automatic',
+            ' / ', (d.dns || []).join(', ') || 'firewall DNS', !d.enabled && d.start && ' (saved, inactive)'),
+          h('td', { class: 'text-end text-nowrap' },
+            btn('Edit DHCP options', () => editDhcpd(i)))); }),
         'No routed interfaces. Configure an interface first.')
     ]),
     card('Leases', [btn('Refresh', load)], table(['IP', 'MAC', 'Hostname', 'Segment', 'Expires', 'Status', ''],

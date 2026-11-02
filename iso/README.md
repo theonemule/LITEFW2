@@ -136,3 +136,24 @@ For offline installations or private releases, upload a trusted official
 `litefw2-VERSION-runtime.tar.gz` in the same card. The upload is restricted
 to 4 MB and validated server-side before extraction. In an online update,
 HTTPS and GitHub release SHA-256 verification are required.
+
+## 2.2.9 — Advanced per-interface DHCP options
+
+Every physical/VLAN/bridge interface has a separate DHCP options editor.
+You can configure the dynamic lease pool, lease duration, client default
+gateway (option 3), DNS resolvers (6), domain suffix (15), DNS search list
+(119), NTP (42), WINS (44), and optional PXE boot filename/server (66/67).
+
+The **Enable DHCP server** checkbox starts unchecked. Saving with it
+unchecked writes the options to `/etc/litefwm/dhcp-scopes/IFACE.json` and
+**never starts DHCP or opens UDP 67**. The options survive service disablement,
+reboots and subsequent in-place runtime upgrades. Enabling DHCP on an
+unconfigured or WAN interface is refused by the API. When enabled, dnsmasq
+receives per-interface tagged options; range validation excludes the
+firewall's own address.
+
+DHCP DNS server options are addresses **given to DHCP clients**; they do not
+change the firewall's own DNS resolver configuration or its BIND zones.
+Those remain configurable separately under DNS.
+
+2.2.8 was already published, so this feature is released as 2.2.9.
