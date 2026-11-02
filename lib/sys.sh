@@ -236,3 +236,75 @@ op_diag_lookup() {
   _o=$(nslookup "$_h" 127.0.0.1 2>&1 || true)
   jq -n --arg o "$_o" '{output:$o}' >"$RESULT"
 }
+
+# ------------------------------------------------------------- upgrades
+# GitHub is a fixed trusted origin, never a caller-provided download URL.
+LITEFW_RELEASE_REPO=theonemule/LITEFW2
+LITEFW_RELEASES=https://api.github.com/repos/theonemule/LITEFW2/releases/latest
+
+upgrade_version_ok() { printf '%s' "$1" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; }
+upgrade_newer() {
+  upgrade_version_ok "$1" && upgrade_version_ok "$2" || return 1
+  printf '%s\n%s\n' "$1" "$2" | awk -F. 'NR==1{a=$1;b=$2;c=$3;next} {if(a!=$1) exit !(a>$1); if(b!=$2) exit !(b>$2); exit !(c>$3)}'
+}
+upgrade_latest() {
+  command -v curl >/dev/null 2>&1 || die 'Update checks require curl; install it from the appliance ISO.'
+  _json=$(curl -fsSL --proto '=https' --tlsv1.2 --connect-timeout 5 --max-time 15 \
+    -H 'Accept: application/vnd.github+json' \
+    -H 'User-Agent: LiteFW-updater' "$LITEFW_RELEASES") ||
+    die 'Cannot reach the public LiteFW releases. Verify WAN/DNS connectivity and that the GitHub repository is public.'
+  _latest=$(printf '%s' "$_json" | jq -r '.tag_name // empty' | sed 's/^v//')
+  upgrade_version_ok "$_latest" || die 'Invalid version in GitHub release metadata'
+  printf '%s\n' "$_latest"
+}
+op_upgrade_check() {
+  _installed=$(cat "$LFW_LIB/VERSION")
+  _latest=$(upgrade_latest)
+  _available=false
+  upgrade_newer "$_latest" "$_installed" && _available=true
+  jq -n --arg installed "$_installed" --arg latest "$_latest" \
+    --argjson available "$_available" --arg repo "$LITEFW_RELEASE_REPO" \
+    '{installed:$installed,latest:$latest,available:$available,repository:$repo}' >"$RESULT"
+}
+upgrade_apply_file() {
+  _input=$1
+  [ -f "$_input" ] && [ ! -L "$_input" ] || die 'Upgrade archive is not a regular file'
+  [ "$(wc -c <"$_input")" -le 4194304 ] || die 'Upgrade archive exceeds 4 MB limit'
+  /usr/sbin/litefw-upgrade "$_input" > /tmp/litefw-upgrade-last.log 2>&1 || {
+    die "Upgrade failed. Review /tmp/litefw-upgrade-last.log and /root/litefw-upgrade-backups/"
+  }
+  _new=$(cat "$LFW_LIB/VERSION")
+  jq -n --arg version "$_new" '{version:$version,installed:true,rebootRequired:false}' >"$RESULT"
+}
+op_upgrade_install() {
+  _current=$(cat "$LFW_LIB/VERSION")
+  _latest=$(upgrade_latest)
+  upgrade_newer "$_latest" "$_current" || die 'No newer published release is available'
+  _file="litefw2-$_latest-runtime.tar.gz"
+  _root=/root/litefw-upgrade-staging
+  mkdir -p "$_root"
+  chmod 0700 "$_root"
+  _bundle="$_root/$_file"
+  _url="https://github.com/$LITEFW_RELEASE_REPO/releases/download/v$_latest"
+  curl -fsSL --proto '=https' --tlsv1.2 --connect-timeout 5 --max-time 45 \
+    -o "$_root/SHA256SUMS" "$_url/SHA256SUMS" || die 'Could not download official release checksums'
+  curl -fsSL --proto '=https' --tlsv1.2 --connect-timeout 5 --max-time 45 \
+    -o "$_bundle" "$_url/$_file" || die 'Could not download official runtime bundle'
+  _want=$(awk -v file="$_file" '$2==file {print $1}' "$_root/SHA256SUMS" | head -1)
+  printf '%s' "$_want" | grep -Eq '^[a-fA-F0-9]{64}$' || die 'Missing valid SHA-256 in release manifest'
+  _got=$(sha256sum "$_bundle" | awk '{print $1}')
+  [ "$_got" = "$_want" ] || die 'Release archive SHA-256 mismatch'
+  upgrade_apply_file "$_bundle"
+}
+op_upgrade_upload() {
+  _path=$(jget path)
+  printf '%s' "$_path" | grep -Eq '^/tmp/litefw-upload[.][A-Za-z0-9]{6}$' || die 'Invalid upload path'
+  [ -f "$_path" ] && [ ! -L "$_path" ] || die 'Uploaded bundle missing'
+  [ "$(stat -c %U "$_path")" = lighttpd ] || die 'Upload owner mismatch'
+  [ "$(wc -c <"$_path")" -le 4194304 ] || die 'Upload too large'
+  install -d -m 0700 /root/litefw-upgrade-staging
+  _target=$(mktemp /root/litefw-upgrade-staging/upload.XXXXXX.tar.gz)
+  cp "$_path" "$_target"
+  chmod 0600 "$_target"
+  upgrade_apply_file "$_target"
+}

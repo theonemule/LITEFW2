@@ -127,6 +127,7 @@ function opPath(name, body) {
   if (family === 'dns') return '/api/dns/set';
   if (family === 'module') return '/api/modules/' + encodeURIComponent(body.id) + '/' + action;
   if (['bind', 'openvpn', 'ddns'].includes(family)) return '/api/modules/' + family + '/' + action;
+  if (family === 'upgrade') return '/api/system/updates/' + action;
   if (family === 'system') return '/api/system/set';
   if (family === 'mgmt') return '/api/system/management';
   if (family === 'logging') return '/api/system/logging';
@@ -412,7 +413,8 @@ function editDhcpd(i) {
   if (!d.enabled && c) { const [n, p] = c.split('/'); if (+p <= 24) { const b = ip2int(n) - ip2int(n) % 256; s = int2ip(b + 100); e = int2ip(b + 199); } }
   const own = c ? c.split('/')[0] : '';
   form('DHCP server on ' + disp(i.name), [
-    { k: 'enabled', label: 'Enable DHCP server', type: 'check', value: d.enabled || !d.start },
+    { k: 'enabled', label: 'Enable DHCP server', type: 'check', value: !!d.enabled,
+      help: 'OFF by default. Saving settings with this unchecked does not start DHCP.' },
     { k: 'start', label: 'Range start', value: s, show: v => v.enabled },
     { k: 'end', label: 'Range end', value: e, show: v => v.enabled },
     { k: 'leaseTime', label: 'Lease time', value: d.leaseTime || '12h', help: 'e.g. 3600, 30m, 12h, 7d', show: v => v.enabled },
@@ -420,28 +422,38 @@ function editDhcpd(i) {
     { k: 'dns', label: 'DNS servers handed to clients', type: 'list', value: (d.dns || []).join() === own ? [] : d.dns, placeholder: own + ' (this firewall)', show: v => v.enabled },
     { k: 'domain', label: 'Domain name', value: d.domain, placeholder: S.dns.domain || 'lan', show: v => v.enabled },
     { k: 'ntp', label: 'NTP servers', type: 'list', value: d.ntp, show: v => v.enabled }
-  ], v => apply('dhcpd.set', Object.assign({ interface: i.name }, v), 'DHCP server applied'));
+  ], v => apply('dhcpd.set', Object.assign({ interface: i.name }, v), v.enabled ? 'DHCP enabled on ' + i.name : 'DHCP remains OFF on ' + i.name),
+  { note: 'This configuration belongs only to ' + i.name + '. DHCP will not start unless you check Enable DHCP server. Reservations can exist even with DHCP switched off.' });
 }
 function reserve(mac, ip, hostname, isEdit) {
   form(isEdit ? 'Edit reservation' : 'Make this address static', [
     { k: 'mac', label: 'MAC address', type: isEdit === 'new' ? 'text' : 'info', value: mac },
-    { k: 'ip', label: 'Reserved IP address', value: ip, help: 'Always handed to this MAC. Must be inside a segment with a DHCP server; may be inside or outside the dynamic range.' },
+    { k: 'ip', label: 'Reserved IP address', value: ip, help: 'Maps this MAC to a fixed IP. Reservations are retained even while DHCP is OFF. For a new address, first configure the corresponding LAN interface/subnet.' },
     { k: 'hostname', label: 'Hostname', value: hostname, help: 'Optional. Resolves as hostname.' + (S.dns.domain || 'lan') + ' on the firewall DNS.' }
   ], v => apply('reservation.add', { mac: v.mac || mac, ip: v.ip, hostname: v.hostname }, 'Reservation applied'),
   { note: isEdit ? null : 'The device keeps its current address. If you choose a different IP it moves when it next renews its lease (or reconnects).' });
 }
 views.dhcp = () => {
   const now = Date.now() / 1000;
-  const lans = l3().filter(i => i.role === 'lan');
+  const segments = l3();
   const leaseByMac = Object.fromEntries(S.dhcp.leases.map(l => [l.mac, l]));
   return [
-    card('DHCP servers', null, table(['Segment', 'Subnet', 'Range', 'Lease', 'Gateway / DNS', ''],
-      lans.map(i => { const d = i.dhcpServer; return h('tr', {},
-        h('td', {}, disp(i.name)), h('td', { class: 'mono small' }, i.addresses.join(' ') || '—'),
-        h('td', { class: 'mono small' }, d.enabled ? `${d.start} – ${d.end}` : badge('off')), h('td', {}, d.enabled ? d.leaseTime : ''),
-        h('td', { class: 'mono small' }, d.enabled ? `${d.router} / ${(d.dns || []).join(', ')}` : ''),
-        h('td', { class: 'text-end' }, i.mode === 'static' && i.addresses.length ? btn('Configure', () => editDhcpd(i)) : h('span', { class: 'small text-secondary' }, 'needs a static address'))); }),
-      'No LAN segments. Give an interface the LAN role first.')),
+    card('DHCP by interface', null, [
+      h('div', { class: 'card-body py-2 small text-secondary' },
+        'Every network interface has its own DHCP configuration. Unassigned interfaces must be configured as LAN with a static IP first. All servers remain OFF until explicitly enabled.'),
+      table(['Interface', 'Role', 'Subnet', 'DHCP server', 'Range / lease', 'Gateway / DNS', ''],
+        segments.map(i => { const d = i.dhcpServer || { enabled: false }; const canSet = i.role === 'lan' && i.mode === 'static' && i.addresses.length > 0; return h('tr', {},
+          h('td', { class: 'mono' }, disp(i.name)),
+          h('td', {}, roleBadge(i.role)),
+          h('td', { class: 'mono small' }, i.addresses.join(', ') || 'not configured'),
+          h('td', {}, badge(d.enabled ? 'ON' : 'OFF', d.enabled ? 'text-bg-success' : 'text-bg-secondary')),
+          h('td', { class: 'mono small' }, d.enabled ? `${d.start} – ${d.end} · ${d.leaseTime}` : '—'),
+          h('td', { class: 'mono small' }, d.enabled ? `${d.router} / ${(d.dns || []).join(', ')}` : '—'),
+          h('td', { class: 'text-end text-nowrap' }, canSet
+            ? btn('Configure DHCP', () => editDhcpd(i))
+            : btn('Configure interface', () => { location.hash = '#segments'; toast('Set ' + i.name + ' to LAN with a static IP before configuring its DHCP server.', 'warning'); }))); }),
+        'No routed interfaces. Configure an interface first.')
+    ]),
     card('Leases', [btn('Refresh', load)], table(['IP', 'MAC', 'Hostname', 'Segment', 'Expires', 'Status', ''],
       S.dhcp.leases.slice().sort((a, b) => ip2int(a.ip) - ip2int(b.ip)).map(l => { const seg = segOf(l.ip); return h('tr', { class: l.expires && l.expires < now ? 'text-secondary' : '' },
         h('td', { class: 'mono' }, l.ip), h('td', { class: 'mono small' }, l.mac), h('td', {}, dash(l.hostname)),
@@ -721,12 +733,10 @@ function ruleTable(chain) {
       h('td', { class: 'text-secondary' }, n + 1), h('td', {}, badge(r.action === 'accept' ? 'allow' : r.action, acts[r.action])),
       h('td', {}, ep(r.in, r.src)), h('td', {}, chain === 'forward' ? ep(r.out, r.dst) : (r.dst || 'this firewall')),
       h('td', { class: 'mono small' }, r.proto === 'any' ? 'any' : r.proto + (r.ports ? ' ' + r.ports : '')),
-      h('td', {}, r.managed ? dash(r.description) : h('span', { class: 'mono small text-secondary', title: 'not created by LiteFWM; read-only' }, r.raw)),
-      h('td', { class: 'text-end text-nowrap' }, r.managed && [
-        btn('↑', () => apply('rule.move', { id: r.id, position: Math.max(0, n - 1) }, 'Moved'), n === 0 ? 'btn-outline-secondary disabled' : null), ' ',
-        btn('↓', () => apply('rule.move', { id: r.id, position: n + 1 }, 'Moved'), n === rs.length - 1 ? 'btn-outline-secondary disabled' : null), ' ',
-        btn('Edit', () => editRule(r)), ' ',
-        btn('Delete', () => confirmDo('Delete rule', `Delete rule ${n + 1}${r.description ? ' "' + r.description + '"' : ''}?`, () => apply('rule.delete', { id: r.id }, 'Rule deleted'), 'Delete'), 'btn-outline-danger')]))),
+      h('td', {}, r.managed ? dash(r.description) :
+        h('span', { class: 'small' }, dash(r.description || 'Imported rule'), h('div', { class: 'text-secondary' }, plainRule(r)),
+          h('details', { class: 'mt-1' }, h('summary', { class: 'small text-secondary' }, 'Technical details'), h('code', { class: 'mono' }, r.raw)))),
+      h('td', { class: 'text-end text-nowrap' }, ruleActions(r, rs, n, true)))),
     chain === 'forward' ? 'No rules: all traffic between segments and to the internet is blocked.' : 'No rules.');
 }
 const builtins = () => {
@@ -806,22 +816,53 @@ function forwardSentence(f) {
   return `${via} → ${proto} ${f.port} on this firewall is forwarded to ${hostText(f.to)}${f.toPort ? ' port ' + f.toPort : ''}${src}`;
 }
 const actBadge = a => badge(a === 'accept' ? 'allow' : 'block', a === 'accept' ? 'text-bg-success' : 'text-bg-danger');
+// Show imported rules as readable policy, without converting their original match semantics.
+function isInvertedSourceRule(r) {
+  return !!r.raw && /(?:^|\s)!\s+-s\s/.test(r.raw);
+}
+function plainRule(r) {
+  if (isInvertedSourceRule(r)) {
+    return 'Block unexpected source addresses on ' + disp(r.in) +
+      ': sources outside ' + (r.src || 'the expected subnet') +
+      (r.dst ? ' claiming traffic to ' + r.dst : '') + ' · anti-spoofing';
+  }
+  return ruleSentence(r);
+}
+function moveRule(r, list, index, step) {
+  const next = list[index + step];
+  if (!r.id || !next || !next.id) return;
+  const change = () => apply('rule.move', { id: r.id, position: index + step }, 'Rule reordered');
+  if (isInvertedSourceRule(r) || isInvertedSourceRule(next))
+    return confirmDo('Move an anti-spoofing rule?',
+      'Firewall rules are checked top to bottom. Moving an anti-spoofing rule past an allow rule can expose networks. Move this rule anyway?', change, 'Move rule');
+  return change();
+}
+function ruleActions(r, list, n, advanced = false) {
+  return [
+    btn('↑', () => moveRule(r, list, n, -1), n === 0 || !r.id ? 'btn-outline-secondary disabled' : null), ' ',
+    btn('↓', () => moveRule(r, list, n, 1), n === list.length - 1 || !r.id ? 'btn-outline-secondary disabled' : null), ' ',
+    r.managed && btn('Edit', () => editRule(r)), ' ',
+    r.managed && btn('Delete', () => confirmDo('Delete rule', `Delete: ${ruleSentence(r)}?`, () => apply('rule.delete', { id: r.id }, 'Rule deleted'), 'Delete'), 'btn-outline-danger')
+  ];
+}
 const descOf = s => s.replace(/[^A-Za-z0-9 _.,:/()+#@-]/g, '').replace(/\s+/g, ' ').trim().slice(0, 64);
 
 function ruleItems(rules, emptyText) {
   if (!rules.length) return h('div', { class: 'card-body text-secondary small' }, emptyText);
   return h('ol', { class: 'rule-list' }, rules.map((r, n) => h('li', {},
-    h('span', { class: 'num' }, n + 1), r.managed ? actBadge(r.action) : badge('foreign'),
-    h('span', { class: 'what' }, r.managed ? ruleSentence(r) : h('span', { class: 'mono small' }, r.raw), r.managed && r.description && h('small', {}, r.description)),
-    h('span', { class: 'acts' }, r.managed && [btn('Edit', () => editRule(r)),
-      btn('Delete', () => confirmDo('Delete rule', `Delete: ${ruleSentence(r)}?`, () => apply('rule.delete', { id: r.id }, 'Rule deleted'), 'Delete'), 'btn-outline-danger')]))));
+    h('span', { class: 'num' }, n + 1), r.managed ? actBadge(r.action) : badge('imported'),
+    h('span', { class: 'what' }, plainRule(r),
+      r.description && h('small', {}, r.description),
+      !r.managed && h('details', { class: 'small text-secondary' },
+        h('summary', {}, 'Technical details (read-only)'), h('code', { class: 'mono' }, r.raw))),
+    h('span', { class: 'acts' }, ruleActions(r, rules, n)))));
 }
 
 views.firewall = () => {
   const fwd = S.firewall.rules.filter(r => r.chain === 'forward'), inp = S.firewall.rules.filter(r => r.chain === 'input');
   const head = h('div', { class: 'd-flex flex-wrap gap-2 align-items-center mb-3' },
     btn('+ New rule…', () => wizard(), 'btn-primary'),
-    h('span', { class: 'small text-secondary' }, 'Guided: pick what you want to achieve and LiteFWM builds the rules.'),
+    h('span', { class: 'small text-secondary' }, 'Use the guided editor to describe what traffic to allow or block. Reorder with ↑ / ↓ (first match wins).'),
     h('div', { class: 'form-check form-switch ms-auto' },
       h('input', { class: 'form-check-input', type: 'checkbox', id: 'advToggle', checked: fwAdvanced, onchange: e => { fwAdvanced = e.target.checked; render(); } }),
       h('label', { class: 'form-check-label small', for: 'advToggle' }, 'Advanced (manual rules)')));
@@ -1031,6 +1072,65 @@ function wizard(startId) {
   showDlg();
 }
 
+
+// ---------- software updates
+function updatesPanel() {
+  const status = h('div', { class: 'small mb-2', role: 'status', 'aria-live': 'polite' }, 'Not checked yet.');
+  const check = btn('Check for updates', async () => {
+    check.disabled = true; install.disabled = true;
+    status.textContent = 'Checking official GitHub releases…';
+    try {
+      const x = (await op('upgrade.check')).result;
+      status.textContent = x.available
+        ? 'LiteFW ' + x.latest + ' is available (installed: ' + x.installed + ').'
+        : 'Up to date: LiteFW ' + x.installed + '.';
+      install.disabled = !x.available;
+      install.textContent = x.available ? 'Install ' + x.latest : 'Install update';
+    } catch (e) { status.textContent = 'Update check unavailable: ' + e.message; }
+    finally { check.disabled = false; }
+  }, 'btn-outline-primary');
+  const install = btn('Install update', async () => {
+    if (!confirm('Install the verified LiteFW release? Configuration will be backed up. No reinstall, reboot, DHCP or network changes.')) return;
+    install.disabled = true; check.disabled = true;
+    status.textContent = 'Downloading, verifying and installing the update…';
+    try {
+      const x = (await op('upgrade.install')).result;
+      status.textContent = 'LiteFW ' + x.version + ' installed. Reloading…';
+      window.location.reload();
+    } catch (e) { status.textContent = 'Upgrade failed: ' + e.message; check.disabled = false; }
+  }, 'btn-primary');
+  install.disabled = true;
+  const pick = h('input', { type: 'file', accept: '.tar.gz,application/gzip',
+    class: 'form-control form-control-sm', 'aria-label': 'Choose a LiteFW runtime archive' });
+  const upload = btn('Install uploaded file', async () => {
+    const file = pick.files && pick.files[0];
+    if (!file) { status.textContent = 'Choose a LiteFW runtime .tar.gz file first.'; return; }
+    if (file.size > 4194304) { status.textContent = 'Upgrade file exceeds 4 MB.'; return; }
+    if (!confirm('Install ' + file.name + '? Only use an official release archive. Runtime and configuration will be backed up.')) return;
+    upload.disabled = true; status.textContent = 'Uploading and installing the runtime bundle…';
+    try {
+      const response = await fetch('/api/system/updates/upload', {
+        method: 'POST', credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/octet-stream', 'X-LiteFWM': '1' }, body: file
+      });
+      const x = await response.json();
+      if (!response.ok || !x.ok) throw new Error(x.error || 'Upgrade failed');
+      status.textContent = 'LiteFW ' + x.result.version + ' installed. Reloading…';
+      window.location.reload();
+    } catch (e) { status.textContent = 'Upgrade failed: ' + e.message; }
+    finally { upload.disabled = false; }
+  }, 'btn-outline-secondary');
+  return card('Software updates', null, h('div', { class: 'card-body' },
+    h('p', { class: 'small text-secondary mb-2' }, 'Installed: LiteFW ' + S.system.version +
+      '. Updates replace only the application runtime, not appliance configuration.'),
+    status, h('div', { class: 'd-flex gap-2 flex-wrap mb-3' }, check, install),
+    h('div', { class: 'small fw-semibold mb-1' }, 'Offline update'),
+    h('p', { class: 'small text-secondary mb-2' }, 'If the firewall cannot reach GitHub, upload an official litefw2-VERSION-runtime.tar.gz bundle.'),
+    h('div', { class: 'd-flex gap-2 flex-wrap mb-2' }, pick, upload),
+    h('a', { href: 'https://github.com/theonemule/LITEFW2/releases', target: '_blank',
+      rel: 'noopener noreferrer', class: 'small' }, 'Official LiteFW releases')));
+}
+
 // ---------- system
 views.system = () => {
   const s = S.system, m = s.management;
@@ -1072,7 +1172,7 @@ views.system = () => {
       card('Admin password', [btn('Change', () => form('Change password', [
         { k: 'user', label: 'User', value: 'admin' }, { k: 'password', label: 'New password', type: 'password', help: 'At least 8 characters.' }
       ], v => apply('password.set', v, 'Password changed')))], h('div', { class: 'card-body small text-secondary' }, 'The browser will ask for the new password on the next request.'))),
-    h('div', { class: 'col-lg-6' }, card('Diagnostics', null, h('div', { class: 'card-body' },
+    h('div', { class: 'col-lg-6' }, updatesPanel(), card('Diagnostics', null, h('div', { class: 'card-body' },
       h('div', { class: 'input-group mb-2' }, host, btn('Ping', () => diag('ping'), 'btn-outline-primary'), btn('DNS lookup', () => diag('lookup'), 'btn-outline-primary')), out))));
 };
 

@@ -18,7 +18,7 @@ install -d   "$tmp/usr/sbin" "$tmp/usr/lib/litefwm" "$tmp/usr/lib/litefwm/cgi"  
 # LiteFWM CLI and runtime library.
 install -m 0755 "$src/bin/lfwctl" "$tmp/usr/sbin/lfwctl"
 install -m 0755 "$src/bin/lfw-setup" "$tmp/usr/sbin/lfw-setup"
-for command in litefw-admin litefw-network litefw-console litefw-web-bind litefw-ssh-access; do
+for command in litefw-admin litefw-network litefw-console litefw-web-bind litefw-ssh-access litefw-upgrade; do
   install -m 0755 "$src/bin/$command" "$tmp/usr/sbin/$command"
 done
 install -m 0755 "$src/iso/setup-alpine-litefwm" "$tmp/usr/local/sbin/setup-alpine"
@@ -215,7 +215,7 @@ WORLD
 {
   [ ! -f "$tmp/usr/sbin/lfwctl" ] || printf '%s\n' "$tmp/usr/sbin/lfwctl"
   [ ! -f "$tmp/usr/sbin/lfw-setup" ] || printf '%s\n' "$tmp/usr/sbin/lfw-setup"
-  for command in litefw-admin litefw-network litefw-console litefw-web-bind litefw-ssh-access; do
+  for command in litefw-admin litefw-network litefw-console litefw-web-bind litefw-ssh-access litefw-upgrade; do
     printf '%s\n' "$tmp/usr/sbin/$command"
   done
   printf '%s\n' "$tmp/usr/local/sbin/litefw2-console-login"

@@ -89,3 +89,50 @@ performs a real setup-disk sys installation, reboots from the installed disk,
 and verifies the Alpine base, LiteFWM CLI/API/UI/configuration, and OpenRC
 services. This prevents an accidental Internet mirror from masking a missing
 package in the ISO.
+## Upgrading 2.2.7 to 2.2.8 without reinstalling
+
+From an authenticated development machine holding the LiteFW source, run:
+
+```sh
+./tools/upgrade-litefw.sh root@10.0.1.199 /var/lib/sandbox-mcp/.ssh/litefw_vm107_migrate
+```
+
+The script builds an application-only runtime bundle and sends it via SSH. The
+appliance runs `litefw-upgrade`, validates the supported forward-only 2.2.x version
+transition, saves an application rollback archive and a configuration backup in
+`/root/litefw-upgrade-backups/`, updates only app/runtime files, then tests
+the control API and web server configuration. This does **not** run the installer
+or touch network interfaces, IP addresses, DHCP scopes, reservations, BIND
+configuration/zones, user credentials, or firewall/NAT rules. It does **not**
+restart the firewall or require a reboot. Refresh the browser to see the UI.
+
+For a future offline/manual upgrade, copy the release
+`litefw2-2.2.8-runtime.tar.gz` to the appliance, and run:
+
+```sh
+litefw-upgrade /path/to/litefw2-2.2.8-runtime.tar.gz
+```
+
+**DHCP behavior:** The DHCP screen lists every physical, bridge or VLAN
+interface. Only configured static-LAN interfaces can run a DHCP service. All
+DHCP servers default to OFF; imported reservations are editable with the server
+disabled. Pressing Configure never implicitly enables the DHCP server.
+
+**Firewall behavior:** Rules are shown in natural language, including imported
+source-inversion anti-spoof rules. Each rule has up/down buttons; moving a rule
+across an anti-spoofing rule prompts for confirmation. The underlying rule is
+moved without rewriting its match semantics. Imported rules remain read-only
+for field editing; technical iptables details are available if needed.
+
+## Upgrades from the System page
+
+The System → Software updates card checks the official GitHub release and
+reports whether a newer version exists. After confirmation, Install update
+downloads the fixed official release bundle and SHA256SUMS, verifies the
+archive checksum, and invokes the runtime upgrader with backups and rollback.
+No reboot or DHCP/network/firewall configuration mutation is performed.
+
+For offline installations or private releases, upload a trusted official
+`litefw2-VERSION-runtime.tar.gz` in the same card. The upload is restricted
+to 4 MB and validated server-side before extraction. In an online update,
+HTTPS and GitHub release SHA-256 verification are required.

@@ -141,6 +141,23 @@ case "$method:$path" in
   POST:/system/management) op_request mgmt.set;;
   POST:/system/logging) op_request logging.set;;
   POST:/system/password) op_request password.set;;
+  POST:/system/updates/check) op_request upgrade.check;;
+  POST:/system/updates/install) op_request upgrade.install;;
+  POST:/system/updates/upload)
+    [ "${HTTP_X_LITEFWM:-}" = 1 ] || fail '403 Forbidden' 'missing X-LiteFWM request header'
+    [ "${CONTENT_TYPE:-}" = application/octet-stream ] || fail '415 Unsupported Media Type' 'use application/octet-stream'
+    len=${CONTENT_LENGTH:-0}
+    case "$len" in ''|*[!0-9]*) fail '400 Bad Request' 'invalid upload length';; esac
+    [ "$len" -gt 0 ] && [ "$len" -le 4194304 ] || fail '413 Payload Too Large' 'upgrade size must be between 1 byte and 4 MB'
+    umask 077
+    upload=$(mktemp /tmp/litefw-upload.XXXXXX)
+    trap 'rm -f "$upload" "$out" "$out.err" "${body:-}"' EXIT
+    head -c "$len" >"$upload"
+    [ "$(wc -c <"$upload")" = "$len" ] || fail '400 Bad Request' 'incomplete upload'
+    body=$(mktemp)
+    jq -n --arg path "$upload" '{path:$path}' >"$body"
+    run_op upgrade.upload
+    ;;
   POST:/system/diagnostics/ping) op_request diag.ping;;
   POST:/system/diagnostics/lookup) op_request diag.lookup;;
 

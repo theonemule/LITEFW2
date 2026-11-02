@@ -1,0 +1,96 @@
+#!/bin/sh
+# LiteFW application-only upgrade. Preserves networking, DHCP, firewall, DNS and credentials.
+set -eu
+PATH=/usr/sbin:/usr/bin:/sbin:/bin
+umask 077
+[ "$(id -u)" = 0 ] || { echo "Must run as root" >&2; exit 1; }
+[ "$#" -eq 1 ] && [ -f "$1" ] || { echo "Usage: litefw-upgrade runtime.tar.gz" >&2; exit 2; }
+archive=$1
+[ -f /etc/litefwm/installed ] || { echo "Not an installed LiteFW appliance" >&2; exit 1; }
+[ -f /usr/lib/litefwm/VERSION ] || exit 1
+old=$(cat /usr/lib/litefwm/VERSION)
+stage=$(mktemp -d /root/.litefw-upgrade.XXXXXX)
+backup=""
+committed=0
+cleanup() {
+  if [ "$committed" != 1 ] && [ -n "$backup" ]; then
+    echo "Upgrade unsuccessful: restoring previous runtime from $backup" >&2
+    tar -xzf "$backup" -C / || true
+  fi
+  rm -rf "$stage"
+}
+trap cleanup EXIT
+trap 'exit 1' HUP INT TERM
+
+[ "$(wc -c <"$archive")" -le 4194304 ] || { echo "Archive too large" >&2; exit 1; }
+tar -tzf "$archive" | while IFS= read -r entry; do
+  case "$entry" in
+    /*|../*|*/../*|*/..|*/./../*|'') echo "Unsafe archive path: $entry" >&2; exit 1;;
+    VERSION|bin|bin/*|lib|lib/*|modules|modules/*|cgi|cgi/*|www|www/*) :;;
+    *) echo "Unexpected archive file: $entry" >&2; exit 1;;
+  esac
+done
+tar -tvzf "$archive" | awk '
+  {t=substr($0,1,1);if(t!="-"&&t!="d"){bad=1;print "Unsafe archive type" >"/dev/stderr"}}
+  END{exit bad}
+' || exit 1
+tar -xzf "$archive" -C "$stage"
+new=$(cat "$stage/VERSION")
+for ver in "$old" "$new"; do
+  printf '%s' "$ver" | grep -Eq '^2[.]2[.][0-9]+$' || { echo "Invalid version: $ver" >&2; exit 1; }
+done
+old_patch=$(printf '%s' "$old" | cut -d. -f3)
+new_patch=$(printf '%s' "$new" | cut -d. -f3)
+[ "$old_patch" -ge 7 ] && [ "$new_patch" -gt "$old_patch" ] || {
+  echo "Only upgrades to newer compatible 2.2.x releases are supported ($old -> $new)" >&2; exit 1;
+}
+for f in bin/lfwctl bin/lfw-setup bin/litefw-admin bin/litefw-network \
+  bin/litefw-console bin/litefw-web-bind bin/litefw-ssh-access bin/litefw-upgrade \
+  cgi/api.cgi www/app.js www/app.css www/index.html lib/dhcp.sh lib/fw.sh; do
+  [ -s "$stage/$f" ] || { echo "Missing runtime file: $f" >&2; exit 1; }
+done
+[ -s "$stage/modules/bind/module.sh" ] || exit 1
+lighttpd -tt -f /etc/lighttpd/lighttpd.conf >/dev/null 2>&1 || {
+  echo "Existing web configuration invalid; aborting" >&2; exit 1;
+}
+
+install -d -m 0700 /root/litefw-upgrade-backups
+datecode=$(date -u +%Y%m%dT%H%M%SZ)
+backup="/root/litefw-upgrade-backups/runtime-$old-$datecode.tar.gz"
+tar -C / -czf "$backup" usr/sbin/lfwctl usr/sbin/lfw-setup \
+  usr/sbin/litefw-admin usr/sbin/litefw-network usr/sbin/litefw-console \
+  usr/sbin/litefw-web-bind usr/sbin/litefw-ssh-access \
+  usr/lib/litefwm usr/share/litefwm/www
+config="/root/litefw-upgrade-backups/config-$old-$datecode.tar.gz"
+tar -C / -czf "$config" etc/dnsmasq.conf etc/dnsmasq.d \
+  etc/dnsmasq.hosts.d etc/network/interfaces etc/iptables/rules-save \
+  etc/litefwm etc/lighttpd etc/ssh 2>/dev/null || true
+
+# Runtime files only. Never call the disk installer or network/DHCP mutation APIs.
+for file in "$stage"/bin/*; do
+  [ -f "$file" ] && install -m 0755 "$file" "/usr/sbin/$(basename "$file")"
+done
+install -d -m 0755 /usr/lib/litefwm/cgi /usr/lib/litefwm/modules /usr/share/litefwm/www
+for file in "$stage"/lib/*; do
+  [ -f "$file" ] || continue
+  case "$file" in
+    *.sh|*.jq|*.awk) install -m 0644 "$file" "/usr/lib/litefwm/$(basename "$file")";;
+  esac
+done
+install -m 0755 "$stage/cgi/api.cgi" /usr/lib/litefwm/cgi/api.cgi
+cp -R "$stage/modules/." /usr/lib/litefwm/modules/
+find /usr/lib/litefwm/modules -type f -name '*.sh' -exec chmod 0755 {} \;
+cp -R "$stage/www/." /usr/share/litefwm/www/
+find /usr/share/litefwm/www -type f -exec chmod 0644 {} \;
+install -m 0644 "$stage/VERSION" /usr/lib/litefwm/VERSION
+sh -n /usr/sbin/lfwctl
+sh -n /usr/sbin/litefw-console
+sh -n /usr/lib/litefwm/dhcp.sh
+sh -n /usr/lib/litefwm/sys.sh
+lighttpd -tt -f /etc/lighttpd/lighttpd.conf >/dev/null 2>&1
+/usr/sbin/lfwctl get dhcp >/dev/null
+/usr/sbin/lfwctl get firewall >/dev/null
+committed=1
+echo "LiteFW upgraded $old -> $new without reinstall or reboot."
+echo "Configuration preserved. Backups: $backup and $config"
+echo "Refresh the browser to see the new UI."

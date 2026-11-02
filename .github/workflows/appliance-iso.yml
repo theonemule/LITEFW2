@@ -36,6 +36,8 @@ jobs:
           test -x bin/litefw-web-bind
           ./tests/web-lan-security.sh
           ./tests/temporary-root-ssh.sh
+          ./tests/inplace-upgrade-smoke.sh
+          ./tests/upgrade-check-test.sh
           while IFS= read -r -d '' script; do
             if head -n 1 "$script" | grep -Eq '^#!.*(/|env )bash([[:space:]]|$)'; then
               bash -n "$script"
@@ -69,7 +71,8 @@ jobs:
           test "${#images[@]}" -eq 1
           mv "${images[0]}" "dist/litefw2-$(cat VERSION)-alpine3.24-x86_64.iso"
           xorriso -indev dist/*.iso -report_el_torito plain
-          (cd dist && sha256sum *.iso > SHA256SUMS)
+          tar -czf "dist/litefw2-$(cat VERSION)-runtime.tar.gz" VERSION bin lib modules cgi www
+          (cd dist && sha256sum *.iso *.tar.gz > SHA256SUMS)
       - name: Offline installation smoke test
         env:
           LITEFWM_OFFLINE_WORK: ${{ runner.temp }}/litefw2-offline
@@ -91,6 +94,7 @@ jobs:
           name: litefw2-alpine-appliance-${{ github.run_number }}
           path: |
             dist/*.iso
+            dist/*.tar.gz
             dist/SHA256SUMS
           if-no-files-found: error
           retention-days: 30
@@ -119,7 +123,7 @@ jobs:
               echo "Tag $tag exists without a release; run the workflow on that tag to publish its matching ISO." >&2
               exit 1
             fi
-            gh release create "$tag" dist/*.iso dist/SHA256SUMS --target "$GITHUB_SHA" --title "LiteFW2 $tag" --notes "Bootable Alpine Linux x86_64 firewall appliance ISO. SHA256SUMS included. ISO installation is the only supported installation method."
+            gh release create "$tag" dist/*.iso dist/*.tar.gz dist/SHA256SUMS --target "$GITHUB_SHA" --title "LiteFW2 $tag" --notes "Bootable Alpine Linux x86_64 firewall appliance ISO. SHA256SUMS included. New installations use the ISO. Existing appliances may upgrade the application runtime in place using bin/litefw-upgrade and the release runtime bundle; existing configuration is preserved."
           else
-            gh release create "$tag" dist/*.iso dist/SHA256SUMS --title "LiteFW2 $tag" --notes "Bootable Alpine Linux x86_64 firewall appliance ISO. SHA256SUMS included. ISO installation is the only supported installation method." --verify-tag
+            gh release create "$tag" dist/*.iso dist/*.tar.gz dist/SHA256SUMS --title "LiteFW2 $tag" --notes "Bootable Alpine Linux x86_64 firewall appliance ISO. SHA256SUMS included. New installations use the ISO. Existing appliances may upgrade the application runtime in place using bin/litefw-upgrade and the release runtime bundle; existing configuration is preserved." --verify-tag
           fi

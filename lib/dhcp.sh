@@ -133,10 +133,24 @@ op_reservation_add() {
   is_mac "$_mac" || die "invalid MAC address"
   is_ipv4 "$_ip" || die "invalid IP address"
   [ -z "$_h" ] || is_hostname "$_h" || die "invalid hostname (letters, digits, -)"
+  # Reservations are configuration data, not permission to start DHCP.
+  # A newly created reservation must fit a configured internal LAN subnet;
+  # an existing imported reservation may be edited while its NIC is unassigned
+  # as long as its IP does not change.  No DHCP scope is ever created here.
+  _prior=$(reservations_json | jq -r --arg m "$_mac" '.[] | select(.mac==$m) | .ip' | head -n 1)
   _seg=""
-  for _i in $(lan_ifaces); do dhcpd_exists "$_i" && iface_cidr_for "$_i" "$_ip" >/dev/null && _seg=$_i; done
-  [ -n "$_seg" ] || die "$_ip is not inside a segment with a DHCP server"
-  for _c in $(iface_ips "$_seg"); do [ "${_c%/*}" != "$_ip" ] || die "$_ip is the firewall's own address"; done
+  for _i in $(lan_ifaces); do
+    iface_cidr_for "$_i" "$_ip" >/dev/null && _seg=$_i
+  done
+  if [ -z "$_seg" ]; then
+    [ -n "$_prior" ] && [ "$_prior" = "$_ip" ] ||
+      die "$_ip is outside all configured LAN subnets; assign the interface first"
+  fi
+  if [ -n "$_seg" ]; then
+    for _c in $(iface_ips "$_seg"); do
+      [ "${_c%/*}" != "$_ip" ] || die "$_ip is the firewall's own address"
+    done
+  fi
   _other=$(reservations_json | jq -r --arg ip "$_ip" --arg m "$_mac" '.[] | select(.ip==$ip and .mac!=$m) | .mac' | head -n 1)
   [ -z "$_other" ] || die "$_ip is already reserved for $_other"
   _now=$(date +%s)

@@ -16,7 +16,7 @@ profile_litefwm() {
 	# they are intentionally not part of /etc/apk/world and are not installed
 	# unless the operator enables the module.
 	apks="$apks \
-		ifupdown-ng iproute2 iptables dnsmasq jq util-linux openssh \
+		ifupdown-ng iproute2 iptables dnsmasq jq util-linux openssh curl ca-certificates \
 		linux-lts syslinux grub-bios grub-efi dosfstools e2fsprogs linux-firmware-other \
 		lighttpd lighttpd-mod_auth apache2-utils sudo busybox-openrc \
 		bind bind-tools bind-openrc \
