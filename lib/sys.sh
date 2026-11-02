@@ -1,6 +1,16 @@
 # shellcheck shell=sh
 # System settings: hostname, management UI port/access, SSH, admin password.
 
+web_bind_sync() {
+  # The ISO includes this helper; legacy dev labs may not.
+  command -v litefw-web-bind >/dev/null 2>&1 || return 0
+  litefw-web-bind || die "failed to restrict the web listener to LAN addresses"
+}
+web_restart_after_reply() {
+  command -v litefw-web-bind >/dev/null 2>&1 || return 0
+  # Delayed so CGI can finish returning its response to the client.
+  setsid sh -c 'sleep 1; rc-service lighttpd restart' >/dev/null 2>&1 </dev/null 9>&- &
+}
 mgmt_port() { sed -n 's/^[[:space:]]*server\.port[[:space:]]*=[[:space:]]*\([0-9]*\).*/\1/p' "$LFW_LIGHTTPD_CONF" 2>/dev/null | head -n 1 | grep . || echo 80; }
 ssh_port() { awk 'tolower($1)=="port"{print $2; exit}' "$LFW_SSHD_CONF" 2>/dev/null | grep . || echo 22; }
 ssh_enabled() {
@@ -167,6 +177,7 @@ op_mgmt_set() {
   _restart_web=false
   if [ -n "$_port" ] && [ "$_port" != "$(mgmt_port)" ]; then
     sed -i "s/^[[:space:]]*server\.port[[:space:]]*=.*/server.port = $_port/" "$LFW_LIGHTTPD_CONF"
+    web_bind_sync
     lighttpd -tt -f /etc/lighttpd/lighttpd.conf >/dev/null 2>&1 || die "lighttpd rejected port $_port"
     _restart_web=true
   fi
@@ -198,7 +209,7 @@ op_mgmt_set() {
   fi
   if [ "$_restart_web" = true ]; then
     # restart after this response has been delivered
-    setsid sh -c 'sleep 1; rc-service lighttpd restart' >/dev/null 2>&1 </dev/null 9>&- &
+    web_restart_after_reply
     warn "the management UI moves to port $_port; reconnect at the new port"
   fi
   log_op "mgmt.set port=$_port ssh=$(jget sshEnabled) sshPort=$_sp access=$_acc"

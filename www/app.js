@@ -288,7 +288,7 @@ views.overview = () => {
         [['Hostname', s.hostname], ['LiteFWM', s.version], ['Alpine', s.alpine], ['Kernel', s.kernel], ['Uptime', upt],
          ['Load', s.load], ['Memory used', memPct + '%'], ['Resolvers', s.resolvers.join(', ') || '—'],
          ['IP forwarding', s.ipForward ? 'on' : 'OFF'], ['DNS/DHCP (dnsmasq)', s.services.dnsmasq ? 'running' : 'STOPPED'],
-         ['Web UI', 'port ' + s.management.port + ' · ' + (s.management.access[0] === 'any' ? 'all interfaces' : s.management.access.join(', '))],
+         ['Web UI', 'port ' + s.management.port + ' · LAN only (' + (l3().filter(i => i.role === 'lan').map(i => i.name).join(', ') || 'no LAN configured') + ')'],
          ['SSH', s.ssh.enabled ? 'on, port ' + s.ssh.port : 'off']]
           .map(([k, v]) => [h('dt', { class: 'col-5 text-secondary fw-normal' }, k), h('dd', { class: 'col-7 mb-1' }, v)]))))),
       h('div', { class: 'col-lg-7' }, card('Network segments', [btn('Manage', () => location.hash = '#segments')],
@@ -734,7 +734,7 @@ const builtins = () => {
   const lans = l3().filter(i => i.role === 'lan').map(i => disp(i.name)).join(', ') || 'none';
   const implicit = [
     ['allow', 'Replies to allowed connections (established / related)'],
-    ['allow', `Web UI tcp/${s.management.port}` + (s.ssh.enabled ? ` and SSH tcp/${s.ssh.port}` : '') + ' to this firewall from ' + (s.management.access[0] === 'any' ? 'any interface' : s.management.access.join(', '))],
+    ['allow', `Web UI tcp/${s.management.port} on LAN interfaces only` + (s.ssh.enabled ? `; SSH tcp/${s.ssh.port} from ` + (s.management.access[0] === 'any' ? 'any interface' : s.management.access.join(', ')) : '')],
     ['allow', `DNS, DHCP and ping to this firewall from LAN segments (${lans})`],
     ['allow', 'Port forwards (see Port forwards)'],
     ['nat', w ? `Outbound NAT (masquerade) on the WAN ${disp(w.name)}` : 'Outbound NAT: no WAN segment defined'],
@@ -1047,7 +1047,7 @@ views.system = () => {
         h('div', { class: 'card-body' }, 'Hostname: ', h('b', {}, s.hostname))),
       card('Management access', [btn('Edit', () => form('Management access', [
         { k: 'port', label: 'Web UI port', type: 'number', value: m.port },
-        { k: 'mode', label: 'Allow the web UI' + (s.ssh.enabled ? ' and SSH' : '') + ' from', type: 'select', value: m.access[0] === 'any' ? 'any' : 'list', options: [['any', 'any interface'], ['list', 'selected segments only']] },
+        { k: 'mode', label: 'Allow SSH from', type: 'select', value: m.access[0] === 'any' ? 'any' : 'list', options: [['any', 'any interface (SSH only)'], ['list', 'selected SSH interfaces']] },
         { k: 'ifs', label: 'Segments', type: 'multi', value: m.access[0] === 'any' ? [] : m.access, options: l3().map(i => [i.name, disp(i.name)]), show: v => v.mode === 'list' },
         { k: 'sshEnabled', label: 'SSH server enabled', type: 'check', value: s.ssh.enabled },
         { k: 'sshPort', label: 'SSH port', type: 'number', value: s.ssh.port, show: v => v.sshEnabled }
@@ -1055,7 +1055,8 @@ views.system = () => {
       { note: `Your session arrives on ${m.clientInterface || 'an unknown interface'} (${m.clientIp || '?'}); LiteFWM refuses changes that would lock it out.` }), 'btn-primary')],
         h('div', { class: 'card-body' }, h('dl', { class: 'row mb-0' },
           h('dt', { class: 'col-5' }, 'Web UI'), h('dd', { class: 'col-7' }, 'port ' + m.port),
-          h('dt', { class: 'col-5' }, 'Allowed from'), h('dd', { class: 'col-7' }, m.access[0] === 'any' ? 'any interface' : m.access.map(disp).join(', ')),
+          h('dt', { class: 'col-5' }, 'Web access'), h('dd', { class: 'col-7' }, 'LAN interfaces only'),
+          h('dt', { class: 'col-5' }, 'SSH access'), h('dd', { class: 'col-7' }, m.access[0] === 'any' ? 'any interface' : m.access.map(disp).join(', ')),
           h('dt', { class: 'col-5' }, 'SSH'), h('dd', { class: 'col-7' }, s.ssh.enabled ? 'enabled, port ' + s.ssh.port : 'disabled')))),
       card('Logging output', [btn('Edit', () => form('Logging output', [
         { k: 'remoteEnabled', label: 'Forward system logs to a remote syslog server', type: 'check', value: s.logging.remoteEnabled },

@@ -3,6 +3,12 @@
 set -u
 PATH=/usr/sbin:/usr/bin:/sbin:/bin
 VERSION=$(cat /usr/lib/litefwm/VERSION 2>/dev/null || echo unknown)
+installed() {
+  [ -e /etc/litefwm/installed ] && return 0
+  fs=$(awk '$2=="/" {print $3; exit}' /proc/mounts 2>/dev/null)
+  case "$fs" in ext2|ext3|ext4|xfs|btrfs|f2fs|zfs|ubifs) return 0;; esac
+  return 1
+}
 while :; do
   clear 2>/dev/null || true
   echo '======================================================'
@@ -11,35 +17,43 @@ while :; do
   echo '======================================================'
   echo
   if [ -s /etc/litefwm/htpasswd ]; then
-    echo 'Web UI: configured'
+    echo 'Web UI: configured (LAN only)'
   else
     echo 'Web UI: administrator setup required'
   fi
   ip -4 -brief address 2>/dev/null || true
   echo
-  if grep -q '/media/.*/apks' /etc/apk/repositories 2>/dev/null; then
-    echo '  1) Install LiteFW to disk (Alpine + appliance setup)'
+  if installed; then
+    mode=installed
+    echo '  1) Assign WAN / LAN interfaces (optional LAN VLAN)'
+    echo '  2) Set or reset web administrator username/password'
+    echo '  3) Show network status'
+    echo '  4) Alpine keyboard / timezone / repository settings'
+    echo '  5) Restart LAN-only web management service'
+    echo '  6) Open system shell'
+    echo '  7) Reboot'
+    echo '  8) Shut down'
   else
-    echo '  1) Install LiteFW to disk (live ISO only)'
+    mode=live
+    echo '  1) Install LiteFW to disk (Alpine + appliance setup)'
+    echo '  2) Assign WAN / LAN interfaces (optional LAN VLAN)'
+    echo '  3) Set or reset web administrator username/password'
+    echo '  4) Show network status'
+    echo '  5) Alpine keyboard / timezone / repository settings'
+    echo '  6) Restart LAN-only web management service'
+    echo '  7) Open system shell'
+    echo '  8) Reboot'
+    echo '  9) Shut down'
   fi
-  echo '  2) Assign WAN / LAN interfaces (optional LAN VLAN)'
-  echo '  3) Set or reset web administrator username/password'
-  echo '  4) Show network status'
-  echo '  5) Alpine keyboard / timezone / repository settings'
-  echo '  6) Restart web management service'
-  echo '  7) Open system shell'
-  echo '  8) Reboot'
-  echo '  9) Shut down'
   echo
   printf 'Select an option: '
   IFS= read -r answer || exit 0
+  if [ "$mode" = installed ]; then
+    case "$answer" in [1-8]) answer=$((answer + 1));; *) answer=invalid;; esac
+  fi
   case "$answer" in
     1)
-      if grep -q '/media/.*/apks' /etc/apk/repositories 2>/dev/null; then
-        /usr/local/sbin/setup-alpine
-      else
-        echo 'Boot the LiteFW installation ISO to install the appliance.'
-      fi;;
+      if [ "$mode" = live ]; then /usr/local/sbin/setup-alpine; fi;;
     2) /usr/sbin/litefw-network;;
     3) /usr/sbin/litefw-admin;;
     4) /usr/sbin/lfw-setup show; ip route show;;
@@ -51,7 +65,7 @@ while :; do
         2) setup-timezone;;
         3) setup-apkrepos;;
       esac;;
-    6) rc-service lighttpd restart;;
+    6) /usr/sbin/litefw-web-bind && rc-service lighttpd restart;;
     7) echo 'Type exit to return to LiteFW console.'; /bin/sh;;
     8) reboot;;
     9) poweroff;;

@@ -41,7 +41,7 @@ supports.
 
 ## Installer flow
 
-The boot console opens the LiteFW management menu automatically. Select **1) Install LiteFW to disk**
+The live ISO console opens the LiteFW management menu automatically. Select **1) Install LiteFW to disk**
 to run the single appliance installer. This retains Alpine keyboard, timezone,
 APK repository, and disk setup, while replacing Alpine's unbounded network and
 Unix account prompts with LiteFW's setup.
@@ -58,8 +58,9 @@ credentials. The physical/VM console opens the LiteFW management menu without
 a separate root-password challenge, and exposes network, administrator, and
 recovery settings. Only trusted operators should have console access.
 
-The disk installer persists the existing LiteFW network configuration. On an
-installed appliance the console remains available for reconfiguration.
+The disk installer persists the network configuration and an installed-system marker. An installed appliance never shows the installation option; calling the disk installer directly also fails. Its console starts with WAN/LAN administration.
+
+The Web UI listens exclusively on IPv4 addresses belonging to LAN segments, never on WAN or unassigned NICs. If there is no LAN address, it binds only to loopback. The firewall independently drops non-LAN management TCP traffic before conntrack and arbitrary user rules, so an explicit WAN firewall allow cannot expose the Web UI. Network role changes regenerate the listener configuration.
 Versioning follows the repository `VERSION` file; the ISO is named
 `litefw2-<version>-alpine3.24-x86_64.iso`.
 

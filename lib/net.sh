@@ -168,6 +168,7 @@ l3_move() {
   dhcpd_rename "$_from" "$_to"
   dns_listen_sync; dnsmasq_apply
   fw_rename_iface "$_from" "$_to"
+  web_bind_sync; web_restart_after_reply
 }
 
 # ---------------------------------------------------------------- interface ops
@@ -288,6 +289,7 @@ op_bridge_delete() {
   for _m in $(iface_members "$_b"); do try ip link set dev "$_m" nomaster; done
   run ip link del dev "$_b"
   dns_listen_sync; dnsmasq_apply; fw_sync
+  web_bind_sync; web_restart_after_reply
   net_persist
   log_op "bridge.delete $_b"
 }
@@ -345,6 +347,7 @@ op_vlan_delete() {
   run ip link del dev "$_n"
   if [ "$(iface_kind "$_parent")" = bridge ]; then try bridge vlan del dev "$_parent" vid "$_vid" self; fi
   dns_listen_sync; dnsmasq_apply; fw_sync
+  web_bind_sync; web_restart_after_reply
   net_persist
   log_op "vlan.delete $_n"
 }
@@ -436,6 +439,7 @@ op_segment_set() {
     fi
   fi
   dns_listen_sync; dnsmasq_apply; fw_sync
+  web_bind_sync; web_restart_after_reply
   net_persist
   log_op "segment.set $_i role=$_role mode=$_mode addrs=$(printf '%s' "$_addrs" | tr '\n' ' ')gw=$_gw"
 }

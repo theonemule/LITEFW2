@@ -18,7 +18,7 @@ install -d   "$tmp/usr/sbin" "$tmp/usr/lib/litefwm" "$tmp/usr/lib/litefwm/cgi"  
 # LiteFWM CLI and runtime library.
 install -m 0755 "$src/bin/lfwctl" "$tmp/usr/sbin/lfwctl"
 install -m 0755 "$src/bin/lfw-setup" "$tmp/usr/sbin/lfw-setup"
-for command in litefw-admin litefw-network litefw-console; do
+for command in litefw-admin litefw-network litefw-console litefw-web-bind; do
   install -m 0755 "$src/bin/$command" "$tmp/usr/sbin/$command"
 done
 install -m 0755 "$src/iso/setup-alpine-litefwm" "$tmp/usr/local/sbin/setup-alpine"
@@ -62,6 +62,7 @@ DNSCONF
 
 install -m 0644 "$src/etc/lighttpd.conf" "$tmp/etc/lighttpd/lighttpd.conf"
 install -m 0644 "$src/etc/litefwm-lighttpd.conf" "$tmp/etc/lighttpd/litefwm.conf"
+install -m 0644 "$src/etc/litefwm-bind.conf" "$tmp/etc/lighttpd/litefwm-bind.conf"
 cat >"$tmp/etc/sudoers.d/litefwm" <<'SUDOERS'
 lighttpd ALL=(root) NOPASSWD: /usr/sbin/lfwctl
 Defaults:lighttpd !requiretty, !syslog
@@ -139,6 +140,11 @@ start() {
     }
   fi
   chvt 1 >/dev/null 2>&1 || true
+  if ! /usr/sbin/litefw-web-bind; then
+    eerror "Could not restrict web listener to LAN addresses"
+    eend 1
+    return 1
+  fi
   chown lighttpd:lighttpd /var/log/lighttpd 2>/dev/null || true
   if [ ! -s /etc/litefwm/htpasswd ]; then
     einfo "Web UI is not configured yet. Open the LiteFW console to configure it."
@@ -206,7 +212,7 @@ WORLD
 {
   [ ! -f "$tmp/usr/sbin/lfwctl" ] || printf '%s\n' "$tmp/usr/sbin/lfwctl"
   [ ! -f "$tmp/usr/sbin/lfw-setup" ] || printf '%s\n' "$tmp/usr/sbin/lfw-setup"
-  for command in litefw-admin litefw-network litefw-console; do
+  for command in litefw-admin litefw-network litefw-console litefw-web-bind; do
     printf '%s\n' "$tmp/usr/sbin/$command"
   done
   printf '%s\n' "$tmp/usr/local/sbin/litefw2-console-login"
@@ -221,6 +227,7 @@ WORLD
     "$tmp/etc/conf.d/iptables" \
     "$tmp/etc/lighttpd/lighttpd.conf" \
     "$tmp/etc/lighttpd/litefwm.conf" \
+    "$tmp/etc/lighttpd/litefwm-bind.conf" \
     "$tmp/etc/dnsmasq.conf" \
     "$tmp/etc/dnsmasq.d/00-litefwm.conf" \
     "$tmp/etc/dnsmasq.d/10-dns.conf" \
@@ -256,9 +263,9 @@ cat >"$tmp/etc/motd" <<MOTD
 LiteFW $(cat "$src/VERSION") - Firewall & Network Appliance
 
 Local VGA: automatic LiteFW management menu (no root password prompt).
-Use option 1 to install LiteFW. Alpine keyboard, timezone, repositories
-and disk selection are included; WAN/LAN/VLAN and web administrator setup
-run as part of the same installer. SSH is installed automatically.
+On the live ISO use option 1 to install LiteFW. Disk installations have no
+installer option. Web management binds only to LAN addresses.
+SSH is installed automatically.
 MOTD
 cat >"$tmp/etc/issue" <<ISSUE
 LiteFW $(cat "$src/VERSION") - Firewall & Network Appliance

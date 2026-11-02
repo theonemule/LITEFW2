@@ -59,6 +59,7 @@ install -d -m 0755 /usr/lib/litefwm /usr/lib/litefwm/cgi /usr/lib/litefwm/module
   /etc/dnsmasq.d /etc/dnsmasq.hosts.d /etc/iptables /var/lib/misc
 install -m 0755 "$BASE/bin/lfwctl" /usr/sbin/lfwctl
 install -m 0755 "$BASE/bin/lfw-setup" /usr/sbin/lfw-setup
+install -m 0755 "$BASE/bin/litefw-web-bind" /usr/sbin/litefw-web-bind
 install -m 0644 "$BASE"/lib/*.sh "$BASE"/lib/*.jq "$BASE"/lib/*.awk /usr/lib/litefwm/
 install -m 0755 "$BASE/lib/udhcpc.script" /usr/lib/litefwm/udhcpc.script
 rm -rf /usr/lib/litefwm/modules && cp -R "$BASE/modules" /usr/lib/litefwm/modules
@@ -70,6 +71,7 @@ find /usr/share/litefwm/www -type d -exec chmod 0755 {} + ; find /usr/share/lite
 
 echo "==> web server"
 install -m 0644 "$BASE/etc/lighttpd.conf" /etc/lighttpd/lighttpd.conf
+install -m 0644 "$BASE/etc/litefwm-bind.conf" /etc/lighttpd/litefwm-bind.conf
 if [ -f /etc/lighttpd/litefwm.conf ]; then
   old=$(sed -n 's/^server\.port *= *\([0-9]*\).*/\1/p' /etc/lighttpd/litefwm.conf | head -n 1)
   [ -z "$old" ] || [ "$PORT" != 80 ] || PORT=$old
@@ -82,6 +84,7 @@ if [ ! -s /etc/litefwm/htpasswd ]; then
   echo "    admin login: $ADMIN / $PASS"
 fi
 chown root:lighttpd /etc/litefwm/htpasswd; chmod 0640 /etc/litefwm/htpasswd
+/usr/sbin/litefw-web-bind
 lighttpd -tt -f /etc/lighttpd/lighttpd.conf
 printf 'lighttpd ALL=(root) NOPASSWD: /usr/sbin/lfwctl\nDefaults:lighttpd !requiretty, !syslog\n' >/etc/sudoers.d/litefwm
 visudo -cf /etc/sudoers.d/litefwm >/dev/null
@@ -140,7 +143,7 @@ if [ "$START" = yes ]; then
   rc-service lighttpd restart >/dev/null 2>&1 || rc-service lighttpd start
 fi
 echo
-echo "LiteFWM $(cat "$BASE/VERSION") installed. Web UI: http://<this-host>:$PORT/"
+echo "LiteFWM $(cat "$BASE/VERSION") installed. Web UI: LAN interfaces only, port $PORT"
 if [ "$INTERACTIVE" = auto ]; then
   if [ -t 0 ] && [ -t 1 ]; then INTERACTIVE=yes; else INTERACTIVE=no; fi
 fi

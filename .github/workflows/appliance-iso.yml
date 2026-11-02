@@ -33,6 +33,8 @@ jobs:
           test -x tools/build-appliance-iso.sh
           test -f iso/mkimg.litefwm.sh
           test -f iso/genapkovl-litefwm.sh
+          test -x bin/litefw-web-bind
+          ./tests/web-lan-security.sh
           while IFS= read -r -d '' script; do
             if head -n 1 "$script" | grep -Eq '^#!.*(/|env )bash([[:space:]]|$)'; then
               bash -n "$script"

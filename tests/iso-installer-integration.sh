@@ -7,9 +7,23 @@ docker run --rm \
   -v "$PWD/iso/setup-alpine-litefwm:/usr/local/sbin/setup-alpine:ro" \
   -v "$PWD/bin/litefw-network:/usr/sbin/litefw-network:ro" \
   -v "$PWD/bin/litefw-admin:/usr/sbin/litefw-admin:ro" \
+  -v "$PWD/bin/litefw-console:/usr/sbin/litefw-console:ro" \
   alpine:3.24 sh -euc '
   apk add --quiet --no-cache alpine-conf apache2-utils lighttpd jq iproute2 util-linux >/dev/null
   mkdir -p /media/cdrom/apks /tmp/mocknet /etc/litefwm
+  # Installed disk shows only administration, and direct installer calls fail.
+  : >/etc/litefwm/installed
+  printf "invalid\n\n" | timeout 5 /usr/sbin/litefw-console >/tmp/menu-installed.txt
+  grep -q "1) Assign WAN / LAN interfaces" /tmp/menu-installed.txt
+  ! grep -q "Install LiteFW to disk" /tmp/menu-installed.txt
+  if /usr/local/sbin/setup-alpine >/tmp/reinstall.txt 2>&1; then
+    echo "FAIL: installed appliance allows reinstall" >&2; exit 1
+  fi
+  grep -q "already installed" /tmp/reinstall.txt
+  rm -f /etc/litefwm/installed
+  printf "invalid\n\n" | timeout 5 /usr/sbin/litefw-console >/tmp/menu-live.txt
+  grep -q "1) Install LiteFW to disk" /tmp/menu-live.txt
+  echo "PASS: installed console hides installer and direct reinstall is blocked"
   echo /media/cdrom/apks >>/etc/apk/repositories
   mknod /dev/vda b 7 200
   mknod /dev/vdb b 7 201

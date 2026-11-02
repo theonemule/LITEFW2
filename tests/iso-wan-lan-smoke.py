@@ -168,6 +168,13 @@ def configure_firewall():
     vmcmd("""lfwctl op rule.add '{"chain":"forward","action":"accept","in":"eth1","out":"eth0","description":"ISO LAN to WAN"}' >/dev/null""")
     vmcmd(f"""lfwctl op forward.add '{{"in":"eth0","proto":"tcp","port":"9090","to":"{LAN_CLIENT}","toPort":"8080","description":"ISO WAN to LAN"}}' >/dev/null""")
 
+    vmcmd("rc-service lighttpd restart", timeout=100)
+    vmcmd(f"ss -ltn | grep -Fq '{LAN_FW}:80'")
+    vmcmd(f"! ss -ltn | grep -Fq '{WAN_FW}:80'")
+    vmcmd("! ss -ltn | grep -q '0.0.0.0:80'")
+    vmcmd("iptables -S INPUT | grep -q 'LFW_WEB'")
+    vmcmd("iptables -S LFW_WEB | grep -q 'eth1.*ACCEPT'")
+    vmcmd("iptables -S LFW_WEB | grep -q 'DROP'")
     vmcmd("lfw-setup show | grep -q 'eth0.*wan'")
     vmcmd("lfw-setup show | grep -q 'eth1.*lan'")
     vmcmd("iptables -t nat -S LFW_SNAT | grep -q 'eth0.*MASQUERADE'")

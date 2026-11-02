@@ -8,7 +8,8 @@
 # Chains
 #   filter INPUT   : lo, established, DHCP-client replies, LFW_MGMT, LFW_SVC, LFW_IN, DROP
 #   filter FORWARD : established, DNAT'ed (port forwards), LFW_FWD, DROP
-#   LFW_MGMT  management UI / SSH access           (managed by System settings)
+#   LFW_MGMT  SSH access configured from System settings
+#   LFW_WEB   mandatory LAN-only web guard (never configurable to WAN)
 #   LFW_SVC   DNS/DHCP/ping to the firewall from LAN segments (derived from segments)
 #   LFW_MOD   derived service openings for installed optional modules
 #   LFW_IN    user rules with destination "this firewall"
@@ -46,15 +47,25 @@ mgmt_access_live() {
   if [ ! -s "$FWT/LFW_MGMT" ] || grep -qv -- ' -i ' "$FWT/LFW_MGMT"; then echo any; return; fi
   awk '{for(i=1;i<=NF;i++) if($i=="-i") print $(i+1)}' "$FWT/LFW_MGMT" | sort -u
 }
-# fw_gen_mgmt ACCESS... (uses current web/ssh ports)
+# fw_gen_mgmt ACCESS... (SSH only; management web is LAN-only)
 fw_gen_mgmt() {
-  local _web _ssh _sshon _a _if
-  _web=$(mgmt_port); _ssh=$(ssh_port); _sshon=false; ssh_enabled && _sshon=true
+  local _ssh _sshon _a _if
+  _ssh=$(ssh_port); _sshon=false; ssh_enabled && _sshon=true
   for _a in "$@"; do
     _if=""; [ "$_a" = any ] || _if="-i $_a "
-    echo "-A LFW_MGMT ${_if}-p tcp -m tcp --dport $_web -m comment --comment lfw:mgmt -j ACCEPT"
     [ "$_sshon" = false ] || echo "-A LFW_MGMT ${_if}-p tcp -m tcp --dport $_ssh -m comment --comment lfw:ssh -j ACCEPT"
   done
+}
+
+# The web listener is independently guarded even when a user adds a firewall
+# input allow on WAN. Reject attempts before conntrack established/related.
+fw_gen_web() {
+  local _web _if
+  _web=$(mgmt_port)
+  for _if in $(lan_ifaces); do
+    echo "-A LFW_WEB -i $_if -p tcp -m tcp --dport $_web -j ACCEPT"
+  done
+  echo "-A LFW_WEB -p tcp -m tcp --dport $_web -j DROP"
 }
 
 # fw_commit [MGMT_ACCESS...]: assemble and load the full ruleset from $FWT.
@@ -87,7 +98,8 @@ fw_commit() {
     echo ':INPUT DROP [0:0]'
     echo ':FORWARD DROP [0:0]'
     echo ':OUTPUT ACCEPT [0:0]'
-    for _c in LFW_MGMT LFW_SVC LFW_MOD LFW_IN LFW_FWD; do echo ":$_c - [0:0]"; done
+    for _c in LFW_WEB LFW_MGMT LFW_SVC LFW_MOD LFW_IN LFW_FWD; do echo ":$_c - [0:0]"; done
+    echo "-A INPUT -p tcp -m tcp --dport $(mgmt_port) -j LFW_WEB"
     echo '-A INPUT -i lo -j ACCEPT'
     echo '-A INPUT -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT'
     echo '-A INPUT -m conntrack --ctstate INVALID -j DROP'
@@ -100,6 +112,7 @@ fw_commit() {
     echo '-A FORWARD -m conntrack --ctstate INVALID -j DROP'
     echo '-A FORWARD -m conntrack --ctstate DNAT -j ACCEPT'
     echo '-A FORWARD -j LFW_FWD'
+    fw_gen_web
     cat "$FWT/LFW_MGMT"
     fw_gen_svc
     if command -v module_firewall_rules >/dev/null 2>&1; then module_firewall_rules; fi
