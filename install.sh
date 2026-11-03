@@ -100,10 +100,19 @@ install -m 0644 "$BASE/etc/dnsmasq.conf" /etc/dnsmasq.conf
 printf '# Owned by LiteFWM\ncfgfile="/etc/dnsmasq.conf"\nleasefile="/var/lib/misc/dnsmasq.leases"\n' >/etc/conf.d/dnsmasq
 install -m 0644 "$BASE/etc/dnsmasq-base.conf" /etc/dnsmasq.d/00-litefwm.conf
 [ -f /etc/dnsmasq.d/10-dns.conf ] || printf '# LiteFWM DNS settings\ndomain=lan\nlocal=/lan/\nexpand-hosts\n' >/etc/dnsmasq.d/10-dns.conf
-# Adopt an existing LiteFWM BIND configuration without letting dnsmasq compete
-# for port 53. DHCP stays active because port=0 disables only dnsmasq DNS.
+# BIND owns DNS port 53 when active or enabled at boot, not merely because its
+# old configuration exists. Keep DNSMasq DHCP unchanged during a DNS switch.
+bind_active=false
 if [ -r /etc/bind/named.conf ] && grep -q '^// LiteFWM native BIND configuration' /etc/bind/named.conf; then
-  printf '%s\n' '# BIND owns port 53 while this module is configured' 'port=0' >/etc/dnsmasq.d/05-litefwm-bind.conf
+  if rc-service named status >/dev/null 2>&1 ||
+     rc-update show default 2>/dev/null | awk '$1=="named" {found=1} END {exit !found}'; then
+    bind_active=true
+  fi
+fi
+if [ "$bind_active" = true ]; then
+  printf '%s\n' '# BIND owns port 53 while its service is active' 'port=0' >/etc/dnsmasq.d/05-litefwm-bind.conf
+else
+  rm -f /etc/dnsmasq.d/05-litefwm-bind.conf
 fi
 rm -f /etc/dnsmasq.d/litefwm/00-bind-dns.conf 2>/dev/null || true
 

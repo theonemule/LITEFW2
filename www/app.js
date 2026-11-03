@@ -45,8 +45,12 @@ const VIEW_APIS = {
   interfaces: ['interfaces'],
   segments: ['segments', 'system'],
   dhcp: ['dhcp'],
-  dns: ['dns', 'segments', 'system', 'modules/bind'],
+  dns: ['dns', 'segments', 'system', 'modules/bind', 'modules/dnsmasq'],
   modules: ['modules', 'segments', 'system'],
+  'module-bind': ['segments', 'system', 'modules/bind'],
+  'module-dnsmasq': ['dns', 'segments', 'system', 'modules/dnsmasq', 'modules/bind'],
+  'module-ddns': ['segments', 'system', 'modules/ddns'],
+  'module-openvpn': ['segments', 'system', 'modules/openvpn'],
   firewall: ['firewall', 'port-forwards', 'segments', 'dhcp', 'system'],
   system: ['system', 'segments']
 };
@@ -128,7 +132,7 @@ function opPath(name, body) {
   if (family === 'reservation') return '/api/dhcp/reservations/' + action;
   if (family === 'dns') return '/api/dns/set';
   if (family === 'module') return '/api/modules/' + encodeURIComponent(body.id) + '/' + action;
-  if (['bind', 'openvpn', 'ddns'].includes(family)) return '/api/modules/' + family + '/' + action;
+  if (['bind', 'openvpn', 'ddns', 'dnsmasq'].includes(family)) return '/api/modules/' + family + '/' + action;
   if (family === 'upgrade') return '/api/system/updates/' + action;
   if (family === 'system') return '/api/system/set';
   if (family === 'mgmt') return '/api/system/management';
@@ -578,7 +582,7 @@ function dnsResolverSummary(ips, emptyLabel) {
 }
 
 // ---------- DNS
-views.dns = () => {
+function dnsmasqPanel() {
   const d = S.dns;
   const edit = () => form('DNS settings', [
     { k: 'domain', label: 'Local domain', value: d.domain || 'lan', help: 'DHCP clients and reservations resolve as name.domain.' },
@@ -601,8 +605,39 @@ views.dns = () => {
         moduleState('bind').running ? 'Disabled — BIND9 currently serves DNS on port 53' : 'dnsmasq (LAN interfaces)'),
       h('dt', { class: 'col-sm-3' }, 'Configured LANs'), h('dd', { class: 'col-sm-9' }, l3().filter(i => i.role === 'lan').map(i => disp(i.name)).join(', ') || 'none'),
       h('dt', { class: 'col-sm-3' }, 'Host records'), h('dd', { class: 'col-sm-9 mono' }, d.hosts.length ? d.hosts.map(x => h('div', {}, `${x.name} → ${x.ip}`)) : '—'))));
-  return [core, ...bindPanel()];
-};
+  return core;
+}
+views.dns = () => [
+  card('DNS engines', null, h('div', { class:'card-body' },
+    h('p', { class:'mb-2 small' },
+      moduleState('bind').running ? 'BIND9 is the active DNS listener. DNSMasq still supplies DHCP.' :
+        'DNSMasq is the active LAN DNS resolver. BIND9 may be installed for authoritative zones.'),
+    h('div', { class:'d-flex gap-2 flex-wrap' },
+      btn('DNSMasq settings', () => location.hash = '#module-dnsmasq', 'btn-primary'),
+      btn('BIND9 settings & zones', () => location.hash = '#module-bind', 'btn-outline-primary')))),
+  card('DNSMasq forwarding', [btn('Manage DNSMasq', () => location.hash = '#module-dnsmasq')],
+    h('div', { class:'card-body small' },
+      dnsResolverSummary(S.dns.upstream, 'Automatic WAN resolvers'),
+      h('div', { class:'mt-1 text-secondary' }, moduleState('bind').running ?
+        'DNS listener currently disabled in favor of BIND9; DHCP remains available.' : 'DNS listener enabled on LAN interfaces.')))
+];
+views['module-dnsmasq'] = () => [
+  h('div', { class:'mb-3' }, btn('Back to modules', () => location.hash = '#modules')),
+  card('DNSMasq DNS engine', null, h('div', { class:'card-body small' },
+    moduleState('bind').running ?
+      'BIND9 currently listens on port 53. You can edit DNSMasq forwarders now; they take effect when BIND is stopped. DHCP is unaffected.' :
+      'DNSMasq provides DNS on LAN interfaces and DHCP. Choose a filtering provider or custom upstream below.')),
+  moduleState('bind').running
+    ? card('Make DNSMasq the active DNS resolver',
+        [btn('Switch DNS to DNSMasq', () => confirmDo('Switch DNS service',
+          'Stop BIND and activate DNSMasq DNS on the LAN? BIND zones stay on disk. DHCP settings and service are unchanged.',
+          () => apply('bind.service', {action:'stop'}, 'DNSMasq DNS activated'), 'Switch DNS'),
+          'btn-primary')],
+        h('div', {class:'card-body small'}, 'Stopping BIND releases port 53 for DNSMasq while preserving its authoritative zones.'))
+    : null,
+  dnsmasqPanel()
+].filter(Boolean);
+
 
 // ---------- optional modules
 const moduleBy = id => (S.modules || []).find(m => m.id === id);
@@ -617,8 +652,15 @@ const moduleServiceButtons = (opName, running, configured) => [
   configured && btn('Restart', () => apply(opName, { action: 'restart' }, 'Service restarted'))
 ].filter(Boolean);
 
-function moduleInstall(m) {
-  return apply('module.install', { id: m.id }, m.name + ' installed');
+async function moduleInstall(m) {
+  try {
+    await apply('module.install', { id: m.id }, m.name + ' installed and verified');
+    location.hash = '#module-' + m.id;
+  } catch (e) {
+    // Unlike dialog operations, module install buttons do not have a modal
+    // error field. Show the actual APK/native-service failure to the operator.
+    toast(m.name + ' installation failed: ' + e.message, 'danger');
+  }
 }
 function moduleRemove(m) {
   confirmDo('Remove ' + m.name,
@@ -684,6 +726,74 @@ function bindAddZone() {
   ], v => apply('bind.zoneadd', v, 'Zone created'));
 }
 
+// Structured DNS editor. BIND compiles the original zone into a canonical
+// record table; users never need to understand zone-file syntax.
+async function bindManageZoneRecords(zone) {
+  const data = (await op('bind.zonerecords', {zone})).result;
+  const supported = ['A','AAAA','CNAME','MX','NS','PTR','TXT'];
+  const filter = h('input', { class:'form-control form-control-sm mb-3', type:'search',
+    placeholder:'Filter records by host, type or value', 'aria-label':'Filter DNS records' });
+  const tbody = h('tbody', {});
+  const nameOf = r => {
+    const suffix = '.' + zone.toLowerCase() + '.';
+    const host = r.owner.toLowerCase();
+    return host === zone.toLowerCase() + '.' ? '@' :
+      host.endsWith(suffix) ? r.owner.slice(0, -suffix.length) : r.owner;
+  };
+  const edit = r => {
+    if (!supported.includes(r.type)) return;
+    const parts = r.type === 'MX' ? r.value.split(/\s+/) : [];
+    const value = r.type === 'MX' ? parts.slice(1).join(' ') :
+      (r.type === 'TXT' && /^".*"$/.test(r.value) ? r.value.slice(1,-1) : r.value);
+    form('Edit ' + r.type + ' record — ' + zone, [
+      { k:'name', label:'Host / record name', value:nameOf(r), help:'@ is the zone root; names are relative to this zone.' },
+      { k:'type', label:'Record type', type:'select', value:r.type, options:supported.map(t => [t,t]) },
+      { k:'value', label:'Target / address / text', value },
+      { k:'ttl', label:'TTL (seconds)', type:'number', value:r.ttl },
+      { k:'priority', label:'MX priority', type:'number', value:r.type === 'MX' ? (parts[0] || 10) : 10,
+        show:v => v.type === 'MX' }
+    ], v => apply('bind.recordchange', {
+      zone, expectedSha:data.sha, index:r.index, action:'replace', ...v
+    }, 'DNS record updated'), {
+      note:'Changes are checked by BIND and saved with an automatic SOA serial increment and a backup. The native zone file is normalized when editing an imported record.'
+    });
+  };
+  const remove = r => confirmDo('Delete ' + r.type + ' record',
+    'Delete ' + r.owner + ' ' + r.type + ' ' + r.value + '? BIND validates the remaining zone before applying.',
+    () => apply('bind.recordchange', {
+      zone, expectedSha:data.sha, index:r.index, action:'delete'
+    }, 'DNS record deleted'), 'Delete');
+  const renderRows = () => {
+    const term = filter.value.toLowerCase().trim();
+    const records = (data.records || []).filter(r =>
+      !term || (r.owner+' '+r.type+' '+r.value).toLowerCase().includes(term));
+    tbody.replaceChildren(...records.map(r => h('tr', {},
+      h('td', { class:'mono small' }, nameOf(r)),
+      h('td', {}, badge(r.type, r.type === 'SOA' ? 'text-bg-secondary' : 'text-bg-light border text-dark')),
+      h('td', { class:'mono small text-break' }, r.value),
+      h('td', { class:'mono small' }, r.ttl),
+      h('td', { class:'text-end text-nowrap' }, r.type !== 'SOA' ? [
+        supported.includes(r.type) ? btn('Edit', () => edit(r), 'btn-outline-primary') : null,
+        ' ', btn('Delete', () => remove(r), 'btn-outline-danger')
+      ] : badge('managed')))),
+      ...(records.length ? [] : [h('tr', {}, h('td', { colspan:5, class:'text-secondary' }, 'No matching DNS records'))]));
+  };
+  filter.addEventListener('input', renderRows);
+  renderRows();
+  dlgChrome('DNS records — ' + zone, 'Close');
+  $('#dlgBody').replaceChildren(
+    h('div', { class:'alert alert-info py-2 small' },
+      'All records (including imported ones) are shown. The SOA is managed automatically. Edits are version checked, validated and backed up.'),
+    h('div', { class:'d-flex gap-2 mb-3 flex-wrap' },
+      btn('Add record', () => bindAddRecord(zone), 'btn-primary'),
+      btn('Advanced: zone file', () => bindZoneFileEditor(zone), 'btn-outline-secondary')),
+    filter,
+    h('div', { class:'table-responsive' }, h('table', { class:'table table-sm table-hover align-middle' },
+      h('thead', {}, h('tr', {}, ['Name','Type','Value','TTL',''].map(x => h('th', {}, x)))), tbody)));
+  dlgApply = async () => {};
+  showDlg();
+}
+
 // Edit the full native zone file. Upload simply inserts local file text into the
 // editor; server-side named-checkzone validates before modifying live BIND.
 async function bindZoneFileEditor(zoneName = '') {
@@ -741,10 +851,10 @@ function bindPanel() {
         h('code', { class: 'flex-grow-1' }, r.text),
         btn('Delete', () => confirmDo('Delete DNS record', 'Delete this record from ' + z.name + '?',
           () => apply('bind.recorddelete', { zone: z.name, id: r.id }, 'Record deleted'), 'Delete'), 'btn-outline-danger')))
-      : h('span', { class: 'text-secondary small' }, 'Edit zone file to view or change all records')),
+      : h('span', { class: 'text-secondary small' }, 'Open records to view imported and managed entries')),
     h('td', { class: 'text-end text-nowrap' },
-      btn('Edit zone file', () => bindZoneFileEditor(z.name), 'btn-outline-primary'), ' ',
-      btn('Add record', () => bindAddRecord(z.name), 'btn-outline-secondary'), ' ',
+      btn('Manage records', () => bindManageZoneRecords(z.name), 'btn-primary'), ' ',
+      btn('Advanced source', () => bindZoneFileEditor(z.name), 'btn-outline-secondary'), ' ',
       btn('Delete zone', () => confirmDo('Delete zone', 'Delete zone ' + z.name + ' and its zone file?',
         () => apply('bind.zonedelete', { name: z.name }, 'Zone deleted'), 'Delete'), 'btn-outline-danger'))));
   return [
@@ -871,24 +981,33 @@ function ddnsPanel() {
 
 views.modules = () => {
   const mods = S.modules || [];
-  const catalog = h('div', { class: 'row g-3 mb-3' }, mods.map(m =>
-    h('div', { class: 'col-lg-4' }, card(m.name,
-      m.installed
-        ? [badge('installed','text-bg-success'), btn('Remove', () => moduleRemove(m), 'btn-outline-danger')]
-        : [badge('not installed'), btn('Install', () => moduleInstall(m), 'btn-primary')],
-      h('div', { class: 'card-body' },
-        h('p', { class: 'mb-2' }, m.description),
-        h('div', { class: 'small text-secondary' },
-          m.installed ? 'State below is read from the native service and its files.' : 'No package for this module is installed on the appliance.'))))));
   return [
-    h('div', { class: 'alert alert-light border' },
-      'Modules are optional. Installing one adds its Alpine packages and native service configuration only. LiteFWM does not keep a parallel module state database.'),
-    catalog,
-    ...bindPanel(),
-    ...openvpnPanel(),
-    ...ddnsPanel()
+    h('div', { class:'alert alert-light border small' },
+      'Modules are installed from the versioned appliance runtime’s Git-tracked manifest and bundled scripts. Installed status is verified against native executables and services; no separate state database is used.'),
+    h('div', { class:'row g-3' }, mods.map(m => h('div', { class:'col-lg-4' },
+      card(m.name, m.installed
+        ? [badge(m.core ? 'built in' : 'installed', 'text-bg-success'),
+           btn('Configure', () => location.hash = '#module-' + m.id, 'btn-primary'),
+           !m.core && btn('Remove', () => moduleRemove(m), 'btn-outline-danger')]
+        : [badge('not installed'), btn('Install', () => moduleInstall(m), 'btn-primary')],
+        h('div', { class:'card-body small' },
+          h('p', {}, m.description),
+          h('div', { class:'text-secondary mono' }, 'Packages: ' + (m.packages || []).join(', ')))))))
   ];
 };
+views['module-bind'] = () => [
+  h('div', { class:'mb-3' }, btn('Back to modules', () => location.hash = '#modules')),
+  ...(moduleBy('bind') && moduleBy('bind').installed ? bindPanel() :
+    [card('BIND DNS', null, h('div', { class:'card-body' }, 'BIND9 is not installed. Install it from Modules first.'))])
+];
+views['module-ddns'] = () => [
+  h('div', { class:'mb-3' }, btn('Back to modules', () => location.hash = '#modules')),
+  ...ddnsPanel()
+];
+views['module-openvpn'] = () => [
+  h('div', { class:'mb-3' }, btn('Back to modules', () => location.hash = '#modules')),
+  ...openvpnPanel()
+];
 
 // Firewall rules editor: ALL edits remain in browser memory until Apply.
 let fwDraft = null, fwBaseline = null, fwDirty = false;
@@ -1443,9 +1562,12 @@ function render() {
   let v = (location.hash || '#overview').slice(1);
   v = ALIAS[v] || v;
   if (!views[v]) v = 'overview';
-  document.querySelectorAll('#sideNav .nav-link, #mobileNavLinks .nav-link').forEach(a => a.classList.toggle('active', a.getAttribute('href') === '#' + v));
-  const link = document.querySelector(`#sideNav a[href="#${v}"]`);
-  $('#pageTitle').textContent = link ? link.textContent : '';
+  const nav = v.startsWith('module-') ? 'modules' : v;
+  document.querySelectorAll('#sideNav .nav-link, #mobileNavLinks .nav-link').forEach(a => a.classList.toggle('active', a.getAttribute('href') === '#' + nav));
+  const link = document.querySelector('#sideNav a[href="#' + nav + '"]');
+  const moduleTitles = {'module-bind':'BIND DNS', 'module-dnsmasq':'DNSMasq DNS',
+    'module-ddns':'Dynamic DNS', 'module-openvpn':'OpenVPN'};
+  $('#pageTitle').textContent = moduleTitles[v] || (link ? link.textContent : 'LiteFW');
   $('#view').replaceChildren(...[views[v]()].flat(Infinity));
 }
 const ALIAS = { forwards: 'firewall', rules: 'firewall' };

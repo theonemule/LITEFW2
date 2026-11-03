@@ -63,3 +63,34 @@ fi
 cmp /tmp/current /var/bind/litefwm/test.lan.zone
 named-checkconf -z /etc/bind/named.conf
 echo "PASS: edits have version detection, backup and invalid zone rollback"
+
+# Imported records without LiteFW comment markers must be visual/editable.
+records=$("$bind" zone-records test.lan)
+printf '%s' "$records" | jq -e '(.records|length)==4 and
+  any(.records[]; .owner=="web.test.lan." and .type=="A" and .value=="10.0.1.102") and
+  any(.records[]; .type=="SOA")' >/dev/null
+sha3=$(printf '%s' "$records" | jq -r .sha)
+idx=$(printf '%s' "$records" | jq -r '.records[]|select(.owner=="web.test.lan.")|.index')
+# A bad edit must preserve exact bytes and service configuration.
+cp /var/bind/litefwm/test.lan.zone /tmp/before-invalid
+if "$bind" record-change test.lan "$sha3" "$idx" replace web A invalid-ip 300 "" >/tmp/invalid-record 2>&1; then
+  echo "FAIL: bad address accepted"; exit 1
+fi
+cmp /tmp/before-invalid /var/bind/litefwm/test.lan.zone
+"$bind" record-change test.lan "$sha3" "$idx" replace web A 10.0.1.105 300 "" >/tmp/changed.json
+named-checkzone test.lan /var/bind/litefwm/test.lan.zone >/dev/null
+grep -Fq '10.0.1.105' /var/bind/litefwm/test.lan.zone
+sha4=$("$bind" zone-source test.lan | jq -r .sha)
+test "$sha4" != "$sha3"
+if "$bind" record-change test.lan "$sha3" "$idx" delete "" "" "" "" "" >/tmp/stale-record 2>&1; then
+  echo "FAIL: stale record edit accepted"; exit 1
+fi
+# Edit leaves an automatic backup of the imported zone.
+test "$(find /root/litefw-dns-backups -name 'test.lan.*.zone' | wc -l)" -ge 2
+records=$("$bind" zone-records test.lan)
+sha5=$(printf '%s' "$records" | jq -r .sha)
+idx=$(printf '%s' "$records" | jq -r '.records[]|select(.owner=="web.test.lan.")|.index')
+"$bind" record-change test.lan "$sha5" "$idx" delete "" "" "" "" "" >/tmp/deleted.json
+"$bind" zone-records test.lan | jq -e 'all(.records[]; .owner != "web.test.lan.")' >/dev/null
+named-checkconf -z /etc/bind/named.conf >/dev/null
+echo "PASS: imported records readable/editable/deletable; optimistic checksum, backup, SOA bump, BIND validation"

@@ -369,6 +369,106 @@ uninstall_module(){
   rm -rf /etc/bind "$ZONE_DIR"
 }
 
+# Enumerate all records through the BIND canonical parser, including imported
+# zones with no LiteFW record IDs and multiline/$ORIGIN content.
+zone_compile() {
+  _zc_zone=$1; _zc_out=$2
+  _zc_file=$(zone_file "$_zc_zone")
+  [ -r "$_zc_file" ] || die "Zone file not found"
+  named-compilezone -i none -f text -F text -o "$_zc_out" "$_zc_zone" "$_zc_file" >/dev/null ||
+    die "BIND could not parse the zone"
+}
+zone_records() {
+  require_root
+  zr_zone=$1; zr_file=$(zone_file "$zr_zone")
+  [ -r "$zr_file" ] || die "Zone file not found"
+  zr_sha=$(sha256sum "$zr_file" | awk '{print $1}')
+  zr_tmp=$(mktemp)
+  zone_compile "$zr_zone" "$zr_tmp"
+  awk '$2 ~ /^[0-9]+$/ && $3 == "IN" {
+    value=$5; for(i=6;i<=NF;i++) value=value " " $i
+    printf "%d\t%s\t%s\t%s\t%s\n", ++n, $1, $2, $4, value
+  }' "$zr_tmp" |
+    jq -R -s --arg sha "$zr_sha" '{
+      sha:$sha,
+      records:(split("\n") | map(select(length>0) | split("\t") |
+        {index:(.[0]|tonumber),owner:.[1],ttl:(.[2]|tonumber),type:.[3],value:.[4]}))
+    }'
+  rm -f "$zr_tmp"
+}
+# Modify a selected RR in canonical form. Source change is guarded by checksum;
+# zone_write validates, backs up, reloads and rolls back on failure.
+zone_record_change() {
+  require_root
+  zrc_zone=$1; zrc_sha=$2; zrc_index=$3; zrc_action=$4
+  zrc_name=$5; zrc_type=$(printf '%s' "$6" | tr '[:lower:]' '[:upper:]')
+  zrc_value=$7; zrc_ttl=$8; zrc_priority=${9:-}
+  case "$zrc_index" in ''|*[!0-9]*|0) die "Invalid record index";; esac
+  case "$zrc_action" in delete|replace) :;; *) die "Invalid record action";; esac
+  zrc_file=$(zone_file "$zrc_zone")
+  [ -r "$zrc_file" ] || die "Zone does not exist"
+  zrc_now=$(sha256sum "$zrc_file" | awk '{print $1}')
+  [ -n "$zrc_sha" ] && [ "$zrc_sha" = "$zrc_now" ] ||
+    die "Zone has changed. Reload records before editing."
+  zrc_replacement=''
+  if [ "$zrc_action" = replace ]; then
+    valid_owner "$zrc_name" || die "Invalid record owner"
+    case "$zrc_ttl" in ''|*[!0-9]*) die "TTL must be numeric";; esac
+    [ "$zrc_ttl" -le 2147483647 ] || die "TTL is too large"
+    case "$zrc_type" in
+      A) valid_ipv4 "$zrc_value" || die "Invalid A address"; zrc_rdata=$zrc_value;;
+      AAAA) printf '%s' "$zrc_value" | grep -Eq '^[0-9A-Fa-f:]+$' || die "Invalid IPv6 address"; zrc_rdata=$zrc_value;;
+      CNAME|NS|PTR) valid_dns_name "${zrc_value%.}" || die "Invalid hostname"; zrc_rdata=$(fqdn "$zrc_value");;
+      MX)
+        case "$zrc_priority" in ''|*[!0-9]*) die "MX priority is required";; esac
+        [ "$zrc_priority" -le 65535 ] || die "MX priority is too large"
+        valid_dns_name "${zrc_value%.}" || die "Invalid MX target"
+        zrc_rdata="$zrc_priority $(fqdn "$zrc_value")";;
+      TXT)
+        zrc_text=$(printf '%s' "$zrc_value" | tr '\r\n' '  ' | sed 's/\\/\\\\/g;s/"/\\"/g')
+        zrc_rdata="\"$zrc_text\"";;
+      *) die "Unsupported record type for visual editing";;
+    esac
+    if [ "$zrc_name" = @ ]; then zrc_owner="$zrc_zone."
+    else zrc_owner="$zrc_name.$zrc_zone."; fi
+    zrc_replacement="$zrc_owner $zrc_ttl IN $zrc_type $zrc_rdata"
+  fi
+  zrc_compiled=$(mktemp); zrc_changed=$(mktemp); zrc_final=$(mktemp)
+  zone_compile "$zrc_zone" "$zrc_compiled"
+  if ! awk -v target="$zrc_index" -v action="$zrc_action" -v replacement="$zrc_replacement" '
+    $2 ~ /^[0-9]+$/ && $3=="IN" {
+      ++n
+      if (n==target) {
+        if ($4=="SOA") { forbidden=1; next }
+        found=1
+        if (action=="replace") print replacement
+        next
+      }
+    }
+    {print}
+    END{ if (!found || forbidden) exit 42 }
+  ' "$zrc_compiled" >"$zrc_changed"; then
+    rm -f "$zrc_compiled" "$zrc_changed" "$zrc_final"
+    die "Record not found or SOA is protected; reload records"
+  fi
+  zrc_time=$(date +%s)
+  if ! awk -v now="$zrc_time" '
+    $3=="IN" && $4=="SOA" && !changed {
+      serial=$7+1
+      if(now>serial) serial=now
+      $7=sprintf("%.0f",serial)
+      changed=1
+    }
+    {print}
+    END{if(!changed) exit 1}
+  ' "$zrc_changed" >"$zrc_final"; then
+    rm -f "$zrc_compiled" "$zrc_changed" "$zrc_final"
+    die "Could not update the SOA serial"
+  fi
+  zone_write "$zrc_zone" "$zrc_sha" false <"$zrc_final"
+  rm -f "$zrc_compiled" "$zrc_changed" "$zrc_final"
+}
+
 # Full zone-file editor. Validated and backed up before any live replacement.
 # The incoming zone file is sent through stdin (not shell parameters).
 zone_source() {
@@ -452,6 +552,8 @@ case "${1:-}" in
   zone-add) zone_add "${2:?ZONE}" "${3:?NS}" "${4:-}" "${5:?ADMIN}" "${6:-3600}" "${7:-3600}" "${8:-600}" "${9:-1209600}" "${10:-300}";;
   zone-delete) zone_delete "${2:?ZONE}";;
   zone-source) zone_source "${2:?ZONE}";;
+  zone-records) zone_records "${2:?ZONE}";;
+  record-change) zone_record_change "${2:?ZONE}" "${3:?SHA}" "${4:?INDEX}" "${5:?ACTION}" "${6:-}" "${7:-}" "${8:-}" "${9:-300}" "${10:-}";;
   zone-write) zone_write "${2:?ZONE}" "${3:-}" "${4:-false}";;
   record-add) record_add "${2:?ZONE}" "${3:?NAME}" "${4:?TYPE}" "${5:?VALUE}" "${6:-300}" "${7:-}";;
   record-delete) record_delete "${2:?ZONE}" "${3:?ID}";;

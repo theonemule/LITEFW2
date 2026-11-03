@@ -28,9 +28,9 @@ docker run --rm -v "$PWD":/src:ro alpine:3.24 sh -euc '
     echo "FAIL: invalid archive accepted"; exit 1
   fi
   test "$(cat /usr/lib/litefwm/VERSION)" = 2.2.11
-  # Real 2.2.11 -> 2.2.12 application upgrade.
+  # Real 2.2.11 -> current version application upgrade.
   sh /src/bin/litefw-upgrade /tmp/upgrade.tar.gz
-  test "$(cat /usr/lib/litefwm/VERSION)" = 2.2.12
+  test "$(cat /usr/lib/litefwm/VERSION)" = "$(cat /src/VERSION)"
   test -x /usr/sbin/litefw-upgrade
   test -s /usr/share/litefwm/www/dns-presets.js
   test -s /etc/dnsmasq.hosts.d/bc-24-11-98-a7-a4

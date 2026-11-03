@@ -4,7 +4,7 @@ const vm = require('node:vm');
 const fs = require('node:fs');
 const presetsSource = fs.readFileSync('www/dns-presets.js', 'utf8');
 const app = fs.readFileSync('www/app.js', 'utf8');
-const helper = app.slice(app.indexOf('function dnsResolverMatch('), app.indexOf('// ---------- DNS\nviews.dns ='));
+const helper = app.slice(app.indexOf('function dnsResolverMatch('), app.indexOf('// ---------- DNS\nfunction dnsmasqPanel()'));
 assert(helper.length > 1500);
 const ctx = vm.createContext({});
 vm.runInContext(presetsSource + '\n' + helper, ctx);

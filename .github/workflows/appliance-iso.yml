@@ -41,6 +41,8 @@ jobs:
           ./tests/dhcp-per-interface-options.sh
           ./tests/bind-zone-management.sh
           ./tests/dns-provider-presets.sh
+          ./tests/module-contract-test.sh
+          ./tests/module-install-verification.sh
           ./tests/firewall-staged-apply.sh
           ./tests/firewall-recovery.sh
           while IFS= read -r -d '' script; do
@@ -120,7 +122,28 @@ jobs:
             test "$SOURCE_NAME" = "$tag" || { echo "Tag $SOURCE_NAME does not match VERSION ($tag)" >&2; exit 1; }
           fi
           if gh release view "$tag" >/dev/null 2>&1; then
-            echo "Release $tag already exists; preserving its immutable assets."
+            # The fast runtime workflow can publish before this slower ISO build.
+            # The existing runtime asset MUST be downloaded, because rebuilding
+            # a tarball can yield different gzip bytes and invalidate its SHA.
+            bundle="litefw2-$(cat VERSION)-runtime.tar.gz"
+            if gh release view "$tag" --json assets --jq '.assets[].name' | grep -Fxq "$bundle"; then
+              mkdir -p "$RUNNER_TEMP/litefw-runtime-release"
+              gh release download "$tag" --pattern "$bundle" --dir "$RUNNER_TEMP/litefw-runtime-release"
+              cp "$RUNNER_TEMP/litefw-runtime-release/$bundle" "dist/$bundle"
+            fi
+            (cd dist && sha256sum *.iso *.tar.gz > SHA256SUMS)
+            if gh release view "$tag" --json assets --jq '.assets[].name' |
+               grep -Fxq "litefw2-$(cat VERSION)-alpine3.24-x86_64.iso"; then
+              echo "Release $tag already includes ISO; leaving its assets unchanged."
+              exit 0
+            fi
+            gh release upload "$tag" dist/*.iso
+            if ! gh release view "$tag" --json assets --jq '.assets[].name' |
+               grep -Fxq "$bundle"; then
+              gh release upload "$tag" "dist/$bundle"
+            fi
+            gh release upload "$tag" dist/SHA256SUMS --clobber
+            echo "Appended ISO and refreshed checksums for $tag."
             exit 0
           fi
           if [[ "$SOURCE_REF" == refs/heads/main ]]; then

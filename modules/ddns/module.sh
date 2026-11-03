@@ -12,7 +12,7 @@ COMPAT="$SELF/../../lib/module-compat.sh"
 CONF=/etc/inadyn/inadyn.conf
 
 meta(){ jq -n '{id:"ddns",name:"Dynamic DNS",description:"Lightweight inadyn client for common DDNS providers and custom update endpoints.",category:"network-service"}'; }
-installed(){ command -v inadyn >/dev/null 2>&1; }
+installed(){ command -v inadyn >/dev/null 2>&1 && [ -f /etc/init.d/inadyn ]; }
 running(){ command -v rc-service >/dev/null 2>&1 && rc-service inadyn status >/dev/null 2>&1; }
 field(){ sed -n "s/^# litefwm:$1=//p" "$CONF" 2>/dev/null | head -1; }
 valid_provider(){ printf '%s' "$1" | grep -Eq '^[A-Za-z0-9_.@-]+$'; }
@@ -116,7 +116,14 @@ force_update(){
 }
 install_module(){
   require_root
-  apk add --no-cache inadyn inadyn-openrc >/dev/null
+  _log=$(mktemp)
+  if ! apk add --no-cache inadyn inadyn-openrc >"$_log" 2>&1; then
+    _detail=$(tail -n 8 "$_log")
+    rm -f "$_log"
+    die "Dynamic DNS installation failed. Check Alpine community repository and offline/online package availability: $_detail"
+  fi
+  rm -f "$_log"
+  installed || die "Dynamic DNS packages installed but the inadyn executable or OpenRC service is missing"
   mkdir -p /etc/inadyn
 }
 uninstall_module(){

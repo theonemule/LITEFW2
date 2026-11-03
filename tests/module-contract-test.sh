@@ -2,11 +2,18 @@
 set -eu
 cd "$(dirname "$0")/.."
 
-for m in bind openvpn ddns; do
+for m in bind openvpn ddns dnsmasq; do
   test -x "modules/$m/module.sh"
   test -x "modules/$m/install.sh"
   test -x "modules/$m/uninstall.sh"
 done
+test -r modules/manifest.json
+jq -e '.schemaVersion==1 and (.modules|length)==4 and
+  (any(.modules[]; .id=="dnsmasq" and .core==true)) and
+  (any(.modules[]; .id=="ddns" and (.packages|index("inadyn-openrc")!=null)))' modules/manifest.json >/dev/null
+grep -q 'module_manifest_entry' lib/modules.sh
+grep -q '"$_mf" installed' lib/modules.sh
+grep -q '"$_installer"' lib/modules.sh
 test -r lib/modules.sh
 test -r lib/module-compat.sh
 
@@ -50,6 +57,13 @@ grep -q 'credentialConfigured' modules/ddns/module.sh
 ! grep -q 'password:$' modules/ddns/module.sh
 grep -q 'chmod 0640 "$CONF"' modules/ddns/module.sh
 grep -q 'inadyn --check-config' modules/ddns/module.sh
+grep -Fq '[ -f /etc/init.d/inadyn ]' modules/ddns/module.sh
+grep -q 'Dynamic DNS installation failed' modules/ddns/module.sh
+grep -q 'Installer exited but' lib/modules.sh
+grep -q 'DNSMasq provides' modules/dnsmasq/module.sh
+grep -q 'zone-records)' modules/bind/module.sh
+grep -q 'op_bind_zonerecords()' lib/modules.sh
+grep -q 'op_bind_recordchange()' lib/modules.sh
 
 # Module firewall openings are derived into their own chain on every sync.
 grep -q 'LFW_MOD' lib/fw.sh
@@ -64,5 +78,9 @@ grep -q 'function bindPanel()' www/app.js
 grep -q 'function openvpnPanel()' www/app.js
 grep -q 'function ddnsPanel()' www/app.js
 grep -q 'openvpnGetProfile' www/app.js
+for module in bind ddns openvpn dnsmasq; do
+  grep -Fq "views['module-$module']" www/app.js
+done
+grep -q 'function bindManageZoneRecords' www/app.js
 
 echo "module contract ok"

@@ -8,9 +8,18 @@ else
 fi
 
 module_id_ok() { printf '%s' "$1" | grep -Eq '^[a-z0-9][a-z0-9_-]{0,31}$'; }
+module_manifest_entry() {
+  module_id_ok "$1" || die "invalid module id"
+  [ -r "$LFW_MODULE_DIR/manifest.json" ] || die "module catalog is missing; reinstall the LiteFW runtime"
+  jq -ec --arg id "$1" '.modules[] | select(.id == $id)' "$LFW_MODULE_DIR/manifest.json" ||
+    die "unknown module: $1"
+}
 module_script() {
   module_id_ok "$1" || die "invalid module id"
-  _mf="$LFW_MODULE_DIR/$1/module.sh"
+  _entry=$(module_manifest_entry "$1")
+  _rel=$(printf '%s' "$_entry" | jq -r '.scripts.controller // empty')
+  [ "$_rel" = "$1/module.sh" ] || die "invalid controller path for module $1"
+  _mf="$LFW_MODULE_DIR/$_rel"
   [ -x "$_mf" ] || die "unknown module: $1"
   printf '%s
 ' "$_mf"
@@ -27,6 +36,8 @@ module_json() {
   _mid=$1
   _mf=$(module_script "$_mid")
   _meta=$("$_mf" meta 2>/dev/null) || die "could not read module metadata: $_mid"
+  _manifest=$(module_manifest_entry "$_mid")
+  _meta=$(jq -n --argjson m "$_meta" --argjson entry "$_manifest" '$m + {core:$entry.core,packages:$entry.packages,version:$entry.version}')
   if "$_mf" installed >/dev/null 2>&1; then
     _ins=true
     _state=$("$_mf" snapshot 2>/dev/null || echo '{}')
@@ -46,6 +57,9 @@ modules_catalog_json() {
     for _mf in "$LFW_MODULE_DIR"/*/module.sh; do
       [ -x "$_mf" ] || continue
       _meta=$("$_mf" meta 2>/dev/null) || continue
+      _id=$(printf '%s' "$_meta" | jq -r '.id')
+      _manifest=$(module_manifest_entry "$_id")
+      _meta=$(jq -n --argjson m "$_meta" --argjson entry "$_manifest" '$m + {core:$entry.core,packages:$entry.packages,version:$entry.version}')
       if "$_mf" installed >/dev/null 2>&1; then _ins=true; else _ins=false; fi
       jq -n --argjson m "$_meta" --argjson i "$_ins" '$m + {installed:$i,state:{}}'
     done
@@ -69,7 +83,7 @@ module_firewall_rules() {
     "$_mf" firewall 2>/dev/null || true
   done
 }
-module_sync_firewall() { command -v fw_sync >/dev/null 2>&1 && fw_sync; }
+module_sync_firewall() { if command -v fw_sync >/dev/null 2>&1; then fw_sync; fi; }
 
 op_module_install() {
   _id=$(jget id); _mf=$(module_script "$_id")
@@ -77,7 +91,20 @@ op_module_install() {
     printf '{"alreadyInstalled":true}' >"$RESULT"
     return
   fi
-  "$_mf" install
+  _entry=$(module_manifest_entry "$_id")
+  [ "$(printf '%s' "$_entry" | jq -r '.core')" != true ] ||
+    die "$_id is bundled with LiteFW and cannot be installed separately"
+  _installer_rel=$(printf '%s' "$_entry" | jq -r '.scripts.install // empty')
+  [ "$_installer_rel" = "$_id/install.sh" ] || die "invalid installer path for $_id"
+  _installer="$LFW_MODULE_DIR/$_installer_rel"
+  [ -x "$_installer" ] || die "Module installer missing: $_id"
+  "$_installer"
+  for _pkg in $(printf '%s' "$_entry" | jq -r '.packages[]'); do
+    apk info -e "$_pkg" >/dev/null 2>&1 ||
+      die "Installer returned success but required package $_pkg is not installed"
+  done
+  "$_mf" installed >/dev/null 2>&1 ||
+    die "Installer exited but $_id is not installed (check Alpine packages and OpenRC service)"
   module_sync_firewall
   log_op "module.install $_id"
   printf '{"installed":true}' >"$RESULT"
@@ -88,7 +115,17 @@ op_module_remove() {
     printf '{"alreadyRemoved":true}' >"$RESULT"
     return
   fi
-  "$_mf" uninstall
+  _entry=$(module_manifest_entry "$_id")
+  [ "$(printf '%s' "$_entry" | jq -r '.core')" != true ] ||
+    die "$_id is a core LiteFW dependency and cannot be removed"
+  _uninstaller_rel=$(printf '%s' "$_entry" | jq -r '.scripts.remove // empty')
+  [ "$_uninstaller_rel" = "$_id/uninstall.sh" ] || die "invalid removal path for $_id"
+  _uninstaller="$LFW_MODULE_DIR/$_uninstaller_rel"
+  [ -x "$_uninstaller" ] || die "Module uninstaller missing: $_id"
+  "$_uninstaller"
+  if "$_mf" installed >/dev/null 2>&1; then
+    die "Module removal returned without removing $_id"
+  fi
   module_sync_firewall
   log_op "module.remove $_id"
   printf '{"removed":true}' >"$RESULT"
@@ -133,6 +170,16 @@ op_bind_zonewrite() {
   rm -f "$_src"
   printf '%s' "$_out" >"$RESULT"
   log_op "bind.zonewrite $_z"
+}
+op_bind_zonerecords() {
+  _out=$(module_call bind zone-records "$(jget zone)")
+  printf '%s' "$_out" >"$RESULT"
+}
+op_bind_recordchange() {
+  _out=$(module_call bind record-change "$(jget zone)" "$(jget expectedSha)" "$(jget index)" "$(jget action)" \
+    "$(jget name)" "$(jget type)" "$(jget value)" "$(jget ttl)" "$(jget priority)")
+  printf '%s' "$_out" >"$RESULT"
+  log_op "bind.recordchange $(jget zone)"
 }
 op_bind_recordadd() {
   _out=$(module_call bind record-add "$(jget zone)" "$(jget name)" "$(jget type)" "$(jget value)" "$(jget ttl)" "$(jget priority)")
