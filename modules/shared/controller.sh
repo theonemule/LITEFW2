@@ -28,7 +28,13 @@ modinfo(){
 modinfo
 installed(){
  if [ "$MOD" = multiwan ]; then [ -x /usr/local/sbin/litefw-multiwan-check ]; return; fi
- command -v "$BIN" >/dev/null 2>&1 || return 1
+ # lfwctl intentionally restricts PATH; verified vendor binaries live in
+ # /usr/local/bin and must be found explicitly without broadening the PATH.
+ if [ "$MOD" = cloudflared ] || [ "$MOD" = crowdsec ] || [ "$MOD" = captive ]; then
+   [ -x "/usr/local/bin/$BIN" ] || return 1
+ else
+   command -v "$BIN" >/dev/null 2>&1 || return 1
+ fi
  case "$MOD" in suricata|wireguard) command -v python3 >/dev/null 2>&1 || return 1;; esac
  if [ -n "$SERVICE" ]; then
    [ -e "/etc/init.d/$SERVICE" ] || return 1

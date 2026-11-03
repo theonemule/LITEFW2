@@ -193,3 +193,14 @@ BGP settings and peers are edited through dedicated controls, not raw JSON.
 
 These UX paths are covered by headless Chrome and additional disposable
 Alpine integration tests: `tests/modules-ux-integration.sh`.
+
+### 2.2.22 live appliance installation correction
+
+The LiteFW control process intentionally uses a restricted PATH that excludes
+`/usr/local/bin`. Optional Cloudflare Tunnel, CrowdSec and openNDS binaries
+are verified and installed there; module detection now checks those absolute
+locations without broadening the root command search path.
+`tests/vendor-install-alpine.sh` explicitly runs `installed` checks under the
+production restricted PATH before and after removal. This defect was caught
+by real appliance installation on 10.0.1.199, not by the initial container
+smoke tests.

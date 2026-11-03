@@ -10,7 +10,7 @@ docker run --rm --network bridge -v "$PWD":/workspace:ro alpine:3.24 sh -ec '
     echo "CASE vendor/$m full-install"
     ./modules/$m/module.sh install >/tmp/litefw-module.log 2>&1 ||
       { tail -35 /tmp/litefw-module.log >&2; exit 1; }
-    ./modules/$m/module.sh installed ||
+    PATH=/usr/sbin:/usr/bin:/sbin:/bin ./modules/$m/module.sh installed ||
       { echo "$m was not detected as installed" >&2; exit 1; }
     ./modules/$m/module.sh meta | jq -e --arg id "$m" ".id == \$id" >/dev/null
     echo "PASS $m Alpine install and native service verification"
@@ -18,7 +18,7 @@ docker run --rm --network bridge -v "$PWD":/workspace:ro alpine:3.24 sh -ec '
   for m in cloudflared crowdsec captive; do
     ./modules/$m/module.sh uninstall >/tmp/litefw-remove.log 2>&1 ||
       { tail -25 /tmp/litefw-remove.log >&2; exit 1; }
-    if ./modules/$m/module.sh installed >/dev/null 2>&1; then
+    if PATH=/usr/sbin:/usr/bin:/sbin:/bin ./modules/$m/module.sh installed >/dev/null 2>&1; then
       echo "$m still detected as installed after remove" >&2; exit 1
     fi
     echo "PASS $m uninstalled without modifying Alpine repositories"
