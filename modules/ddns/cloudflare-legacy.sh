@@ -10,9 +10,11 @@ action=${1:-check}
 case "$action" in check|sync|force|status) :;; *) echo 'usage: cloudflare-legacy.sh [check|sync|force|status]' >&2; exit 2;; esac
 if [ "$action" = status ]; then
   if [ -r "$CFG" ]; then
-    jq -n --argjson hosts "$(jq '.hostnames' "$CFG")" --arg zone "$(jq -r '.zone' "$CFG")" \
+    jq -n --slurpfile profile "$CFG" \
       --argjson last "$(cat "$STATE" 2>/dev/null || echo '{}')" \
-      '{configured:true,zone:$zone,hostnames:$hosts,last:$last}'
+      '($profile[0]) as $p | {configured:true,zone:$p.zone,
+        email:$p.email,hostnames:$p.hostnames,enabled:($p.enabled // true),
+        scheduleMinutes:($p.scheduleMinutes // 15),credentialConfigured:true,last:$last}'
   else
     printf '%s\n' '{"configured":false,"hostnames":[]}'
   fi

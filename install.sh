@@ -77,12 +77,10 @@ install -m 0644 "$BASE"/lib/*.sh "$BASE"/lib/*.jq "$BASE"/lib/*.awk /usr/lib/lit
 install -m 0755 "$BASE/lib/udhcpc.script" /usr/lib/litefwm/udhcpc.script
 rm -rf /usr/lib/litefwm/modules && cp -R "$BASE/modules" /usr/lib/litefwm/modules
 find /usr/lib/litefwm/modules -type f -name '*.sh' -exec chmod 0755 {} +
-# Restore scheduled Cloudflare updates only for an existing protected profile.
+# Restore the exact selected Cloudflare update schedule, without resetting it
+# to 15 minutes and without disturbing unrelated root cron jobs.
 if [ -s /etc/inadyn/litefw-cloudflare-legacy.json ]; then
-  install -d -m 0755 /etc/periodic/15min
-  install -m 0755 "$BASE/modules/ddns/cloudflare-cron" /etc/periodic/15min/litefw-cloudflare
-  rc-update add crond default >/dev/null 2>&1 || true
-  rc-service crond start >/dev/null 2>&1 || true
+  "$BASE/modules/ddns/cloudflare-schedule.sh" || echo "Cloudflare cron schedule could not be updated" >&2
 fi
 install -m 0644 "$BASE/VERSION" /usr/lib/litefwm/VERSION
 install -m 0755 "$BASE/cgi/api.cgi" /usr/lib/litefwm/cgi/api.cgi

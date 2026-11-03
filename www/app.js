@@ -961,6 +961,30 @@ function ddnsSettingsForm() {
     custom: { checkServer: v.checkServer || '', checkPath: v.checkPath || '', updateServer: v.updateServer || '', updatePath: v.updatePath || '', ssl: v.ssl !== false }
   }, 'Dynamic DNS applied'));
 }
+function cloudflareSettingsForm() {
+  const x = moduleState('ddns').cloudflare || {};
+  form('Configure Cloudflare Dynamic DNS', [
+    { k:'zone', label:'Cloudflare DNS zone', value:x.zone || '', placeholder:'example.net',
+      help:'Use an existing Cloudflare zone. This does not create DNS zones.' },
+    { k:'hostnames', label:'A records to update', type:'list', value:x.hostnames || [],
+      placeholder:'cloud.example.net, home.example.net',
+      help:'Only existing A records in this zone are accepted; CNAMEs and other record types are protected.' },
+    { k:'email', label:'Cloudflare account email', value:x.email || '', placeholder:'admin@example.net' },
+    { k:'apiKey', label:'Cloudflare Global API key', type:'password', value:'',
+      help:x.credentialConfigured ? 'Leave empty to keep the existing credential.' :
+        'Required on first setup. Prefer a scoped API token for new configurations.' },
+    { k:'scheduleMinutes', label:'Check interval', type:'select',
+      value:String(x.scheduleMinutes || 15),
+      options:[['5','Every 5 minutes'],['15','Every 15 minutes'],['30','Every 30 minutes'],['60','Hourly']] },
+    { k:'enabled', label:'Enable scheduled Cloudflare updates', type:'check', value:x.enabled !== false }
+  ], v => apply('ddns.cfconfigure', {
+    zone:v.zone.toLowerCase(), hostnames:v.hostnames.map(s => s.toLowerCase()),
+    email:v.email, apiKey:v.apiKey, scheduleMinutes:Number(v.scheduleMinutes), enabled:v.enabled
+  }, 'Cloudflare settings validated and saved'), {
+    note:'New settings are checked against Cloudflare before being saved. Credentials remain on the firewall and are not returned to the browser. Last check and detected public IPv4 are read-only status fields.',
+    applyText:'Validate and save'
+  });
+}
 function ddnsPanel() {
   const m = moduleBy('ddns'); if (!m || !m.installed) return [];
   const x = moduleState('ddns');
@@ -978,9 +1002,10 @@ function ddnsPanel() {
       h('dt', { class: 'col-sm-3' }, 'Hostnames'), h('dd', { class: 'col-sm-9 mono' }, (x.hostnames || []).join(', ') || '—'),
       h('dt', { class: 'col-sm-3' }, 'Source'), h('dd', { class: 'col-sm-9' }, x.interface || 'automatic'))
     : (x.nativeConfig ? 'Installed but not configured in LiteFW. An existing native inadyn file will be backed up when you configure the module.' : 'Installed but not configured. Choose Configure to set a provider, hostnames and credentials.'))),
-    ...(x.cloudflare && x.cloudflare.configured ? [
+    ...(x.cloudflare ? [
       card('Cloudflare DNS (pfSense migration)', [
-        btn('Check records', async () => {
+        btn('Configure', cloudflareSettingsForm, 'btn-primary'),
+        ...(x.cloudflare.configured ? [btn('Check records', async () => {
           try {
             const j = await op('ddns.cfcheck', {});
             toast((j.result && j.result.output) || 'Cloudflare records checked', 'success');
@@ -989,10 +1014,12 @@ function ddnsPanel() {
         }, 'btn-outline-primary'),
         btn('Force refresh', () => confirmDo('Refresh Cloudflare DNS',
           'Update managed Cloudflare A records using the current public IPv4? CNAME aliases and other DNS records will be preserved.',
-          () => apply('ddns.cfupdate', {}, 'Cloudflare DNS updated'), 'Refresh'), 'btn-primary')
+          () => apply('ddns.cfupdate', {}, 'Cloudflare DNS updated'), 'Refresh'), 'btn-outline-primary')] : [])
       ], h('div', {class:'card-body small'},
-        h('p', {class:'mb-2'}, 'Secure HTTPS updates for the migrated A records. The existing credential is protected in a root-only file and never exposed to the browser. Consider replacing the legacy global key with a scoped Cloudflare API token.'),
-        h('dl', {class:'row mb-0'},
+        h('p', {class:'mb-2'}, x.cloudflare.configured ?
+          'Edit the zone, existing A records, account, credential, and update interval through Configure. Cloudflare status and public IPv4 are detected automatically.' :
+          'No Cloudflare profile is configured. Choose Configure to add existing Cloudflare A records.'),
+        x.cloudflare.configured ? h('dl', {class:'row mb-0'},
           h('dt', {class:'col-sm-3'}, 'Zone'),
           h('dd', {class:'col-sm-9 mono'}, x.cloudflare.zone || ''),
           h('dt', {class:'col-sm-3'}, 'Records'),
@@ -1002,7 +1029,10 @@ function ddnsPanel() {
           h('dt', {class:'col-sm-3'}, 'Public IPv4'),
           h('dd', {class:'col-sm-9 mono'}, (x.cloudflare.last || {}).publicIPv4 || 'Unknown'),
           h('dt', {class:'col-sm-3'}, 'Schedule'),
-          h('dd', {class:'col-sm-9'}, 'Every 15 minutes via Alpine cron'))))
+          h('dd', {class:'col-sm-9'}, x.cloudflare.enabled === false ? 'Disabled' :
+            'Every ' + (x.cloudflare.scheduleMinutes || 15) + ' minutes via Alpine cron'),
+          h('dt', {class:'col-sm-3'}, 'Credential'),
+          h('dd', {class:'col-sm-9'}, x.cloudflare.credentialConfigured ? 'Configured (protected)' : 'Not configured')) : null))
     ] : [])
   ];
 }

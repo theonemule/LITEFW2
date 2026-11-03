@@ -237,6 +237,11 @@ op_ddns_configure() {
   module_call ddns configure "$(jget provider)" "$(module_csv hostnames)" "$(jget username)" "$(jget password)"     "$(jget period)" "$(jget interface)" "$_check" "$_checkpath" "$_update" "$_updatepath" "$_ssl"
   log_op "ddns.configure $(jget provider)"
 }
+op_ddns_cfconfigure() {
+  # Pass a root-only request file path; never expose provider credentials in argv.
+  module_call ddns cloudflare-configure "$BODY" >"$RESULT"
+  log_op "ddns.cfconfigure"
+}
 op_ddns_cfcheck() {
   _out=$(module_call ddns cloudflare-check)
   jq -n --arg output "$_out" '{output:$output}' >"$RESULT"

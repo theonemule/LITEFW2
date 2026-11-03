@@ -65,3 +65,16 @@ public IPv4 through HTTPS instead of treating an RFC1918 WAN as public.
 For long-term Cloudflare use, migrate the legacy Global API Key to a zone-scoped
 API token and use the Inadyn Cloudflare bearer-token provider. pfSense source
 DDNS entries may be kept disabled for rollback to avoid competing updates.
+
+
+### Editing Cloudflare DNS from LiteFW
+
+On Modules > Dynamic DNS, Cloudflare **Configure** allows editing the zone,
+list of **existing A records**, account email, credential, enabled state, and
+cron interval (5/15/30/60 minutes). Blank credential input preserves the
+existing Global API Key. Before saving, the appliance validates the proposed
+settings against Cloudflare with **read-only** API calls; CNAMEs, unsupported
+record types, and unknown hosts are rejected. Changes are backed up and saved
+with root-only permissions. Cron scheduling is idempotent, preserves unrelated
+root jobs, removes the old fixed periodic job, and survives runtime upgrades.
+The detected public IPv4 and last successful check remain read-only status.

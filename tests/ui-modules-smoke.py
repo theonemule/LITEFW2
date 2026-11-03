@@ -20,7 +20,7 @@ BIND = {"running": True, "configured": True, "zones": [
     "forwardMode": "only", "dnssecValidation": "auto", "maxCacheTtl": 7200}
 STATES = {
     "bind": BIND, "dnsmasq": {"running": True, "configured": True, "dnsEnabled": False},
-    "ddns": {"running": True, "configured": True, "provider":"default@opendns.com","hostnames":["mynetwork"],"period":300,"interface":"", "username":"opendns-migrated","credentialConfigured":True, "custom":{}, "cloudflare":{"configured":True, "zone":"blaize.net", "hostnames":["cloud.blaize.net","home.blaize.net"],"last":{"checkedAt":"2026-11-03T15:22:43Z","publicIPv4":"108.255.76.134"}}},
+    "ddns": {"running": True, "configured": True, "provider":"default@opendns.com","hostnames":["mynetwork"],"period":300,"interface":"", "username":"opendns-migrated","credentialConfigured":True, "custom":{}, "cloudflare":{"configured":True, "enabled":True, "scheduleMinutes":15, "credentialConfigured":True, "email":"admin@example.net", "zone":"blaize.net", "hostnames":["cloud.blaize.net","home.blaize.net"],"last":{"checkedAt":"2026-11-03T15:22:43Z","publicIPv4":"108.255.76.134"}}},
     "openvpn": {"running": False, "configured": False, "clients": []},
 }
 SYSTEM = {"hostname": "testfw", "version": "2.2.13-dev", "resolvers": ["1.1.1.1"],
@@ -38,6 +38,36 @@ class MockHandler(http.server.SimpleHTTPRequestHandler):
         pass
 
     def do_GET(self):
+        if self.path.startswith("/probe-cloudflare"):
+            html = (ROOT / "index.html").read_text()
+            probe = """<script>
+                setTimeout(() => {
+                  const card = [...document.querySelectorAll('#view .card')]
+                    .find(c => c.textContent.includes('Cloudflare DNS (pfSense migration)'));
+                  const configure = card && [...card.querySelectorAll('button')]
+                    .find(b => b.textContent.trim() === 'Configure');
+                  if (configure) configure.click();
+                  const ids = [...document.querySelectorAll('#dlgBody input, #dlgBody select')]
+                    .map(el => el.id);
+                  const probe = {title:document.getElementById('dlgTitle').textContent,
+                    inputs:ids, zone:document.getElementById('f_zone')?.value,
+                    email:document.getElementById('f_email')?.value,
+                    apiKeyType:document.getElementById('f_apiKey')?.type,
+                    apiKeyValue:document.getElementById('f_apiKey')?.value,
+                    interval:document.getElementById('f_scheduleMinutes')?.value,
+                    enabled:document.getElementById('f_enabled')?.checked,
+                    note:document.getElementById('dlgBody')?.textContent.includes('read-only')};
+                  const el = document.createElement('pre'); el.id='cloudflare-probe';
+                  el.textContent=JSON.stringify(probe);document.body.append(el);
+                }, 1400);
+            </script>"""
+            content = html.replace('</body>', probe + '</body>').encode()
+            self.send_response(200)
+            self.send_header('Content-Type', 'text/html')
+            self.send_header('Content-Length', str(len(content)))
+            self.end_headers()
+            self.wfile.write(content)
+            return
         if self.path.startswith("/api/"):
             endpoint = self.path[5:]
             if endpoint == "modules":
@@ -92,6 +122,24 @@ def main():
                                      f"missing={[x for x in expected if x not in html]}, "
                                      f"stderr={run.stderr[-400:]}, html={html[-700:]}")
             print("PASS: Chrome rendered #" + path)
+        run = subprocess.run(
+            ["google-chrome", "--headless=new", "--no-sandbox", "--disable-gpu",
+             "--disable-dev-shm-usage", "--no-first-run", "--virtual-time-budget=3500",
+             "--dump-dom", url + "/probe-cloudflare#module-ddns"],
+            capture_output=True, text=True, timeout=25)
+        import html as html_lib
+        import re
+        match = re.search(r'<pre id="cloudflare-probe">(.*?)</pre>', run.stdout, re.S)
+        if not match:
+            raise AssertionError('Cloudflare Configure button did not open the editable form: ' + run.stdout[-1200:])
+        probe = json.loads(html_lib.unescape(match.group(1)))
+        expected = {'f_zone','f_hostnames','f_email','f_apiKey','f_scheduleMinutes','f_enabled'}
+        assert probe['title'] == 'Configure Cloudflare Dynamic DNS', probe
+        assert expected.issubset(set(probe['inputs'])), probe
+        assert probe['zone'] == 'blaize.net' and probe['email'] == 'admin@example.net', probe
+        assert probe['apiKeyType'] == 'password' and probe['apiKeyValue'] == '', probe
+        assert probe['interval'] == '15' and probe['enabled'] is True and probe['note'] is True, probe
+        print('PASS: Chrome opened Cloudflare settings with six editable controls and protected credential')
     finally:
         server.shutdown()
 

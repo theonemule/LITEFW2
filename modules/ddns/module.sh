@@ -150,7 +150,7 @@ uninstall_module(){
   rc-service inadyn stop >/dev/null 2>&1 || true
   rc-update del inadyn default >/dev/null 2>&1 || true
   apk del inadyn-openrc inadyn >/dev/null 2>&1 || true
-  rm -f /etc/periodic/15min/litefw-cloudflare
+  [ ! -x "$SELF/cloudflare-schedule.sh" ] || "$SELF/cloudflare-schedule.sh" remove >/dev/null 2>&1 || true
   rm -rf /etc/inadyn /var/cache/inadyn
 }
 case "${1:-}" in
@@ -165,6 +165,7 @@ case "${1:-}" in
   force-update) force_update;;
   cloudflare-check) require_root; [ -x "$CFHELPER" ] || die "Cloudflare helper missing"; "$CFHELPER" check;;
   cloudflare-update) require_root; [ -x "$CFHELPER" ] || die "Cloudflare helper missing"; "$CFHELPER" force;;
+  cloudflare-configure) require_root; [ -x "$SELF/cloudflare-configure.sh" ] || die "Cloudflare settings handler missing"; "$SELF/cloudflare-configure.sh" "$2";;
   service)
     case "${2:-}" in
       start) [ -r "$CONF" ] || die "Configure Dynamic DNS first"; rc-update add inadyn default >/dev/null 2>&1 || true; rc-service inadyn start;;

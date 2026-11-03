@@ -12,6 +12,8 @@ tar -tzf "$bundle" | grep -Fxq 'modules/manifest.json'
 tar -tzf "$bundle" | grep -Fxq 'modules/dnsmasq/module.sh'
 tar -tzf "$bundle" | grep -Fxq 'modules/ddns/cloudflare-legacy.sh'
 tar -tzf "$bundle" | grep -Fxq 'modules/ddns/cloudflare-cron'
+tar -tzf "$bundle" | grep -Fxq 'modules/ddns/cloudflare-configure.sh'
+tar -tzf "$bundle" | grep -Fxq 'modules/ddns/cloudflare-schedule.sh'
 tar -tzf "$bundle" | grep -Fxq 'www/app.js'
 grep -Fq "/app.js?v=$ver" www/index.html
 [ "$(tar -xzOf "$bundle" VERSION)" = "$ver" ]

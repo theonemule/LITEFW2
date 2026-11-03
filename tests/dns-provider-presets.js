@@ -38,5 +38,5 @@ assert.match(evaluate('dnsResolverSummary(["1.1.1.3","1.0.0.3"],"")'),/Cloudflar
 console.log('PASS: 15 presets, IP matching, custom mode, filtering flags and descriptions');
 assert(app.includes("forwardMode:dnsResolverIsFiltered(v) ? 'only'"),'Filtered BIND provider must be forward only');
 assert(app.includes('decorate:dnsResolverDetails'),'Provider preview missing');
-assert(fs.readFileSync('www/index.html','utf8').includes('<script src="/dns-presets.js?v=2.2.15"></script>'));
+assert(fs.readFileSync('www/index.html','utf8').includes('<script src="/dns-presets.js?v=2.2.16"></script>'));
 console.log('PASS: BIND filter fail-closed and catalog loaded');
