@@ -65,12 +65,23 @@ restart_named(){
 settings_set(){
   require_root
   listen=$1; query=$2; transfer=$3; recurse=$4; recursive_clients=$5; forwarders=$6
+  forwarding_mode=${7:-first}; dnssec=${8:-auto}; minimal=${9:-yes}
+  cache_ttl=${10:-86400}; negative_ttl=${11:-10800}; ipv6_listen=${12:-false}
   valid_addr_csv "$listen" || die "Listen addresses must be IPv4 addresses"
   valid_acl_csv "$query" || die "Invalid allow-query ACL"
   valid_acl_csv "$transfer" || die "Invalid allow-transfer ACL"
   case "$recurse" in true|false) ;; *) die "Invalid recursion setting";; esac
   valid_acl_csv "$recursive_clients" || die "Invalid recursion ACL"
   valid_ipv4_csv "$forwarders" || die "Invalid forwarders"
+  case "$forwarding_mode" in first|only) :;; *) die "Invalid forward policy";; esac
+  [ "$forwarding_mode" != only ] || [ -n "$forwarders" ] || die "Forward-only requires a forwarder"
+  case "$dnssec" in auto|yes|no) :;; *) die "Invalid DNSSEC option";; esac
+  case "$minimal" in yes|no) :;; *) die "Invalid minimal responses";; esac
+  case "$ipv6_listen" in true|false) :;; *) die "Invalid IPv6 listener option";; esac
+  for t in "$cache_ttl" "$negative_ttl"; do
+    case "$t" in ''|*[!0-9]*) die "Cache TTL must be an integer in seconds";; esac
+    [ "$t" -le 604800 ] || die "Cache TTL exceeds seven days"
+  done
   if [ "$recurse" = true ]; then
     [ -n "$recursive_clients" ] || die "Recursive clients are required when recursion is enabled"
     [ "$recursive_clients" != any ] || die "Open recursion is not allowed"
@@ -87,10 +98,21 @@ settings_set(){
     echo "// litefwm:recursion=$recurse"
     echo "// litefwm:recursive-clients=$recursive_clients"
     echo "// litefwm:forwarders=$forwarders"
+    echo "// litefwm:forward-mode=$forwarding_mode"
+    echo "// litefwm:dnssec=$dnssec"
+    echo "// litefwm:minimal=$minimal"
+    echo "// litefwm:cache-ttl=$cache_ttl"
+    echo "// litefwm:negative-ttl=$negative_ttl"
+    echo "// litefwm:ipv6-listen=$ipv6_listen"
     echo "options {"
     echo '  directory "/var/bind";'
     printf '  listen-on { '; old=$IFS; IFS=,; for x in $listen; do printf '%s; ' "$x"; done; IFS=$old; echo '};'
-    echo '  listen-on-v6 { none; };'
+    if [ "$ipv6_listen" = true ]; then echo '  listen-on-v6 { any; };'
+    else echo '  listen-on-v6 { none; };'; fi
+    echo "  dnssec-validation $dnssec;"
+    echo "  minimal-responses $minimal;"
+    echo "  max-cache-ttl $cache_ttl;"
+    echo "  max-ncache-ttl $negative_ttl;"
     printf '  allow-query { '; emit_acl "$query" 'any;'; echo ' };'
     printf '  allow-transfer { '; emit_acl "$transfer" 'none;'; echo ' };'
     echo '  pid-file "/var/run/named/named.pid";'
@@ -99,6 +121,7 @@ settings_set(){
       printf '  allow-recursion { '; emit_acl "$recursive_clients" 'none;'; echo ' };'
       if [ -n "$forwarders" ]; then
         printf '  forwarders { '; old=$IFS; IFS=,; for x in $forwarders; do printf '%s; ' "$x"; done; IFS=$old; echo '};'
+        echo "  forward $forwarding_mode;"
       fi
     else
       echo '  recursion no;'
@@ -109,11 +132,19 @@ settings_set(){
   } > "$tmp"
   named-checkconf "$tmp"
   named-checkconf -z "$tmp" >/dev/null
-  mv "$tmp" "$CONF"
+  backup=$(mktemp)
+  had_conf=false
+  if [ -f "$CONF" ]; then cp -p "$CONF" "$backup"; had_conf=true; fi
+  install -m 0640 "$tmp" "$CONF"
+  rm -f "$tmp"
   chown root:named "$CONF"
-  chmod 0640 "$CONF"
-  claim_dns
-  restart_named
+  if ! (claim_dns && restart_named); then
+    if [ "$had_conf" = true ]; then cp -p "$backup" "$CONF"; else rm -f "$CONF"; fi
+    if [ "$had_conf" = true ]; then restart_named || :; fi
+    rm -f "$backup"
+    die "BIND could not restart; previous DNS settings restored"
+  fi
+  rm -f "$backup"
 }
 rebuild_zones(){
   mkdir -p "$ZONE_DIR" /etc/bind
@@ -292,10 +323,14 @@ snapshot(){
   fi
   listen=$(setting listen); query=$(setting query); transfer=$(setting transfer); rec=$(setting recursion)
   clients=$(setting recursive-clients); forwarders=$(setting forwarders)
+  fmode=$(setting forward-mode); dnssec=$(setting dnssec); minimal=$(setting minimal)
+  cache=$(setting cache-ttl); ncache=$(setting negative-ttl); v6=$(setting ipv6-listen)
   jq -n --argjson running "$run" --arg listen "$listen" --arg query "$query" --arg transfer "$transfer" \
     --argjson recursion "${rec:-false}" --arg clients "$clients" --arg forwarders "$forwarders" \
+    --arg fmode "${fmode:-first}" --arg dnssec "${dnssec:-auto}" --arg minimal "${minimal:-yes}" \
+    --argjson cache "${cache:-86400}" --argjson ncache "${ncache:-10800}" --argjson v6 "${v6:-false}" \
     --argjson zones "$(zones_json)" \
-    '{running:$running,configured:true,listenAddresses:($listen|split(",")|map(select(length>0))),allowQuery:($query|split(",")|map(select(length>0))),allowTransfer:($transfer|split(",")|map(select(length>0))),recursion:$recursion,recursiveClients:($clients|split(",")|map(select(length>0))),forwarders:($forwarders|split(",")|map(select(length>0))),zones:$zones}'
+    '{running:$running,configured:true,listenAddresses:($listen|split(",")|map(select(length>0))),allowQuery:($query|split(",")|map(select(length>0))),allowTransfer:($transfer|split(",")|map(select(length>0))),recursion:$recursion,recursiveClients:($clients|split(",")|map(select(length>0))),forwarders:($forwarders|split(",")|map(select(length>0))),forwardMode:$fmode,dnssecValidation:$dnssec,minimalResponses:($minimal=="yes"),maxCacheTtl:$cache,maxNegativeTtl:$ncache,listenIPv6:$v6,zones:$zones}'
 }
 firewall(){
   [ -r "$CONF" ] || return 0
@@ -333,6 +368,79 @@ uninstall_module(){
   apk del bind-openrc bind-tools bind >/dev/null 2>&1 || true
   rm -rf /etc/bind "$ZONE_DIR"
 }
+
+# Full zone-file editor. Validated and backed up before any live replacement.
+# The incoming zone file is sent through stdin (not shell parameters).
+zone_source() {
+  require_root
+  zone=$1
+  f=$(zone_file "$zone")
+  [ -f "$f" ] || die "Zone file not found"
+  checksum=$(sha256sum "$f" | awk '{print $1}')
+  jq -Rs --arg name "$zone" --arg sha "$checksum" '{name:$name,sha:$sha,source:.}' <"$f"
+}
+zone_write() {
+  require_root
+  zone=$1
+  expected=$2
+  create=$3
+  f=$(zone_file "$zone")
+  case "$create" in true|false) :;; *) die "Invalid create flag";; esac
+  # DNS zone names cannot be filesystem paths or contain empty labels.
+  printf '%s' "$zone" | grep -Eq '^[A-Za-z0-9][A-Za-z0-9.-]{0,251}[A-Za-z0-9]$' ||
+    die "Invalid zone name"
+  case "$zone" in *..*|.*|*.) die "Invalid zone name";; esac
+  if [ "$create" = true ]; then
+    [ ! -e "$f" ] || die "Zone already exists"
+  else
+    [ -f "$f" ] || die "Zone file not found"
+    [ -n "$expected" ] || die "Zone checksum required to prevent overwriting newer edits"
+    now=$(sha256sum "$f" | awk '{print $1}')
+    [ "$expected" = "$now" ] || die "Zone changed after you opened it; reload before saving"
+  fi
+  [ -f "$CONF" ] || die "Configure BIND before adding zone files"
+  mkdir -p "$ZONE_DIR" /root/litefw-dns-backups
+  tmp=$(mktemp "$ZONE_DIR/.zone-edit.XXXXXX")
+  cat >"$tmp"
+  size=$(wc -c <"$tmp")
+  if [ "$size" -lt 30 ] || [ "$size" -gt 65536 ]; then
+    rm -f "$tmp"
+    die "Zone file must be between 30 bytes and 64 KiB"
+  fi
+  # Prevent reads of arbitrary local files or unbounded record generation.
+  if grep -Eiq '^[[:space:]]*\$(INCLUDE|GENERATE)([[:space:]]|$)' "$tmp"; then
+    rm -f "$tmp"
+    die "Zone file INCLUDE and GENERATE directives are not supported by this editor"
+  fi
+  # A metadata marker lets the existing managed-zone catalog display/import it.
+  if ! grep -Fxq "; litefwm-zone:$zone" "$tmp"; then
+    sed -i "1i; litefwm-zone:$zone" "$tmp"
+  fi
+  if ! detail=$(named-checkzone "$zone" "$tmp" 2>&1); then
+    rm -f "$tmp"
+    die "Invalid zone: $detail"
+  fi
+  backup=""
+  if [ -f "$f" ]; then
+    backup="/root/litefw-dns-backups/$zone.$(date -u +%Y%m%dT%H%M%SZ).$(od -An -N3 -tx1 /dev/urandom | tr -d ' \n').zone"
+    cp -p "$f" "$backup"
+  fi
+  # Persist only after the complete zone validates.
+  install -m 0640 "$tmp" "$f"
+  rm -f "$tmp"
+  chown root:named "$f"
+  rebuild_zones
+  if ! (named-checkconf -z "$CONF" >/dev/null && restart_named); then
+    if [ -n "$backup" ]; then cp -p "$backup" "$f"; else rm -f "$f"; fi
+    rebuild_zones
+    restart_named || :
+    die "Zone could not load; previous configuration restored"
+  fi
+  sha=$(sha256sum "$f" | awk '{print $1}')
+  jq -n --arg name "$zone" --arg sha "$sha" --arg backup "$backup" \
+    '{name:$name,sha:$sha,backup:$backup}'
+}
+
 case "${1:-}" in
   meta) meta;;
   installed) installed;;
@@ -340,9 +448,11 @@ case "${1:-}" in
   uninstall) uninstall_module;;
   snapshot) snapshot;;
   firewall) firewall;;
-  settings-set) settings_set "${2:?LISTEN}" "${3:-any}" "${4:-}" "${5:-false}" "${6:-}" "${7:-}";;
+  settings-set) settings_set "${2:?LISTEN}" "${3:-any}" "${4:-}" "${5:-false}" "${6:-}" "${7:-}" "${8:-first}" "${9:-auto}" "${10:-yes}" "${11:-86400}" "${12:-10800}" "${13:-false}";;
   zone-add) zone_add "${2:?ZONE}" "${3:?NS}" "${4:-}" "${5:?ADMIN}" "${6:-3600}" "${7:-3600}" "${8:-600}" "${9:-1209600}" "${10:-300}";;
   zone-delete) zone_delete "${2:?ZONE}";;
+  zone-source) zone_source "${2:?ZONE}";;
+  zone-write) zone_write "${2:?ZONE}" "${3:-}" "${4:-false}";;
   record-add) record_add "${2:?ZONE}" "${3:?NAME}" "${4:?TYPE}" "${5:?VALUE}" "${6:-300}" "${7:-}";;
   record-delete) record_delete "${2:?ZONE}" "${3:?ID}";;
   service)

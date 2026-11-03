@@ -95,7 +95,12 @@ op_module_remove() {
 }
 
 op_bind_settings() {
-  module_call bind settings-set "$(module_csv listenAddresses)" "$(module_csv allowQuery)"     "$(module_csv allowTransfer)" "$(jget recursion)" "$(module_csv recursiveClients)" "$(module_csv forwarders)"
+  _min=no
+  jbool minimalResponses && _min=yes
+  module_call bind settings-set "$(module_csv listenAddresses)" "$(module_csv allowQuery)" \
+    "$(module_csv allowTransfer)" "$(jget recursion)" "$(module_csv recursiveClients)" "$(module_csv forwarders)" \
+    "$(jget forwardMode)" "$(jget dnssecValidation)" "$_min" "$(jget maxCacheTtl)" \
+    "$(jget maxNegativeTtl)" "$(jget listenIPv6)"
   module_sync_firewall
   log_op "bind.settings"
 }
@@ -110,6 +115,24 @@ op_bind_zonedelete() {
   module_call bind zone-delete "$_z"
   module_sync_firewall
   log_op "bind.zonedelete $_z"
+}
+op_bind_zoneread() {
+  _z=$(jget zone)
+  _json=$(module_call bind zone-source "$_z")
+  printf '%s' "$_json" >"$RESULT"
+}
+op_bind_zonewrite() {
+  _z=$(jget zone); _sha=$(jget expectedSha); _create=$(jget create)
+  case "$_create" in true|false) :;; *) die "Invalid zone creation flag";; esac
+  jq -e '.source|type=="string" and (length>0) and (length<=65536)' "$BODY" >/dev/null ||
+    die "A zone file (max 64 KiB) is required"
+  _src=$(mktemp)
+  jq -j '.source' "$BODY" >"$_src"
+  _out=$(module_call bind zone-write "$_z" "$_sha" "$_create" <"$_src") ||
+    { rm -f "$_src"; die "BIND refused this zone file"; }
+  rm -f "$_src"
+  printf '%s' "$_out" >"$RESULT"
+  log_op "bind.zonewrite $_z"
 }
 op_bind_recordadd() {
   _out=$(module_call bind record-add "$(jget zone)" "$(jget name)" "$(jget type)" "$(jget value)" "$(jget ttl)" "$(jget priority)")

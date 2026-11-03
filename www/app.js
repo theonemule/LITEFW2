@@ -557,9 +557,26 @@ function bindSettingsForm() {
     { k: 'allowTransfer', label: 'Allow zone transfers from', type: 'list', value: x.allowTransfer || [], placeholder: 'empty = none' },
     { k: 'recursion', label: 'Enable recursion', type: 'check', value: !!x.recursion },
     { k: 'recursiveClients', label: 'Recursive clients', type: 'list', value: x.recursiveClients || lanCidrs, placeholder: '192.168.10.0/24', help: 'Required when recursion is enabled. Open recursion is rejected.', show: v => v.recursion },
-    { k: 'forwarders', label: 'Recursive forwarders', type: 'list', value: x.forwarders || S.system.resolvers, placeholder: '1.1.1.1, 9.9.9.9', show: v => v.recursion }
+    { k: 'forwarders', label: 'Upstream DNS forwarders', type: 'list',
+      value: x.forwarders || [], placeholder: '10.0.1.1, 1.1.1.1, 9.9.9.9', show: v => v.recursion,
+      help: 'Send client queries outside authoritative zones to these servers, in priority order. Leave empty to resolve directly using DNS root servers.' },
+    { k: 'forwardMode', label: 'Forwarder policy', type: 'select', value: x.forwardMode || 'first',
+      options: [['first', 'First — try forwarders, then resolve directly if they fail'],
+                ['only', 'Only — send recursive queries exclusively to forwarders']],
+      show: v => v.recursion && v.forwarders && v.forwarders.length > 0 },
+    { k: 'dnssecValidation', label: 'DNSSEC validation', type: 'select', value: x.dnssecValidation || 'auto',
+      options: [['auto','Automatic (recommended)'], ['yes','Enabled'],['no','Disabled']],
+      help: 'Validates signed DNS data. Requires working DNSSEC trust anchors and upstream connectivity.' },
+    { k: 'minimalResponses', label: 'Minimal DNS responses', type: 'check', value: x.minimalResponses !== false,
+      help: 'Reduce additional DNS answer data and response size.' },
+    { k: 'maxCacheTtl', label: 'Maximum positive-answer cache TTL (seconds)', type: 'number', value: x.maxCacheTtl ?? 86400,
+      help: 'How long cached positive answers are retained (0–604800 seconds).' },
+    { k: 'maxNegativeTtl', label: 'Maximum negative-answer cache TTL (seconds)', type: 'number', value: x.maxNegativeTtl ?? 10800,
+      help: 'Maximum caching for NXDOMAIN/no-answer responses (0–604800 seconds).' },
+    { k: 'listenIPv6', label: 'Also listen on all IPv6 interfaces', type: 'check', value: !!x.listenIPv6,
+      help: 'May expose DNS on WAN IPv6. Use appropriate network/firewall restrictions.' }
   ], v => apply('bind.settings', v, 'BIND settings applied'), {
-    note: 'BIND takes over DNS port 53 when configured. dnsmasq stays running for DHCP but its DNS listener is disabled.'
+    note: 'BIND serves authoritative zones and optionally forwards recursive queries. On this appliance, BIND owns DNS port 53; dnsmasq DHCP settings and DHCP server state are unaffected.'
   });
 }
 
@@ -577,6 +594,42 @@ function bindAddZone() {
     { k: 'expire', label: 'SOA expire', type: 'number', value: 1209600 },
     { k: 'minimum', label: 'Negative cache TTL', type: 'number', value: 300 }
   ], v => apply('bind.zoneadd', v, 'Zone created'));
+}
+
+// Edit the full native zone file. Upload simply inserts local file text into the
+// editor; server-side named-checkzone validates before modifying live BIND.
+async function bindZoneFileEditor(zoneName = '') {
+  let existing = { name:'', source:'', sha:'' };
+  if (zoneName) existing = (await op('bind.zoneread', {zone:zoneName})).result;
+  const fields = [
+    { k:'name', label:'Zone name', type:'info', value:zoneName || 'Choose below' },
+    ...(!zoneName ? [{ k:'newName', label:'New zone name', value:'', placeholder:'example.internal' }] : []),
+    { k:'source', label:'Zone file text', type:'textarea', rows:18, value:existing.source,
+      placeholder:'$TTL 3600\n@ IN SOA ns1.example.internal. hostmaster.example.internal. ( 2026110201 3600 600 1209600 300 )\n@ IN NS ns1.example.internal.',
+      help:'BIND master-zone syntax. Include SOA and NS. Increase the SOA serial when editing an existing zone; include files and generate directives are disallowed.' }
+  ];
+  const ui = buildFields(fields);
+  const uploader = h('input', { type:'file', class:'form-control form-control-sm', accept:'.zone,.db,.txt,.dns,text/plain',
+    'aria-label':'Upload existing DNS zone file' });
+  uploader.addEventListener('change', async () => {
+    const file = uploader.files && uploader.files[0]; if (!file) return;
+    if (file.size > 65536) { $('#dlgErr').textContent = 'Zone files must be 64 KiB or smaller.'; return; }
+    ui.body.querySelector('#f_source').value = await file.text();
+    $('#dlgErr').textContent = '';
+  });
+  dlgChrome(zoneName ? 'Edit zone file: ' + zoneName : 'Create or import a DNS zone', zoneName ? 'Validate and save' : 'Create zone');
+  $('#dlgBody').replaceChildren(
+    h('div', { class:'alert alert-info py-2 small' },
+      'Save validates the complete zone with BIND before replacing anything. Existing zone files are backed up on the firewall.'),
+    h('label', { class:'form-label small fw-semibold' }, 'Import text from a zone file on this device'),
+    uploader, ui.body);
+  dlgApply = async () => {
+    const v = ui.vals(); const zone = zoneName || v.newName;
+    if (!zone || !v.source || v.source.length < 30) throw new Error('Enter a zone name and complete SOA/NS zone file.');
+    return apply('bind.zonewrite', {zone, source:v.source + '\n', expectedSha:existing.sha || '', create:!zoneName},
+      zoneName ? 'Zone file validated and updated' : 'New DNS zone created');
+  };
+  showDlg();
 }
 
 function bindAddRecord(zone) {
@@ -600,9 +653,10 @@ function bindPanel() {
         h('code', { class: 'flex-grow-1' }, r.text),
         btn('Delete', () => confirmDo('Delete DNS record', 'Delete this record from ' + z.name + '?',
           () => apply('bind.recorddelete', { zone: z.name, id: r.id }, 'Record deleted'), 'Delete'), 'btn-outline-danger')))
-      : h('span', { class: 'text-secondary' }, 'No managed records')),
+      : h('span', { class: 'text-secondary small' }, 'Edit zone file to view or change all records')),
     h('td', { class: 'text-end text-nowrap' },
-      btn('Add record', () => bindAddRecord(z.name), 'btn-outline-primary'), ' ',
+      btn('Edit zone file', () => bindZoneFileEditor(z.name), 'btn-outline-primary'), ' ',
+      btn('Add record', () => bindAddRecord(z.name), 'btn-outline-secondary'), ' ',
       btn('Delete zone', () => confirmDo('Delete zone', 'Delete zone ' + z.name + ' and its zone file?',
         () => apply('bind.zonedelete', { name: z.name }, 'Zone deleted'), 'Delete'), 'btn-outline-danger'))));
   return [
@@ -614,9 +668,15 @@ function bindPanel() {
         ? h('dl', { class: 'row mb-0' },
             h('dt', { class: 'col-sm-3' }, 'Status'), h('dd', { class: 'col-sm-9' }, x.running ? badge('running','text-bg-success') : badge('stopped')),
             h('dt', { class: 'col-sm-3' }, 'Listen'), h('dd', { class: 'col-sm-9 mono' }, (x.listenAddresses || []).join(', ') || '—'),
-            h('dt', { class: 'col-sm-3' }, 'Recursion'), h('dd', { class: 'col-sm-9' }, x.recursion ? 'restricted to ' + (x.recursiveClients || []).join(', ') : 'off'))
+            h('dt', { class: 'col-sm-3' }, 'Recursion'), h('dd', { class: 'col-sm-9' }, x.recursion ? 'restricted to ' + (x.recursiveClients || []).join(', ') : 'off'),
+            h('dt', { class: 'col-sm-3' }, 'Forwarders'), h('dd', { class: 'col-sm-9 mono' },
+              (x.forwarders || []).join(', ') || 'direct recursion / none',
+              x.forwarders && x.forwarders.length ? ' (' + (x.forwardMode || 'first') + ')' : ''),
+            h('dt', { class: 'col-sm-3' }, 'DNSSEC / caching'), h('dd', { class: 'col-sm-9' },
+              (x.dnssecValidation || 'auto') + ' · max TTL ' + (x.maxCacheTtl ?? 86400) + 's'))
         : 'Installed but not configured. Apply DNS settings before starting the service.')),
-    card('BIND authoritative zones', [btn('Add zone', bindAddZone, 'btn-primary')],
+    card('BIND authoritative zones', [btn('Add zone', bindAddZone, 'btn-primary'), ' ',
+      btn('Create / import zone file', () => bindZoneFileEditor(), 'btn-outline-primary')],
       table(['Zone', 'Serial', 'Records', ''], zoneRows, 'No authoritative zones configured.'))
   ];
 }

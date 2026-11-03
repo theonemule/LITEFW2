@@ -188,3 +188,27 @@ and potentially exposes services beyond the LAN. Only an administrator at
 the local console can activate it; it is not exposed over HTTP. Restoration
 removes the bypass immediately. Boot always restores the last confirmed
 firewall rules from disk. The console also shows whether bypass is active.
+
+## LiteFW 2.2.11 — BIND9 server settings and zone-file editor
+
+BIND DNS Settings can now configure multiple recursive upstream forwarders,
+forward-first vs forward-only, DNSSEC validation, minimal answers, max cached
+positive/negative TTL, IPv4 listener/ACL/zone transfer rules, restricted
+recursion, and optional IPv6 listeners. Recursive clients cannot be public.
+The settings are validated using named-checkconf before replacement.
+
+The DNS and Modules BIND sections list authoritative zones, including imported
+zone files carrying a LiteFW zone marker. Click **Edit zone file** to review and
+modify complete native BIND zone text. **Create / import zone file** accepts a
+zone name and pasted or uploaded .zone/.db/.txt file contents (64 KiB maximum).
+The server rejects malformed zone files using named-checkzone, preserves the
+previous zone on failure, checks a SHA-256 baseline against concurrent edits,
+and saves copies of prior zone files under /root/litefw-dns-backups/.
+
+Zone files must contain valid SOA/NS records. Increase the SOA serial whenever
+editing a live zone. BIND $INCLUDE and $GENERATE are blocked by the editor to
+prevent arbitrary file access and excessive resource consumption.
+
+As with all LiteFW runtime upgrades, the upgrade to 2.2.11 changes only code:
+existing DNS forwarders, zones, firewall/NAT, DHCP reservations, and enabled
+states are not changed until you explicitly save a BIND setting or zone.
