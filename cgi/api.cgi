@@ -1,5 +1,5 @@
 #!/bin/sh
-# LiteFWM resource-oriented HTTP API (lighttpd CGI, behind HTTP basic auth).
+# LiteFWM resource-oriented HTTP API (Lighttpd CGI, Basic or API-key auth).
 #
 # Reads:
 #   GET /api/identity
@@ -78,6 +78,40 @@ module_lifecycle_request() {
 out=$(mktemp)
 trap 'rm -f "$out" "$out.err" "${body:-}"' EXIT
 
+
+unauthorized() {
+  printf 'Status: 401 Unauthorized\r\nContent-Type: application/json\r\nCache-Control: no-store\r\nWWW-Authenticate: Basic realm="LiteFWM API"\r\n\r\n'
+  printf '{"ok":false,"error":"authentication required or invalid"}\n'
+  exit 0
+}
+authenticate() {
+  auth_mode=""
+  auth_scope=""
+  if [ -n "${HTTP_X_API_KEY:-}" ]; then
+    # Send key only on stdin, never an argv or log field.
+    auth=$(printf '%s\n' "$HTTP_X_API_KEY" | ctl auth-key 2>/dev/null) || unauthorized
+    auth_scope=$(printf '%s' "$auth" | jq -r '.scope // empty')
+    case "$auth_scope" in read|admin) auth_mode=key;; *) unauthorized;; esac
+  else
+    # Lighttpd already verified Basic credentials against htpasswd.
+    # Never trust an unverified Authorization header here.
+    username=${REMOTE_USER:-}
+    printf '%s' "$username" | grep -Eq '^[A-Za-z0-9_.-]{1,32}$' || unauthorized
+    auth_mode=basic
+    auth_scope=admin
+  fi
+  # Key administration and credential/network changes require Basic,
+  # including their older /api/op/ compatibility aliases.
+  case "$method:$path" in
+    GET:/system/api-keys|POST:/system/api-keys/*|POST:/system/password|POST:/system/management|POST:/op/apikey.create|POST:/op/apikey.revoke|POST:/op/password.set|POST:/op/mgmt.set)
+      [ "$auth_mode" = basic ] || fail '403 Forbidden' 'HTTP Basic administrator credentials required';;
+  esac
+  if [ "$method" != GET ] && [ "$auth_scope" != admin ]; then
+    fail '403 Forbidden' 'Read-only API key cannot perform mutations'
+  fi
+}
+authenticate
+
 case "$method:$path" in
   GET:/telemetry) read_resource telemetry;;
   GET:/telemetry/metrics)
@@ -101,6 +135,7 @@ case "$method:$path" in
     read_resource module "$mid"
     ;;
   GET:/system) read_resource system;;
+  GET:/system/api-keys) read_resource apikeys;;
 
   POST:/interfaces/iface/*)
     action=${path#/interfaces/iface/}
@@ -147,6 +182,8 @@ case "$method:$path" in
   POST:/firewall/batch) op_request firewall.batch;;
   POST:/firewall/confirm) op_request firewall.confirm;;
   POST:/system/telemetry) op_request telemetry.set;;
+  POST:/system/api-keys/create) op_request apikey.create;;
+  POST:/system/api-keys/revoke) op_request apikey.revoke;;
   POST:/system/set) op_request system.set;;
   POST:/system/management) op_request mgmt.set;;
   POST:/system/logging) op_request logging.set;;

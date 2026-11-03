@@ -1,0 +1,16 @@
+body{margin:0;background:#f7f9fc;color:#1f2937;font:15px/1.55 system-ui,-apple-system,sans-serif}
+header{background:#15253b;color:#fff;padding:18px 25px}
+header a{color:#cbe3ff;margin-right:18px;text-decoration:none}
+main{max-width:1120px;margin:30px auto;padding:0 25px 50px}
+h1,h2,h3{color:#132a44}h1{font-size:30px}h2{margin-top:28px}
+table{border-collapse:collapse;width:100%;background:#fff;font-size:13px}
+td,th{border:1px solid #d7e0eb;padding:8px 11px;text-align:left;vertical-align:top}
+th{background:#eaf1f8}
+tr:nth-child(even){background:#f7fafc}
+code,pre{font-family:ui-monospace,Consolas,monospace}
+code{background:#edf2f7;padding:1px 4px}
+pre{background:#15253b;color:#f0f6ff;padding:14px;border-radius:6px;overflow-x:auto}
+a{color:#1758a5}
+aside{background:#fff1cc;padding:15px;border-left:4px solid #edb944}
+nav a{display:inline-block;margin:4px 12px 4px 0}
+footer{color:#6b7280;padding:20px;text-align:center;font-size:12px}

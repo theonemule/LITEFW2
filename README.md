@@ -119,3 +119,19 @@ LAN-to-WAN forwarding and masquerade, default-deny WAN input, a real WAN port
 forward to the first guest, and every resource API. Use `status` to inspect it
 and `down` to remove the bridges, TAPs, namespace and VMs. The harness uses KVM
 when `/dev/kvm` is available and otherwise falls back to QEMU TCG.
+## API authentication, documentation and remote CLI
+
+The management API accepts HTTP Basic or an X-API-Key header. Basic login
+remains required for the web interface and sensitive key/password/management
+operations. Manage API keys under System > API keys; secrets are displayed once,
+stored only as SHA-256 digests, and support expiration and revocation.
+
+OpenAPI 3.1 lives in docs/openapi.json. Web UI, API and CLI manuals live under
+docs and are generated as browser-readable pages in www/docs, shipped with the
+appliance at /docs/. Run python3 tools/render-api-docs.py to regenerate the
+embedded CLI help and documentation, and add --check to validate it in CI.
+
+Download litefw-<version>-cli.sh from a matching GitHub release and run
+litefw login https://firewall.example.net --api-key to authenticate.
+For plain HTTP in a trusted LAN use the explicit --allow-http flag; HTTPS
+or a VPN is strongly recommended for transmitting credentials.

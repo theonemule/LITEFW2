@@ -1,0 +1,4031 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "LiteFW Management API",
+    "version": "2.2.23",
+    "description": "LAN-only JSON API. HTTP Basic credentials or an X-API-Key token authenticate. For API keys use HTTPS or a trusted encrypted tunnel: plain HTTP exposes secrets. Keys are read or admin; key management and password/management changes always require Basic. All changes use POST with X-LiteFWM: 1."
+  },
+  "servers": [
+    {
+      "url": "/api",
+      "description": "Same-origin management API"
+    }
+  ],
+  "security": [
+    {
+      "basicAuth": []
+    },
+    {
+      "apiKeyAuth": []
+    }
+  ],
+  "components": {
+    "securitySchemes": {
+      "basicAuth": {
+        "type": "http",
+        "scheme": "basic"
+      },
+      "apiKeyAuth": {
+        "type": "apiKey",
+        "in": "header",
+        "name": "X-API-Key"
+      }
+    }
+  },
+  "paths": {
+    "/dhcp": {
+      "get": {
+        "tags": [
+          "DHCP"
+        ],
+        "summary": "DHCP servers, leases and reservations",
+        "operationId": "get_dhcp",
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Invalid request or failed operation"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Forbidden"
+          }
+        }
+      }
+    },
+    "/dhcp/reservations/add": {
+      "post": {
+        "tags": [
+          "DHCP"
+        ],
+        "summary": "Add DHCP reservation",
+        "operationId": "post_dhcp_reservations_add",
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Invalid request or failed operation"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Forbidden"
+          }
+        },
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/dhcp/reservations/delete": {
+      "post": {
+        "tags": [
+          "DHCP"
+        ],
+        "summary": "Delete DHCP reservation",
+        "operationId": "post_dhcp_reservations_delete",
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Invalid request or failed operation"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Forbidden"
+          }
+        },
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/dhcp/server/set": {
+      "post": {
+        "tags": [
+          "DHCP"
+        ],
+        "summary": "Configure DHCP",
+        "operationId": "post_dhcp_server_set",
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Invalid request or failed operation"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Forbidden"
+          }
+        },
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/dns": {
+      "get": {
+        "tags": [
+          "DNS"
+        ],
+        "summary": "DNS settings",
+        "operationId": "get_dns",
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Invalid request or failed operation"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Forbidden"
+          }
+        }
+      }
+    },
+    "/dns/set": {
+      "post": {
+        "tags": [
+          "DNS"
+        ],
+        "summary": "Configure DNS",
+        "operationId": "post_dns_set",
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Invalid request or failed operation"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Forbidden"
+          }
+        },
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/firewall": {
+      "get": {
+        "tags": [
+          "Firewall"
+        ],
+        "summary": "Current managed firewall rules",
+        "operationId": "get_firewall",
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Invalid request or failed operation"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Forbidden"
+          }
+        }
+      }
+    },
+    "/firewall/batch": {
+      "post": {
+        "tags": [
+          "Firewall"
+        ],
+        "summary": "Stage a firewall ruleset transaction",
+        "operationId": "post_firewall_batch",
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Invalid request or failed operation"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Forbidden"
+          }
+        },
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/firewall/confirm": {
+      "post": {
+        "tags": [
+          "Firewall"
+        ],
+        "summary": "Confirm staged firewall rules",
+        "operationId": "post_firewall_confirm",
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Invalid request or failed operation"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Forbidden"
+          }
+        },
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/firewall/rules/add": {
+      "post": {
+        "tags": [
+          "Firewall"
+        ],
+        "summary": "Add firewall rule",
+        "operationId": "post_firewall_rules_add",
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Invalid request or failed operation"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Forbidden"
+          }
+        },
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/firewall/rules/delete": {
+      "post": {
+        "tags": [
+          "Firewall"
+        ],
+        "summary": "Delete firewall rule",
+        "operationId": "post_firewall_rules_delete",
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Invalid request or failed operation"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Forbidden"
+          }
+        },
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/firewall/rules/move": {
+      "post": {
+        "tags": [
+          "Firewall"
+        ],
+        "summary": "Move firewall rule",
+        "operationId": "post_firewall_rules_move",
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Invalid request or failed operation"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Forbidden"
+          }
+        },
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/firewall/rules/update": {
+      "post": {
+        "tags": [
+          "Firewall"
+        ],
+        "summary": "Edit firewall rule",
+        "operationId": "post_firewall_rules_update",
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Invalid request or failed operation"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Forbidden"
+          }
+        },
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/identity": {
+      "get": {
+        "tags": [
+          "Authentication"
+        ],
+        "summary": "Current authenticated API identity",
+        "operationId": "get_identity",
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Invalid request or failed operation"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Forbidden"
+          }
+        }
+      }
+    },
+    "/interfaces": {
+      "get": {
+        "tags": [
+          "Networking"
+        ],
+        "summary": "Interfaces and addresses",
+        "operationId": "get_interfaces",
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Invalid request or failed operation"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Forbidden"
+          }
+        }
+      }
+    },
+    "/interfaces/bridge/addmember": {
+      "post": {
+        "tags": [
+          "Networking"
+        ],
+        "summary": "Add bridge member",
+        "operationId": "post_interfaces_bridge_addmember",
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Invalid request or failed operation"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Forbidden"
+          }
+        },
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/interfaces/bridge/create": {
+      "post": {
+        "tags": [
+          "Networking"
+        ],
+        "summary": "Create bridge",
+        "operationId": "post_interfaces_bridge_create",
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Invalid request or failed operation"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Forbidden"
+          }
+        },
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/interfaces/bridge/delete": {
+      "post": {
+        "tags": [
+          "Networking"
+        ],
+        "summary": "Remove bridge",
+        "operationId": "post_interfaces_bridge_delete",
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Invalid request or failed operation"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Forbidden"
+          }
+        },
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/interfaces/bridge/delmember": {
+      "post": {
+        "tags": [
+          "Networking"
+        ],
+        "summary": "Remove bridge member",
+        "operationId": "post_interfaces_bridge_delmember",
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Invalid request or failed operation"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Forbidden"
+          }
+        },
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/interfaces/bridge/portvlans": {
+      "post": {
+        "tags": [
+          "Networking"
+        ],
+        "summary": "Configure bridge VLAN memberships",
+        "operationId": "post_interfaces_bridge_portvlans",
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Invalid request or failed operation"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Forbidden"
+          }
+        },
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/interfaces/bridge/set": {
+      "post": {
+        "tags": [
+          "Networking"
+        ],
+        "summary": "Update bridge",
+        "operationId": "post_interfaces_bridge_set",
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Invalid request or failed operation"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Forbidden"
+          }
+        },
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/interfaces/iface/set": {
+      "post": {
+        "tags": [
+          "Networking"
+        ],
+        "summary": "Change physical interface",
+        "operationId": "post_interfaces_iface_set",
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Invalid request or failed operation"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Forbidden"
+          }
+        },
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/interfaces/vlan/create": {
+      "post": {
+        "tags": [
+          "Networking"
+        ],
+        "summary": "Create VLAN",
+        "operationId": "post_interfaces_vlan_create",
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Invalid request or failed operation"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Forbidden"
+          }
+        },
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/interfaces/vlan/delete": {
+      "post": {
+        "tags": [
+          "Networking"
+        ],
+        "summary": "Remove VLAN",
+        "operationId": "post_interfaces_vlan_delete",
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Invalid request or failed operation"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Forbidden"
+          }
+        },
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/modules": {
+      "get": {
+        "tags": [
+          "Modules"
+        ],
+        "summary": "Optional module catalog and installation status",
+        "operationId": "get_modules",
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Invalid request or failed operation"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Forbidden"
+          }
+        }
+      }
+    },
+    "/modules/bind/recordadd": {
+      "post": {
+        "tags": [
+          "Modules"
+        ],
+        "summary": "Bind — recordadd",
+        "operationId": "post_modules_bind_recordadd",
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Invalid request or failed operation"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Forbidden"
+          }
+        },
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/modules/bind/recordchange": {
+      "post": {
+        "tags": [
+          "Modules"
+        ],
+        "summary": "Bind — recordchange",
+        "operationId": "post_modules_bind_recordchange",
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Invalid request or failed operation"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Forbidden"
+          }
+        },
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/modules/bind/recorddelete": {
+      "post": {
+        "tags": [
+          "Modules"
+        ],
+        "summary": "Bind — recorddelete",
+        "operationId": "post_modules_bind_recorddelete",
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Invalid request or failed operation"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Forbidden"
+          }
+        },
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/modules/bind/service": {
+      "post": {
+        "tags": [
+          "Modules"
+        ],
+        "summary": "Bind — service",
+        "operationId": "post_modules_bind_service",
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Invalid request or failed operation"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Forbidden"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "action": {
+                    "type": "string",
+                    "enum": [
+                      "start",
+                      "stop",
+                      "restart"
+                    ]
+                  }
+                },
+                "required": [
+                  "action"
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
+    "/modules/bind/settings": {
+      "post": {
+        "tags": [
+          "Modules"
+        ],
+        "summary": "Bind — settings",
+        "operationId": "post_modules_bind_settings",
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Invalid request or failed operation"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Forbidden"
+          }
+        },
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/modules/bind/zoneadd": {
+      "post": {
+        "tags": [
+          "Modules"
+        ],
+        "summary": "Bind — zoneadd",
+        "operationId": "post_modules_bind_zoneadd",
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Invalid request or failed operation"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Forbidden"
+          }
+        },
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/modules/bind/zonedelete": {
+      "post": {
+        "tags": [
+          "Modules"
+        ],
+        "summary": "Bind — zonedelete",
+        "operationId": "post_modules_bind_zonedelete",
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Invalid request or failed operation"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Forbidden"
+          }
+        },
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/modules/bind/zoneread": {
+      "post": {
+        "tags": [
+          "Modules"
+        ],
+        "summary": "Bind — zoneread",
+        "operationId": "post_modules_bind_zoneread",
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Invalid request or failed operation"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Forbidden"
+          }
+        },
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/modules/bind/zonerecords": {
+      "post": {
+        "tags": [
+          "Modules"
+        ],
+        "summary": "Bind — zonerecords",
+        "operationId": "post_modules_bind_zonerecords",
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Invalid request or failed operation"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Forbidden"
+          }
+        },
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/modules/bind/zonewrite": {
+      "post": {
+        "tags": [
+          "Modules"
+        ],
+        "summary": "Bind — zonewrite",
+        "operationId": "post_modules_bind_zonewrite",
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Invalid request or failed operation"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Forbidden"
+          }
+        },
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/modules/captive/configure": {
+      "post": {
+        "tags": [
+          "Modules"
+        ],
+        "summary": "Captive — configure",
+        "operationId": "post_modules_captive_configure",
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Invalid request or failed operation"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Forbidden"
+          }
+        },
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/modules/captive/service": {
+      "post": {
+        "tags": [
+          "Modules"
+        ],
+        "summary": "Captive — service",
+        "operationId": "post_modules_captive_service",
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Invalid request or failed operation"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Forbidden"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "action": {
+                    "type": "string",
+                    "enum": [
+                      "start",
+                      "stop",
+                      "restart"
+                    ]
+                  }
+                },
+                "required": [
+                  "action"
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
+    "/modules/cloudflared/configure": {
+      "post": {
+        "tags": [
+          "Modules"
+        ],
+        "summary": "Cloudflared — configure",
+        "operationId": "post_modules_cloudflared_configure",
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Invalid request or failed operation"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Forbidden"
+          }
+        },
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/modules/cloudflared/service": {
+      "post": {
+        "tags": [
+          "Modules"
+        ],
+        "summary": "Cloudflared — service",
+        "operationId": "post_modules_cloudflared_service",
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Invalid request or failed operation"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Forbidden"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "action": {
+                    "type": "string",
+                    "enum": [
+                      "start",
+                      "stop",
+                      "restart"
+                    ]
+                  }
+                },
+                "required": [
+                  "action"
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
+    "/modules/crowdsec/configure": {
+      "post": {
+        "tags": [
+          "Modules"
+        ],
+        "summary": "Crowdsec — configure",
+        "operationId": "post_modules_crowdsec_configure",
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Invalid request or failed operation"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Forbidden"
+          }
+        },
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/modules/crowdsec/decisionssync": {
+      "post": {
+        "tags": [
+          "Modules"
+        ],
+        "summary": "Crowdsec — decisionssync",
+        "operationId": "post_modules_crowdsec_decisionssync",
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Invalid request or failed operation"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Forbidden"
+          }
+        },
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/modules/crowdsec/service": {
+      "post": {
+        "tags": [
+          "Modules"
+        ],
+        "summary": "Crowdsec — service",
+        "operationId": "post_modules_crowdsec_service",
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Invalid request or failed operation"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Forbidden"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "action": {
+                    "type": "string",
+                    "enum": [
+                      "start",
+                      "stop",
+                      "restart"
+                    ]
+                  }
+                },
+                "required": [
+                  "action"
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
+    "/modules/ddns/cfcheck": {
+      "post": {
+        "tags": [
+          "Modules"
+        ],
+        "summary": "Ddns — cfcheck",
+        "operationId": "post_modules_ddns_cfcheck",
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Invalid request or failed operation"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Forbidden"
+          }
+        },
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/modules/ddns/cfconfigure": {
+      "post": {
+        "tags": [
+          "Modules"
+        ],
+        "summary": "Ddns — cfconfigure",
+        "operationId": "post_modules_ddns_cfconfigure",
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Invalid request or failed operation"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Forbidden"
+          }
+        },
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/modules/ddns/cfupdate": {
+      "post": {
+        "tags": [
+          "Modules"
+        ],
+        "summary": "Ddns — cfupdate",
+        "operationId": "post_modules_ddns_cfupdate",
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Invalid request or failed operation"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Forbidden"
+          }
+        },
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/modules/ddns/configure": {
+      "post": {
+        "tags": [
+          "Modules"
+        ],
+        "summary": "Ddns — configure",
+        "operationId": "post_modules_ddns_configure",
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Invalid request or failed operation"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Forbidden"
+          }
+        },
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/modules/ddns/force": {
+      "post": {
+        "tags": [
+          "Modules"
+        ],
+        "summary": "Ddns — force",
+        "operationId": "post_modules_ddns_force",
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Invalid request or failed operation"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Forbidden"
+          }
+        },
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/modules/ddns/service": {
+      "post": {
+        "tags": [
+          "Modules"
+        ],
+        "summary": "Ddns — service",
+        "operationId": "post_modules_ddns_service",
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Invalid request or failed operation"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Forbidden"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "action": {
+                    "type": "string",
+                    "enum": [
+                      "start",
+                      "stop",
+                      "restart"
+                    ]
+                  }
+                },
+                "required": [
+                  "action"
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
+    "/modules/frr/configure": {
+      "post": {
+        "tags": [
+          "Modules"
+        ],
+        "summary": "Frr — configure",
+        "operationId": "post_modules_frr_configure",
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Invalid request or failed operation"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Forbidden"
+          }
+        },
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/modules/frr/service": {
+      "post": {
+        "tags": [
+          "Modules"
+        ],
+        "summary": "Frr — service",
+        "operationId": "post_modules_frr_service",
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Invalid request or failed operation"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Forbidden"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "action": {
+                    "type": "string",
+                    "enum": [
+                      "start",
+                      "stop",
+                      "restart"
+                    ]
+                  }
+                },
+                "required": [
+                  "action"
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
+    "/modules/geoip/configure": {
+      "post": {
+        "tags": [
+          "Modules"
+        ],
+        "summary": "Geoip — configure",
+        "operationId": "post_modules_geoip_configure",
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Invalid request or failed operation"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Forbidden"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "countries": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "pattern": "^[a-z]{2}$"
+                    }
+                  },
+                  "enabled": {
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "countries"
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
+    "/modules/geoip/refresh": {
+      "post": {
+        "tags": [
+          "Modules"
+        ],
+        "summary": "Geoip — refresh",
+        "operationId": "post_modules_geoip_refresh",
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Invalid request or failed operation"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Forbidden"
+          }
+        },
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/modules/geoip/service": {
+      "post": {
+        "tags": [
+          "Modules"
+        ],
+        "summary": "Geoip — service",
+        "operationId": "post_modules_geoip_service",
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Invalid request or failed operation"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Forbidden"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "action": {
+                    "type": "string",
+                    "enum": [
+                      "start",
+                      "stop",
+                      "restart"
+                    ]
+                  }
+                },
+                "required": [
+                  "action"
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
+    "/modules/ipsec/service": {
+      "post": {
+        "tags": [
+          "Modules"
+        ],
+        "summary": "Ipsec — service",
+        "operationId": "post_modules_ipsec_service",
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Invalid request or failed operation"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Forbidden"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "action": {
+                    "type": "string",
+                    "enum": [
+                      "start",
+                      "stop",
+                      "restart"
+                    ]
+                  }
+                },
+                "required": [
+                  "action"
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
+    "/modules/ipsec/tunneldelete": {
+      "post": {
+        "tags": [
+          "Modules"
+        ],
+        "summary": "Ipsec — tunneldelete",
+        "operationId": "post_modules_ipsec_tunneldelete",
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Invalid request or failed operation"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Forbidden"
+          }
+        },
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/modules/ipsec/tunnelset": {
+      "post": {
+        "tags": [
+          "Modules"
+        ],
+        "summary": "Ipsec — tunnelset",
+        "operationId": "post_modules_ipsec_tunnelset",
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Invalid request or failed operation"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Forbidden"
+          }
+        },
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/modules/ipsec/tunnelstart": {
+      "post": {
+        "tags": [
+          "Modules"
+        ],
+        "summary": "Ipsec — tunnelstart",
+        "operationId": "post_modules_ipsec_tunnelstart",
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Invalid request or failed operation"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Forbidden"
+          }
+        },
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/modules/ipsec/tunnelstop": {
+      "post": {
+        "tags": [
+          "Modules"
+        ],
+        "summary": "Ipsec — tunnelstop",
+        "operationId": "post_modules_ipsec_tunnelstop",
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Invalid request or failed operation"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Forbidden"
+          }
+        },
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/modules/mdns/configure": {
+      "post": {
+        "tags": [
+          "Modules"
+        ],
+        "summary": "Mdns — configure",
+        "operationId": "post_modules_mdns_configure",
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Invalid request or failed operation"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Forbidden"
+          }
+        },
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/modules/mdns/service": {
+      "post": {
+        "tags": [
+          "Modules"
+        ],
+        "summary": "Mdns — service",
+        "operationId": "post_modules_mdns_service",
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Invalid request or failed operation"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Forbidden"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "action": {
+                    "type": "string",
+                    "enum": [
+                      "start",
+                      "stop",
+                      "restart"
+                    ]
+                  }
+                },
+                "required": [
+                  "action"
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
+    "/modules/multiwan/configure": {
+      "post": {
+        "tags": [
+          "Modules"
+        ],
+        "summary": "Multiwan — configure",
+        "operationId": "post_modules_multiwan_configure",
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Invalid request or failed operation"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Forbidden"
+          }
+        },
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/modules/multiwan/service": {
+      "post": {
+        "tags": [
+          "Modules"
+        ],
+        "summary": "Multiwan — service",
+        "operationId": "post_modules_multiwan_service",
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Invalid request or failed operation"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Forbidden"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "action": {
+                    "type": "string",
+                    "enum": [
+                      "start",
+                      "stop",
+                      "restart"
+                    ]
+                  }
+                },
+                "required": [
+                  "action"
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
+    "/modules/openvpn/clientadd": {
+      "post": {
+        "tags": [
+          "Modules"
+        ],
+        "summary": "Openvpn — clientadd",
+        "operationId": "post_modules_openvpn_clientadd",
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Invalid request or failed operation"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Forbidden"
+          }
+        },
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/modules/openvpn/clientrevoke": {
+      "post": {
+        "tags": [
+          "Modules"
+        ],
+        "summary": "Openvpn — clientrevoke",
+        "operationId": "post_modules_openvpn_clientrevoke",
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Invalid request or failed operation"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Forbidden"
+          }
+        },
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/modules/openvpn/instanceadd": {
+      "post": {
+        "tags": [
+          "Modules"
+        ],
+        "summary": "Openvpn — instanceadd",
+        "operationId": "post_modules_openvpn_instanceadd",
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Invalid request or failed operation"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Forbidden"
+          }
+        },
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/modules/openvpn/instancedelete": {
+      "post": {
+        "tags": [
+          "Modules"
+        ],
+        "summary": "Openvpn — instancedelete",
+        "operationId": "post_modules_openvpn_instancedelete",
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Invalid request or failed operation"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Forbidden"
+          }
+        },
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/modules/openvpn/instanceservice": {
+      "post": {
+        "tags": [
+          "Modules"
+        ],
+        "summary": "Openvpn — instanceservice",
+        "operationId": "post_modules_openvpn_instanceservice",
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Invalid request or failed operation"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Forbidden"
+          }
+        },
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/modules/openvpn/profile": {
+      "post": {
+        "tags": [
+          "Modules"
+        ],
+        "summary": "Openvpn — profile",
+        "operationId": "post_modules_openvpn_profile",
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Invalid request or failed operation"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Forbidden"
+          }
+        },
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/modules/openvpn/server": {
+      "post": {
+        "tags": [
+          "Modules"
+        ],
+        "summary": "Openvpn — server",
+        "operationId": "post_modules_openvpn_server",
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Invalid request or failed operation"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Forbidden"
+          }
+        },
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/modules/openvpn/service": {
+      "post": {
+        "tags": [
+          "Modules"
+        ],
+        "summary": "Openvpn — service",
+        "operationId": "post_modules_openvpn_service",
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Invalid request or failed operation"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Forbidden"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "action": {
+                    "type": "string",
+                    "enum": [
+                      "start",
+                      "stop",
+                      "restart"
+                    ]
+                  }
+                },
+                "required": [
+                  "action"
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
+    "/modules/openvpn/sitepeeradd": {
+      "post": {
+        "tags": [
+          "Modules"
+        ],
+        "summary": "Openvpn — sitepeeradd",
+        "operationId": "post_modules_openvpn_sitepeeradd",
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Invalid request or failed operation"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Forbidden"
+          }
+        },
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/modules/openvpn/sitepeerdelete": {
+      "post": {
+        "tags": [
+          "Modules"
+        ],
+        "summary": "Openvpn — sitepeerdelete",
+        "operationId": "post_modules_openvpn_sitepeerdelete",
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Invalid request or failed operation"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Forbidden"
+          }
+        },
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/modules/suricata/configure": {
+      "post": {
+        "tags": [
+          "Modules"
+        ],
+        "summary": "Suricata — configure",
+        "operationId": "post_modules_suricata_configure",
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Invalid request or failed operation"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Forbidden"
+          }
+        },
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/modules/suricata/ruleenable": {
+      "post": {
+        "tags": [
+          "Modules"
+        ],
+        "summary": "Suricata — ruleenable",
+        "operationId": "post_modules_suricata_ruleenable",
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Invalid request or failed operation"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Forbidden"
+          }
+        },
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/modules/suricata/rulesexport": {
+      "post": {
+        "tags": [
+          "Modules"
+        ],
+        "summary": "Suricata — rulesexport",
+        "operationId": "post_modules_suricata_rulesexport",
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Invalid request or failed operation"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Forbidden"
+          }
+        },
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/modules/suricata/rulesupdate": {
+      "post": {
+        "tags": [
+          "Modules"
+        ],
+        "summary": "Suricata — rulesupdate",
+        "operationId": "post_modules_suricata_rulesupdate",
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Invalid request or failed operation"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Forbidden"
+          }
+        },
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/modules/suricata/rulesupload": {
+      "post": {
+        "tags": [
+          "Modules"
+        ],
+        "summary": "Suricata — rulesupload",
+        "operationId": "post_modules_suricata_rulesupload",
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Invalid request or failed operation"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Forbidden"
+          }
+        },
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/modules/suricata/service": {
+      "post": {
+        "tags": [
+          "Modules"
+        ],
+        "summary": "Suricata — service",
+        "operationId": "post_modules_suricata_service",
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Invalid request or failed operation"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Forbidden"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "action": {
+                    "type": "string",
+                    "enum": [
+                      "start",
+                      "stop",
+                      "restart"
+                    ]
+                  }
+                },
+                "required": [
+                  "action"
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
+    "/modules/suricata/sourceenable": {
+      "post": {
+        "tags": [
+          "Modules"
+        ],
+        "summary": "Suricata — sourceenable",
+        "operationId": "post_modules_suricata_sourceenable",
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Invalid request or failed operation"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Forbidden"
+          }
+        },
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/modules/suricata/sourcerefresh": {
+      "post": {
+        "tags": [
+          "Modules"
+        ],
+        "summary": "Suricata — sourcerefresh",
+        "operationId": "post_modules_suricata_sourcerefresh",
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Invalid request or failed operation"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Forbidden"
+          }
+        },
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/modules/suricata/sourceremove": {
+      "post": {
+        "tags": [
+          "Modules"
+        ],
+        "summary": "Suricata — sourceremove",
+        "operationId": "post_modules_suricata_sourceremove",
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Invalid request or failed operation"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Forbidden"
+          }
+        },
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/modules/suricata/sourceset": {
+      "post": {
+        "tags": [
+          "Modules"
+        ],
+        "summary": "Suricata — sourceset",
+        "operationId": "post_modules_suricata_sourceset",
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Invalid request or failed operation"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Forbidden"
+          }
+        },
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/modules/wireguard/clientprofile": {
+      "post": {
+        "tags": [
+          "Modules"
+        ],
+        "summary": "Wireguard — clientprofile",
+        "operationId": "post_modules_wireguard_clientprofile",
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Invalid request or failed operation"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Forbidden"
+          }
+        },
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/modules/wireguard/configure": {
+      "post": {
+        "tags": [
+          "Modules"
+        ],
+        "summary": "Wireguard — configure",
+        "operationId": "post_modules_wireguard_configure",
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Invalid request or failed operation"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Forbidden"
+          }
+        },
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/modules/wireguard/peerenable": {
+      "post": {
+        "tags": [
+          "Modules"
+        ],
+        "summary": "Wireguard — peerenable",
+        "operationId": "post_modules_wireguard_peerenable",
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Invalid request or failed operation"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Forbidden"
+          }
+        },
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/modules/wireguard/peerremove": {
+      "post": {
+        "tags": [
+          "Modules"
+        ],
+        "summary": "Wireguard — peerremove",
+        "operationId": "post_modules_wireguard_peerremove",
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Invalid request or failed operation"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Forbidden"
+          }
+        },
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/modules/wireguard/peerset": {
+      "post": {
+        "tags": [
+          "Modules"
+        ],
+        "summary": "Wireguard — peerset",
+        "operationId": "post_modules_wireguard_peerset",
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Invalid request or failed operation"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Forbidden"
+          }
+        },
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/modules/wireguard/service": {
+      "post": {
+        "tags": [
+          "Modules"
+        ],
+        "summary": "Wireguard — service",
+        "operationId": "post_modules_wireguard_service",
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Invalid request or failed operation"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Forbidden"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "action": {
+                    "type": "string",
+                    "enum": [
+                      "start",
+                      "stop",
+                      "restart"
+                    ]
+                  }
+                },
+                "required": [
+                  "action"
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
+    "/modules/{id}": {
+      "get": {
+        "tags": [
+          "Modules"
+        ],
+        "summary": "Specific module and configuration",
+        "operationId": "get_modules_id",
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Invalid request or failed operation"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Forbidden"
+          }
+        }
+      }
+    },
+    "/modules/{id}/install": {
+      "post": {
+        "tags": [
+          "Modules"
+        ],
+        "summary": "Install an optional module",
+        "operationId": "post_modules_id_install",
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Invalid request or failed operation"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Forbidden"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {},
+                "required": []
+              }
+            }
+          }
+        }
+      }
+    },
+    "/modules/{id}/remove": {
+      "post": {
+        "tags": [
+          "Modules"
+        ],
+        "summary": "Remove an optional module",
+        "operationId": "post_modules_id_remove",
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Invalid request or failed operation"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Forbidden"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {},
+                "required": []
+              }
+            }
+          }
+        }
+      }
+    },
+    "/op/{operation}": {
+      "post": {
+        "tags": [
+          "Compatibility"
+        ],
+        "summary": "Legacy operation dispatcher",
+        "operationId": "post_op_operation",
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Invalid request or failed operation"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Forbidden"
+          }
+        },
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/overview": {
+      "get": {
+        "tags": [
+          "Dashboard"
+        ],
+        "summary": "Appliance summary",
+        "operationId": "get_overview",
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Invalid request or failed operation"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Forbidden"
+          }
+        }
+      }
+    },
+    "/port-forwards": {
+      "get": {
+        "tags": [
+          "Firewall"
+        ],
+        "summary": "Port forwards",
+        "operationId": "get_port_forwards",
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Invalid request or failed operation"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Forbidden"
+          }
+        }
+      }
+    },
+    "/port-forwards/add": {
+      "post": {
+        "tags": [
+          "Firewall"
+        ],
+        "summary": "Create port forward",
+        "operationId": "post_port_forwards_add",
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Invalid request or failed operation"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Forbidden"
+          }
+        },
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/port-forwards/delete": {
+      "post": {
+        "tags": [
+          "Firewall"
+        ],
+        "summary": "Delete port forward",
+        "operationId": "post_port_forwards_delete",
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Invalid request or failed operation"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Forbidden"
+          }
+        },
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/port-forwards/update": {
+      "post": {
+        "tags": [
+          "Firewall"
+        ],
+        "summary": "Update port forward",
+        "operationId": "post_port_forwards_update",
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Invalid request or failed operation"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Forbidden"
+          }
+        },
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/segments": {
+      "get": {
+        "tags": [
+          "Networking"
+        ],
+        "summary": "Network segments and DHCP state",
+        "operationId": "get_segments",
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Invalid request or failed operation"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Forbidden"
+          }
+        }
+      }
+    },
+    "/segments/set": {
+      "post": {
+        "tags": [
+          "Networking"
+        ],
+        "summary": "Configure network segments",
+        "operationId": "post_segments_set",
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Invalid request or failed operation"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Forbidden"
+          }
+        },
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/state": {
+      "get": {
+        "tags": [
+          "Compatibility"
+        ],
+        "summary": "Legacy combined state snapshot",
+        "operationId": "get_state",
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Invalid request or failed operation"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Forbidden"
+          }
+        }
+      }
+    },
+    "/system": {
+      "get": {
+        "tags": [
+          "System"
+        ],
+        "summary": "Appliance settings and status",
+        "operationId": "get_system",
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Invalid request or failed operation"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Forbidden"
+          }
+        }
+      }
+    },
+    "/system/api-keys": {
+      "get": {
+        "tags": [
+          "Authentication"
+        ],
+        "summary": "List API key metadata (no secret material)",
+        "operationId": "get_system_api_keys",
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Invalid request or failed operation"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Forbidden"
+          }
+        },
+        "security": [
+          {
+            "basicAuth": []
+          }
+        ]
+      }
+    },
+    "/system/api-keys/create": {
+      "post": {
+        "tags": [
+          "Authentication"
+        ],
+        "summary": "Create an API key (secret displayed once; Basic only)",
+        "operationId": "post_system_api_keys_create",
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Invalid request or failed operation"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Forbidden"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 64
+                  },
+                  "scope": {
+                    "type": "string",
+                    "enum": [
+                      "read",
+                      "admin"
+                    ],
+                    "default": "read"
+                  },
+                  "expiresInDays": {
+                    "type": "integer",
+                    "enum": [
+                      0,
+                      7,
+                      30,
+                      90,
+                      365
+                    ],
+                    "default": 90
+                  }
+                },
+                "required": [
+                  "name"
+                ]
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "basicAuth": []
+          }
+        ]
+      }
+    },
+    "/system/api-keys/revoke": {
+      "post": {
+        "tags": [
+          "Authentication"
+        ],
+        "summary": "Revoke an API key immediately (Basic only)",
+        "operationId": "post_system_api_keys_revoke",
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Invalid request or failed operation"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Forbidden"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "id": {
+                    "type": "string",
+                    "pattern": "^[0-9a-f]{20}$"
+                  }
+                },
+                "required": [
+                  "id"
+                ]
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "basicAuth": []
+          }
+        ]
+      }
+    },
+    "/system/diagnostics/lookup": {
+      "post": {
+        "tags": [
+          "System"
+        ],
+        "summary": "DNS lookup",
+        "operationId": "post_system_diagnostics_lookup",
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Invalid request or failed operation"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Forbidden"
+          }
+        },
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/system/diagnostics/ping": {
+      "post": {
+        "tags": [
+          "System"
+        ],
+        "summary": "Ping test",
+        "operationId": "post_system_diagnostics_ping",
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Invalid request or failed operation"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Forbidden"
+          }
+        },
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/system/logging": {
+      "post": {
+        "tags": [
+          "System"
+        ],
+        "summary": "Configure logging",
+        "operationId": "post_system_logging",
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Invalid request or failed operation"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Forbidden"
+          }
+        },
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/system/management": {
+      "post": {
+        "tags": [
+          "System"
+        ],
+        "summary": "Configure management access (Basic credentials only)",
+        "operationId": "post_system_management",
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Invalid request or failed operation"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Forbidden"
+          }
+        },
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "basicAuth": []
+          }
+        ]
+      }
+    },
+    "/system/packages/check": {
+      "post": {
+        "tags": [
+          "System"
+        ],
+        "summary": "Check Alpine package updates",
+        "operationId": "post_system_packages_check",
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Invalid request or failed operation"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Forbidden"
+          }
+        },
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/system/packages/upgrade": {
+      "post": {
+        "tags": [
+          "System"
+        ],
+        "summary": "Upgrade Alpine packages",
+        "operationId": "post_system_packages_upgrade",
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Invalid request or failed operation"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Forbidden"
+          }
+        },
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/system/password": {
+      "post": {
+        "tags": [
+          "Authentication"
+        ],
+        "summary": "Change administrator password (Basic credentials only)",
+        "operationId": "post_system_password",
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Invalid request or failed operation"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Forbidden"
+          }
+        },
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "basicAuth": []
+          }
+        ]
+      }
+    },
+    "/system/set": {
+      "post": {
+        "tags": [
+          "System"
+        ],
+        "summary": "Change general system settings",
+        "operationId": "post_system_set",
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Invalid request or failed operation"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Forbidden"
+          }
+        },
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/system/telemetry": {
+      "post": {
+        "tags": [
+          "Telemetry"
+        ],
+        "summary": "Configure telemetry exporters",
+        "operationId": "post_system_telemetry",
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Invalid request or failed operation"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Forbidden"
+          }
+        },
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/system/updates/check": {
+      "post": {
+        "tags": [
+          "System"
+        ],
+        "summary": "Check LiteFW releases",
+        "operationId": "post_system_updates_check",
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Invalid request or failed operation"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Forbidden"
+          }
+        },
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/system/updates/install": {
+      "post": {
+        "tags": [
+          "System"
+        ],
+        "summary": "Install verified LiteFW runtime release",
+        "operationId": "post_system_updates_install",
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Invalid request or failed operation"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Forbidden"
+          }
+        },
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/system/updates/upload": {
+      "post": {
+        "tags": [
+          "System"
+        ],
+        "summary": "Upload runtime bundle",
+        "operationId": "post_system_updates_upload",
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Invalid request or failed operation"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Forbidden"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/octet-stream": {
+              "schema": {
+                "type": "string",
+                "format": "binary"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/telemetry": {
+      "get": {
+        "tags": [
+          "Telemetry"
+        ],
+        "summary": "Telemetry exporter settings",
+        "operationId": "get_telemetry",
+        "responses": {
+          "200": {
+            "description": "Successful response"
+          },
+          "400": {
+            "description": "Invalid request or failed operation"
+          },
+          "401": {
+            "description": "Authentication required"
+          },
+          "403": {
+            "description": "Forbidden"
+          }
+        }
+      }
+    },
+    "/telemetry/metrics": {
+      "get": {
+        "tags": [
+          "Telemetry"
+        ],
+        "summary": "Prometheus text metrics",
+        "operationId": "get_telemetry_metrics",
+        "responses": {
+          "200": {
+            "description": "Prometheus metrics",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

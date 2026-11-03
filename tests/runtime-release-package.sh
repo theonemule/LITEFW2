@@ -6,6 +6,10 @@ trap 'rm -rf "$stage"' EXIT HUP INT TERM
 ./tools/package-runtime-upgrade.sh "$stage"
 ver=$(cat VERSION)
 bundle="$stage/litefw2-$ver-runtime.tar.gz"
+cli="$stage/litefw-$ver-cli.sh"
+[ -x "$cli" ]
+grep -Fq 'print_api_catalog()' "$cli"
+
 [ -s "$bundle" ] && [ "$(wc -c <"$bundle")" -le 4194304 ]
 (cd "$stage" && sha256sum -c SHA256SUMS)
 tar -tzf "$bundle" | grep -Fxq 'modules/manifest.json'

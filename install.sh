@@ -71,6 +71,7 @@ echo "==> files"
 install -d -m 0755 /usr/lib/litefwm /usr/lib/litefwm/cgi /usr/lib/litefwm/modules /usr/share/litefwm/www /etc/litefwm \
   /etc/dnsmasq.d /etc/dnsmasq.hosts.d /etc/iptables /var/lib/misc
 install -m 0755 "$BASE/bin/lfwctl" /usr/sbin/lfwctl
+install -m 0755 "$BASE/bin/litefw" /usr/bin/litefw
 install -m 0755 "$BASE/bin/lfw-setup" /usr/sbin/lfw-setup
 install -m 0755 "$BASE/bin/litefw-web-bind" /usr/sbin/litefw-web-bind
 install -m 0644 "$BASE"/lib/*.sh "$BASE"/lib/*.jq "$BASE"/lib/*.awk /usr/lib/litefwm/

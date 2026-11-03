@@ -13,6 +13,8 @@ rc_add() {
   ln -sf "/etc/init.d/$1" "$tmp/etc/runlevels/$2/$1"
 }
 
+install -d "$tmp/usr/bin"
+install -m 0755 "$src/bin/litefw" "$tmp/usr/bin/litefw"
 install -d   "$tmp/usr/sbin" "$tmp/usr/lib/litefwm" "$tmp/usr/lib/litefwm/cgi"   "$tmp/usr/lib/litefwm/modules" "$tmp/usr/share/litefwm/www"   "$tmp/usr/local/sbin" "$tmp/etc/apk/protected_paths.d" "$tmp/etc/litefwm"   "$tmp/etc/network" "$tmp/etc/dnsmasq.d" "$tmp/etc/dnsmasq.hosts.d"   "$tmp/etc/iptables" "$tmp/etc/lighttpd" "$tmp/etc/sudoers.d"   "$tmp/etc/sysctl.d" "$tmp/etc/init.d" "$tmp/etc/conf.d"   "$tmp/var/lib/misc" "$tmp/var/log/lighttpd" "$tmp/root"
 
 # LiteFWM CLI and runtime library.

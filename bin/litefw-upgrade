@@ -68,7 +68,11 @@ tar -C / -czf "$config" etc/dnsmasq.conf etc/dnsmasq.d \
 
 # Runtime files only. Never call the disk installer or network/DHCP mutation APIs.
 for file in "$stage"/bin/*; do
-  [ -f "$file" ] && install -m 0755 "$file" "/usr/sbin/$(basename "$file")"
+  [ -f "$file" ] || continue
+  case "$file" in
+    */litefw) install -m 0755 "$file" /usr/bin/litefw;;
+    *) install -m 0755 "$file" "/usr/sbin/$(basename "$file")";;
+  esac
 done
 install -d -m 0755 /usr/lib/litefwm/cgi /usr/lib/litefwm/modules /usr/share/litefwm/www
 for file in "$stage"/lib/*; do

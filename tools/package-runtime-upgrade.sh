@@ -27,6 +27,8 @@ tar -czf "$stage" -C "$src" VERSION bin lib modules cgi www
 tar -tzf "$stage" | grep -Fxq 'modules/manifest.json'
 mv "$stage" "$out/$bundle"
 trap - EXIT HUP INT TERM
-(cd "$out" && sha256sum "$bundle" > SHA256SUMS)
+cli="litefw-$version-cli.sh"
+install -m 0755 "$src/bin/litefw" "$out/$cli"
+(cd "$out" && sha256sum "$bundle" "$cli" > SHA256SUMS)
 printf 'Version: %s\nArchive: %s\nSHA256: %s\n' \
   "$version" "$out/$bundle" "$(sha256sum "$out/$bundle" | awk '{print $1}')"

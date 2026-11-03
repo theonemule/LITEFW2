@@ -35,7 +35,8 @@ const emptyState = () => ({
   firewall: { policies: {}, rules: [], forwards: [], masquerade: [] },
   dhcp: { leases: [], reservations: [] },
   dns: { domain: '', upstream: [], hosts: [] },
-  modules: []
+  modules: [],
+  apiKeys: []
 });
 let S = emptyState();
 let loadGeneration = 0;
@@ -53,7 +54,7 @@ const VIEW_APIS = {
   'module-openvpn': ['segments', 'system', 'modules/openvpn'],
   'module-ipsec': ['segments', 'system', 'modules/ipsec'],
   firewall: ['firewall', 'port-forwards', 'segments', 'dhcp', 'system'],
-  system: ['system', 'segments']
+  system: ['system', 'segments', 'system/api-keys']
 };
 
 function activeView() {
@@ -69,6 +70,7 @@ async function getResource(path) {
 }
 function mergeState(dst, src, replaceModules = false) {
   if (src.system) dst.system = src.system;
+  if (src.apiKeys) dst.apiKeys = src.apiKeys;
   if (src.interfaces) dst.interfaces = src.interfaces;
   if (src.firewall) dst.firewall = Object.assign({}, dst.firewall, src.firewall);
   if (src.dhcp) dst.dhcp = Object.assign({}, dst.dhcp, src.dhcp);
@@ -1757,6 +1759,65 @@ function alpinePackagesPanel() {
       results));
 }
 
+// API keys are managed only with the browser's Basic-authenticated session.
+function apiKeysPanel() {
+  const keys = S.apiKeys || [];
+  const reveal = key => {
+    $('#dlgTitle').textContent = 'Copy your new API key';
+    const secret = h('input', {class:'form-control mono', readonly:'', type:'text'});
+    secret.value = key;
+    const copy = btn('Copy API key', async () => {
+      try {
+        if (navigator.clipboard && window.isSecureContext) await navigator.clipboard.writeText(key);
+        else { secret.select(); if (!document.execCommand('copy')) throw new Error('Copy unavailable'); }
+        toast('Key copied', 'success');
+      } catch { secret.select(); toast('Select and copy the key manually', 'warning'); }
+    }, 'btn-primary');
+    $('#dlgBody').replaceChildren(
+      h('div',{class:'alert alert-warning small'},
+        'This secret is displayed only once. Save it securely. Read-only keys cannot change firewall settings.'),
+      h('label',{class:'form-label fw-semibold'},'API key'),secret,
+      h('div',{class:'mt-2'},copy));
+    $('#dlgApply').classList.add('d-none');
+    dlgApply = null;
+  };
+  const create = () => form('Create API key', [
+    {k:'name',label:'Key name',placeholder:'Monitoring automation'},
+    {k:'scope',label:'Permissions',type:'select',value:'read',options:[
+      ['read','Read only (recommended)'],['admin','Administrator: API configuration changes']]},
+    {k:'expiresInDays',label:'Expires after',type:'select',value:'90',
+      options:[['7','7 days'],['30','30 days'],['90','90 days (recommended)'],['365','365 days'],['0','Never (use cautiously)']]}
+  ], async v => {
+    const j = await op('apikey.create',{name:v.name,scope:v.scope,expiresInDays:Number(v.expiresInDays)});
+    // Never make another network request before showing this one-time secret:
+    // first-key creation may restart Lighttpd for the Basic/API-key migration.
+    reveal(j.result.key);
+    return KEEP;
+  },{note:'API keys are administrative credentials. This interface is LAN-only; use HTTPS or a trusted encrypted tunnel for automation. The key cannot be viewed again.'});
+  const showDate = t => t == null ? 'Never' : new Date(t*1000).toLocaleDateString();
+  return card('API keys',[
+    btn('Create API key',create,'btn-primary')
+  ],h('div',{class:'card-body'},
+    h('p',{class:'small text-secondary'},'Use a key with X-API-Key on the JSON API, or continue using Basic credentials. Keys can be revoked immediately.'),
+    h('p',{class:'small mb-2'},h('a',{href:'/docs/index.html',target:'_blank',rel:'noopener'},'Documentation'),' · ',
+      h('a',{href:'/docs/api.html',target:'_blank',rel:'noopener'},'API reference'),' · ',
+      h('a',{href:'/docs/cli.html',target:'_blank',rel:'noopener'},'CLI manual')),
+    table(['Name','Permissions','Expires','Action'],keys.map(k=>h('tr',{},
+      h('td',{},h('strong',{},k.name),h('div',{class:'small text-secondary mono'},k.id)),
+      h('td',{},badge(k.scope === 'read' ? 'Read only':'Admin',k.scope==='read'?'text-bg-secondary':'text-bg-warning')),
+      h('td',{},k.expired?'Expired':showDate(k.expiresAt)),
+      h('td',{},btn('Revoke',()=>confirmDo('Revoke API key','Immediately revoke '+k.name+'? Any integrations using this key will stop working.',
+        ()=>apply('apikey.revoke',{id:k.id},'Key revoked'),'Revoke key'),'btn-outline-danger')))),
+      'No API keys have been created yet.')));
+}
+$('#dlg').addEventListener('hidden.bs.modal', () => {
+  if ($('#dlgTitle').textContent === 'Copy your new API key') {
+    $('#dlgBody').replaceChildren();
+    dlgApply = null;
+    load();
+  }
+});
+
 // ---------- system
 views.system = () => {
   const s = S.system, m = s.management;
@@ -1798,7 +1859,7 @@ views.system = () => {
       card('Admin password', [btn('Change', () => form('Change password', [
         { k: 'user', label: 'User', value: 'admin' }, { k: 'password', label: 'New password', type: 'password', help: 'At least 8 characters.' }
       ], v => apply('password.set', v, 'Password changed')))], h('div', { class: 'card-body small text-secondary' }, 'The browser will ask for the new password on the next request.'))),
-    h('div', { class: 'col-lg-6' }, updatesPanel(), alpinePackagesPanel(), card('Diagnostics', null, h('div', { class: 'card-body' },
+    h('div', { class: 'col-lg-6' }, apiKeysPanel(), updatesPanel(), alpinePackagesPanel(), card('Diagnostics', null, h('div', { class: 'card-body' },
       h('div', { class: 'input-group mb-2' }, host, btn('Ping', () => diag('ping'), 'btn-outline-primary'), btn('DNS lookup', () => diag('lookup'), 'btn-outline-primary')), out))));
 };
 

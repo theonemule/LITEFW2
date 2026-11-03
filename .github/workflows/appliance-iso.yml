@@ -43,6 +43,9 @@ jobs:
           ./tests/dns-provider-presets.sh
           ./tests/module-contract-test.sh
           ./tests/addons-contract-test.sh
+          ./tests/api-keys-integration.sh
+          python3 tools/render-api-docs.py --check
+          sh -n bin/litefw
           ./tests/modules-ux-integration.sh
           ./tests/vendor-install-alpine.sh
           python3 -m py_compile modules/shared/suricata-rules.py modules/shared/wireguard-peers.py
@@ -88,7 +91,8 @@ jobs:
           mv "${images[0]}" "dist/litefw2-$(cat VERSION)-alpine3.24-x86_64.iso"
           xorriso -indev dist/*.iso -report_el_torito plain
           tar -czf "dist/litefw2-$(cat VERSION)-runtime.tar.gz" VERSION bin lib modules cgi www
-          (cd dist && sha256sum *.iso *.tar.gz > SHA256SUMS)
+          install -m 0755 bin/litefw "dist/litefw-$(cat VERSION)-cli.sh"
+          (cd dist && sha256sum *.iso *.tar.gz *-cli.sh > SHA256SUMS)
       - name: Offline installation smoke test
         env:
           LITEFWM_OFFLINE_WORK: ${{ runner.temp }}/litefw2-offline
@@ -111,6 +115,7 @@ jobs:
           path: |
             dist/*.iso
             dist/*.tar.gz
+            dist/*-cli.sh
             dist/SHA256SUMS
           if-no-files-found: error
           retention-days: 30
@@ -140,7 +145,7 @@ jobs:
               gh release download "$tag" --pattern "$bundle" --dir "$RUNNER_TEMP/litefw-runtime-release"
               cp "$RUNNER_TEMP/litefw-runtime-release/$bundle" "dist/$bundle"
             fi
-            (cd dist && sha256sum *.iso *.tar.gz > SHA256SUMS)
+            (cd dist && sha256sum *.iso *.tar.gz *-cli.sh > SHA256SUMS)
             if gh release view "$tag" --json assets --jq '.assets[].name' |
                grep -Fxq "litefw2-$(cat VERSION)-alpine3.24-x86_64.iso"; then
               echo "Release $tag already includes ISO; leaving its assets unchanged."
@@ -151,6 +156,11 @@ jobs:
                grep -Fxq "$bundle"; then
               gh release upload "$tag" "dist/$bundle"
             fi
+            cli="litefw-$(cat VERSION)-cli.sh"
+            if ! gh release view "$tag" --json assets --jq '.assets[].name' |
+               grep -Fxq "$cli"; then
+              gh release upload "$tag" "dist/$cli"
+            fi
             gh release upload "$tag" dist/SHA256SUMS --clobber
             echo "Appended ISO and refreshed checksums for $tag."
             exit 0
@@ -160,7 +170,7 @@ jobs:
               echo "Tag $tag exists without a release; run the workflow on that tag to publish its matching ISO." >&2
               exit 1
             fi
-            gh release create "$tag" dist/*.iso dist/*.tar.gz dist/SHA256SUMS --target "$GITHUB_SHA" --title "LiteFW2 $tag" --notes "Bootable Alpine Linux x86_64 firewall appliance ISO. SHA256SUMS included. New installations use the ISO. Existing appliances may upgrade the application runtime in place using bin/litefw-upgrade and the release runtime bundle; existing configuration is preserved."
+            gh release create "$tag" dist/*.iso dist/*.tar.gz dist/*-cli.sh dist/SHA256SUMS --target "$GITHUB_SHA" --title "LiteFW2 $tag" --notes "Bootable Alpine Linux x86_64 firewall appliance ISO. SHA256SUMS included. New installations use the ISO. Existing appliances may upgrade the application runtime in place using bin/litefw-upgrade and the release runtime bundle; existing configuration is preserved."
           else
-            gh release create "$tag" dist/*.iso dist/*.tar.gz dist/SHA256SUMS --title "LiteFW2 $tag" --notes "Bootable Alpine Linux x86_64 firewall appliance ISO. SHA256SUMS included. New installations use the ISO. Existing appliances may upgrade the application runtime in place using bin/litefw-upgrade and the release runtime bundle; existing configuration is preserved." --verify-tag
+            gh release create "$tag" dist/*.iso dist/*.tar.gz dist/*-cli.sh dist/SHA256SUMS --title "LiteFW2 $tag" --notes "Bootable Alpine Linux x86_64 firewall appliance ISO. SHA256SUMS included. New installations use the ISO. Existing appliances may upgrade the application runtime in place using bin/litefw-upgrade and the release runtime bundle; existing configuration is preserved." --verify-tag
           fi

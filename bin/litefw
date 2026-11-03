@@ -1,0 +1,340 @@
+#!/bin/sh
+# LiteFW standalone API CLI. Needs curl and base64; jq is optional.
+set -eu
+umask 077
+CONFIG_DIR="${XDG_CONFIG_HOME:-${HOME:-/nonexistent}/.config}/litefw"
+CONFIG="$CONFIG_DIR/config"
+tmp=""
+cleanup(){ [ -z "$tmp" ] || rm -rf "$tmp"; }
+trap cleanup EXIT HUP INT TERM
+die(){ printf 'litefw: %s\n' "$*" >&2; exit 1; }
+mktempdir(){ [ -n "$tmp" ] || tmp=$(mktemp -d); }
+read_field(){
+  [ -r "$CONFIG" ] || return 0
+  sed -n "s/^$1=//p" "$CONFIG" | head -1
+}
+read_secret(){
+  prompt=$1
+  if [ -t 0 ]; then
+    printf '%s: ' "$prompt" >&2
+    stty -echo
+    IFS= read -r secret || :
+    stty echo
+    printf '\n' >&2
+  else
+    IFS= read -r secret || :
+  fi
+  [ -n "$secret" ] || die 'Credential must not be empty'
+  printf '%s' "$secret"
+}
+api_request(){
+  method=$1 path=$2 body=${3:-}
+  case "$path" in /api/*) :;; /*) path="/api$path";; *) die 'Use an endpoint starting with /';; esac
+  case "$path" in *'..'*|*'?'*|*'#'*) die 'Invalid endpoint path';; esac
+  url=${LITEFW_URL:-$(read_field url)}
+  mode=${LITEFW_AUTH_MODE:-$(read_field mode)}
+  user=${LITEFW_USER:-$(read_field user)}
+  secret=${LITEFW_API_KEY:-${LITEFW_PASSWORD:-$(read_field secret)}}
+  [ -n "$url" ] && [ -n "$mode" ] && [ -n "$secret" ] || die 'Run litefw login URL --api-key|--basic first'
+  mktempdir
+  header="$tmp/auth"
+  if [ "$mode" = key ]; then
+    printf '%s' "$secret" | grep -Eq '^lfw_sk_[0-9a-f]{64}$' || die 'Malformed API key'
+    printf 'X-API-Key: %s\n' "$secret" >"$header"
+  elif [ "$mode" = basic ]; then
+    [ -n "$user" ] || die 'Basic username missing'
+    encoded=$(printf '%s:%s' "$user" "$secret" | base64 | tr -d '\r\n')
+    printf 'Authorization: Basic %s\n' "$encoded" >"$header"
+    unset encoded
+  else die 'Unknown login mode'; fi
+  chmod 0600 "$header"
+  output="$tmp/response"
+  case "$url" in */) url=${url%/};; esac
+  if [ "$method" = GET ]; then
+    status=$(curl -sS --connect-timeout 8 --max-time 75 -H "@$header" -o "$output" -w '%{http_code}' "$url$path") || die 'Network request failed'
+  elif [ "$method" = POSTBINARY ]; then
+    [ -f "$body" ] && [ ! -L "$body" ] || die 'Upload requires an existing regular file'
+    [ "$(wc -c <"$body")" -le 4194304 ] || die 'Upload exceeds 4 MiB'
+    status=$(curl -sS --connect-timeout 8 --max-time 120 -H "@$header" -H 'X-LiteFWM: 1' \
+      -H 'Content-Type: application/octet-stream' --data-binary "@$body" \
+      -o "$output" -w '%{http_code}' "$url$path") || die 'Network request failed'
+  else
+    request="$tmp/request"
+    case "$body" in
+      @*) [ -f "${body#@}" ] || die 'Payload file not found'; cp "${body#@}" "$request";;
+      -) cat >"$request";;
+      '') echo '{}' >"$request";;
+      *) printf '%s\n' "$body" >"$request";;
+    esac
+    chmod 0600 "$request"
+    status=$(curl -sS --connect-timeout 8 --max-time 90 -H "@$header" -H 'X-LiteFWM: 1' \
+      -H 'Content-Type: application/json' --data-binary "@$request" \
+      -o "$output" -w '%{http_code}' "$url$path") || die 'Network request failed'
+  fi
+  if [ "${SILENT_RESPONSE:-no}" != yes ]; then
+    if command -v jq >/dev/null 2>&1 && jq -e . "$output" >/dev/null 2>&1; then
+      jq . "$output"
+    else cat "$output"; printf '\n'; fi
+  fi
+  case "$status" in 2??) :;; *) die "HTTP $status: request rejected";; esac
+}
+# GENERATED_HELP_START
+print_version(){ printf 'LiteFW standalone CLI %s\n' '2.2.23' ; }
+print_help(){ cat <<'LITEFW_EMBEDDED_MANUAL'
+LiteFW CLI Manual
+
+The standalone litefw script is a POSIX-shell client for LiteFW. It needs
+curl and base64, with optional jq for formatted JSON output.
+
+#Installation and login
+Download litefw from the matching GitHub release and run:
+
+    chmod +x litefw
+    ./litefw login https://firewall.example.net --api-key
+    ./litefw whoami
+    ./litefw get /system
+
+The API key is requested interactively; it is not an argument. To use
+existing Basic credentials instead:
+
+    litefw login https://firewall.example.net --basic admin
+
+For appliances offering only HTTP on a trusted LAN, explicit consent
+is required:
+
+    litefw login http://10.0.1.199 --api-key --allow-http
+
+HTTP is unencrypted. Prefer HTTPS or a VPN when transmitting API keys or passwords.
+
+#Commands
+- litefw login URL --api-key: Prompt for API key and verify authentication.
+- litefw login URL --basic USER: Prompt for Basic password and verify.
+- litefw logout: Delete locally stored credentials.
+- litefw whoami: Read appliance hostname and version.
+- litefw get /RESOURCE: GET any documented resource.
+- litefw post /RESOURCE JSON: POST JSON to a resource.
+- litefw post /RESOURCE @file.json: POST a JSON file.
+- litefw post /RESOURCE -: POST JSON received on stdin.
+- litefw op family.action JSON: Use a compatibility controller operation.
+- litefw module show|install|remove ID: Inspect or manage optional modules.
+- litefw module start|stop|restart ID: Manage module services.
+- litefw upload FILE.tar.gz: Upload a runtime archive using the binary
+  upgrade endpoint; validate it before using on a production firewall.
+- litefw api: List method/path pairs generated from OpenAPI.
+- litefw help: Print this embedded manual and examples.
+
+Local credentials are saved in the user configuration directory, usually
+~/.config/litefw/config, with permissions 0600. Protect this workstation.
+They are never passed as command-line arguments to curl. Use litefw logout
+or revoke the key from the appliance when finished.
+
+#Examples
+
+    litefw get /modules/wireguard
+    litefw module install geoip
+    litefw post /modules/geoip/configure '{"countries":["ru","cn"],"enabled":false}'
+    litefw post /modules/geoip/refresh '{}'
+    litefw op upgrade.check '{}'
+    litefw post /firewall/rules/add @rule.json
+
+#API details
+All endpoints are under /api. GET reads state. POST changes configuration and
+sends Content-Type: application/json and X-LiteFWM: 1. Errors return non-2xx
+HTTP statuses and a JSON error. The CLI exits nonzero on those failures.
+
+Key management endpoints require Basic credentials, even when an API key has
+Administrator permissions. Read-only keys cannot perform POST operations.
+
+See API reference for all operations and the machine-readable
+OpenAPI specification for client generation.
+LITEFW_EMBEDDED_MANUAL
+}
+print_api_catalog(){ cat <<'LITEFW_EMBEDDED_ENDPOINTS'
+GET   /api/dhcp  - DHCP servers, leases and reservations
+POST  /api/dhcp/reservations/add  - Add DHCP reservation
+POST  /api/dhcp/reservations/delete  - Delete DHCP reservation
+POST  /api/dhcp/server/set  - Configure DHCP
+GET   /api/dns  - DNS settings
+POST  /api/dns/set  - Configure DNS
+GET   /api/firewall  - Current managed firewall rules
+POST  /api/firewall/batch  - Stage a firewall ruleset transaction
+POST  /api/firewall/confirm  - Confirm staged firewall rules
+POST  /api/firewall/rules/add  - Add firewall rule
+POST  /api/firewall/rules/delete  - Delete firewall rule
+POST  /api/firewall/rules/move  - Move firewall rule
+POST  /api/firewall/rules/update  - Edit firewall rule
+GET   /api/identity  - Current authenticated API identity
+GET   /api/interfaces  - Interfaces and addresses
+POST  /api/interfaces/bridge/addmember  - Add bridge member
+POST  /api/interfaces/bridge/create  - Create bridge
+POST  /api/interfaces/bridge/delete  - Remove bridge
+POST  /api/interfaces/bridge/delmember  - Remove bridge member
+POST  /api/interfaces/bridge/portvlans  - Configure bridge VLAN memberships
+POST  /api/interfaces/bridge/set  - Update bridge
+POST  /api/interfaces/iface/set  - Change physical interface
+POST  /api/interfaces/vlan/create  - Create VLAN
+POST  /api/interfaces/vlan/delete  - Remove VLAN
+GET   /api/modules  - Optional module catalog and installation status
+POST  /api/modules/bind/recordadd  - Bind — recordadd
+POST  /api/modules/bind/recordchange  - Bind — recordchange
+POST  /api/modules/bind/recorddelete  - Bind — recorddelete
+POST  /api/modules/bind/service  - Bind — service
+POST  /api/modules/bind/settings  - Bind — settings
+POST  /api/modules/bind/zoneadd  - Bind — zoneadd
+POST  /api/modules/bind/zonedelete  - Bind — zonedelete
+POST  /api/modules/bind/zoneread  - Bind — zoneread
+POST  /api/modules/bind/zonerecords  - Bind — zonerecords
+POST  /api/modules/bind/zonewrite  - Bind — zonewrite
+POST  /api/modules/captive/configure  - Captive — configure
+POST  /api/modules/captive/service  - Captive — service
+POST  /api/modules/cloudflared/configure  - Cloudflared — configure
+POST  /api/modules/cloudflared/service  - Cloudflared — service
+POST  /api/modules/crowdsec/configure  - Crowdsec — configure
+POST  /api/modules/crowdsec/decisionssync  - Crowdsec — decisionssync
+POST  /api/modules/crowdsec/service  - Crowdsec — service
+POST  /api/modules/ddns/cfcheck  - Ddns — cfcheck
+POST  /api/modules/ddns/cfconfigure  - Ddns — cfconfigure
+POST  /api/modules/ddns/cfupdate  - Ddns — cfupdate
+POST  /api/modules/ddns/configure  - Ddns — configure
+POST  /api/modules/ddns/force  - Ddns — force
+POST  /api/modules/ddns/service  - Ddns — service
+POST  /api/modules/frr/configure  - Frr — configure
+POST  /api/modules/frr/service  - Frr — service
+POST  /api/modules/geoip/configure  - Geoip — configure
+POST  /api/modules/geoip/refresh  - Geoip — refresh
+POST  /api/modules/geoip/service  - Geoip — service
+POST  /api/modules/ipsec/service  - Ipsec — service
+POST  /api/modules/ipsec/tunneldelete  - Ipsec — tunneldelete
+POST  /api/modules/ipsec/tunnelset  - Ipsec — tunnelset
+POST  /api/modules/ipsec/tunnelstart  - Ipsec — tunnelstart
+POST  /api/modules/ipsec/tunnelstop  - Ipsec — tunnelstop
+POST  /api/modules/mdns/configure  - Mdns — configure
+POST  /api/modules/mdns/service  - Mdns — service
+POST  /api/modules/multiwan/configure  - Multiwan — configure
+POST  /api/modules/multiwan/service  - Multiwan — service
+POST  /api/modules/openvpn/clientadd  - Openvpn — clientadd
+POST  /api/modules/openvpn/clientrevoke  - Openvpn — clientrevoke
+POST  /api/modules/openvpn/instanceadd  - Openvpn — instanceadd
+POST  /api/modules/openvpn/instancedelete  - Openvpn — instancedelete
+POST  /api/modules/openvpn/instanceservice  - Openvpn — instanceservice
+POST  /api/modules/openvpn/profile  - Openvpn — profile
+POST  /api/modules/openvpn/server  - Openvpn — server
+POST  /api/modules/openvpn/service  - Openvpn — service
+POST  /api/modules/openvpn/sitepeeradd  - Openvpn — sitepeeradd
+POST  /api/modules/openvpn/sitepeerdelete  - Openvpn — sitepeerdelete
+POST  /api/modules/suricata/configure  - Suricata — configure
+POST  /api/modules/suricata/ruleenable  - Suricata — ruleenable
+POST  /api/modules/suricata/rulesexport  - Suricata — rulesexport
+POST  /api/modules/suricata/rulesupdate  - Suricata — rulesupdate
+POST  /api/modules/suricata/rulesupload  - Suricata — rulesupload
+POST  /api/modules/suricata/service  - Suricata — service
+POST  /api/modules/suricata/sourceenable  - Suricata — sourceenable
+POST  /api/modules/suricata/sourcerefresh  - Suricata — sourcerefresh
+POST  /api/modules/suricata/sourceremove  - Suricata — sourceremove
+POST  /api/modules/suricata/sourceset  - Suricata — sourceset
+POST  /api/modules/wireguard/clientprofile  - Wireguard — clientprofile
+POST  /api/modules/wireguard/configure  - Wireguard — configure
+POST  /api/modules/wireguard/peerenable  - Wireguard — peerenable
+POST  /api/modules/wireguard/peerremove  - Wireguard — peerremove
+POST  /api/modules/wireguard/peerset  - Wireguard — peerset
+POST  /api/modules/wireguard/service  - Wireguard — service
+GET   /api/modules/{id}  - Specific module and configuration
+POST  /api/modules/{id}/install  - Install an optional module
+POST  /api/modules/{id}/remove  - Remove an optional module
+POST  /api/op/{operation}  - Legacy operation dispatcher
+GET   /api/overview  - Appliance summary
+GET   /api/port-forwards  - Port forwards
+POST  /api/port-forwards/add  - Create port forward
+POST  /api/port-forwards/delete  - Delete port forward
+POST  /api/port-forwards/update  - Update port forward
+GET   /api/segments  - Network segments and DHCP state
+POST  /api/segments/set  - Configure network segments
+GET   /api/state  - Legacy combined state snapshot
+GET   /api/system  - Appliance settings and status
+GET   /api/system/api-keys  - List API key metadata (no secret material)
+POST  /api/system/api-keys/create  - Create an API key (secret displayed once; Basic only)
+POST  /api/system/api-keys/revoke  - Revoke an API key immediately (Basic only)
+POST  /api/system/diagnostics/lookup  - DNS lookup
+POST  /api/system/diagnostics/ping  - Ping test
+POST  /api/system/logging  - Configure logging
+POST  /api/system/management  - Configure management access (Basic credentials only)
+POST  /api/system/packages/check  - Check Alpine package updates
+POST  /api/system/packages/upgrade  - Upgrade Alpine packages
+POST  /api/system/password  - Change administrator password (Basic credentials only)
+POST  /api/system/set  - Change general system settings
+POST  /api/system/telemetry  - Configure telemetry exporters
+POST  /api/system/updates/check  - Check LiteFW releases
+POST  /api/system/updates/install  - Install verified LiteFW runtime release
+POST  /api/system/updates/upload  - Upload runtime bundle
+GET   /api/telemetry  - Telemetry exporter settings
+GET   /api/telemetry/metrics  - Prometheus text metrics
+LITEFW_EMBEDDED_ENDPOINTS
+}
+# GENERATED_HELP_END
+
+action=${1:-help}
+[ "$#" -eq 0 ] || shift
+case "$action" in
+  login)
+    server=${1:-}; [ -n "$server" ] || die 'Usage: litefw login URL --api-key|--basic [user] [--allow-http]'
+    shift
+    mode="" user="" allow_http=no
+    for arg in "$@"; do
+      case "$arg" in
+        --api-key) mode=key;;
+        --basic) mode=basic;;
+        --allow-http) allow_http=yes;;
+        *) [ "$mode" = basic ] && [ -z "$user" ] || die "Unexpected argument: $arg"; user=$arg;;
+      esac
+    done
+    [ -n "$mode" ] || die 'Specify --api-key or --basic'
+    case "$server" in https://*) :;; http://*) [ "$allow_http" = yes ] || die 'HTTP exposes credentials; use HTTPS or explicitly --allow-http on a trusted LAN';; *) die 'URL must be HTTP or HTTPS';; esac
+    case "$server" in *[[:space:]]*|*'@'*|*'?'*|*'#'*) die 'URL must be a base URL without userinfo/query';; esac
+    if [ "$mode" = basic ] && [ -z "$user" ]; then
+      printf 'Username: ' >&2; IFS= read -r user || :
+    fi
+    if [ "$mode" = key ]; then secret=$(read_secret 'API key'); else secret=$(read_secret 'Password'); fi
+    LITEFW_URL="$server"; LITEFW_AUTH_MODE="$mode"; LITEFW_USER="$user"
+    if [ "$mode" = key ]; then LITEFW_API_KEY="$secret"; else LITEFW_PASSWORD="$secret"; fi
+    export LITEFW_URL LITEFW_AUTH_MODE LITEFW_USER LITEFW_API_KEY LITEFW_PASSWORD
+    SILENT_RESPONSE=yes; api_request GET /identity
+    [ ! -L "$CONFIG_DIR" ] && [ ! -L "$CONFIG" ] || die 'Refusing symlinked credentials path'
+    mkdir -p "$CONFIG_DIR"
+    chmod 0700 "$CONFIG_DIR"
+    mktempdir
+    printf 'url=%s\nmode=%s\nuser=%s\nsecret=%s\n' "$server" "$mode" "$user" "$secret" >"$tmp/config"
+    chmod 0600 "$tmp/config"
+    mv "$tmp/config" "$CONFIG"
+    echo "Logged in to $server ($mode). Saved credentials with permissions 0600."
+    ;;
+  logout)
+    [ ! -L "$CONFIG" ] || die 'Refusing symlinked credential file'
+    rm -f "$CONFIG"
+    echo 'Local credentials cleared.'
+    ;;
+  whoami) api_request GET /identity;;
+  get) [ "$#" -eq 1 ] || die 'Usage: litefw get /resource'; api_request GET "$1";;
+  post) [ "$#" -ge 1 ] && [ "$#" -le 2 ] || die 'Usage: litefw post /resource [JSON|@file|-]'; api_request POST "$1" "${2:-}";;
+  op)
+    [ "$#" -ge 1 ] && [ "$#" -le 2 ] || die 'Usage: litefw op family.action [JSON|@file|-]'
+    printf '%s' "$1" | grep -Eq '^[a-z]+\.[a-z]+$' || die 'Invalid operation'
+    api_request POST "/op/$1" "${2:-}";;
+  module)
+    [ "$#" -ge 2 ] || die 'Usage: litefw module show|install|remove|start|stop|restart ID'
+    verb=$1 id=$2
+    printf '%s' "$id" | grep -Eq '^[a-z0-9_-]{1,32}$' || die 'Invalid module ID'
+    case "$verb" in
+      show) api_request GET "/modules/$id";;
+      install|remove) api_request POST "/modules/$id/$verb";;
+      start|stop|restart) api_request POST "/modules/$id/service" "{\"action\":\"$verb\"}";;
+      *) die 'Unknown module action';;
+    esac
+    ;;
+  upload)
+    [ "$#" -eq 1 ] || die 'Usage: litefw upload /path/to/runtime.tar.gz'
+    api_request POSTBINARY /system/updates/upload "$1";;
+  api|endpoints) print_api_catalog;;
+  help|-h|--help) print_help;;
+  --version|version) print_version;;
+  *) die "Unknown command: $action. Try litefw help";;
+esac

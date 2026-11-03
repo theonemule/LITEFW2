@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="X-Content-Type-Options" content="nosniff">
+<link rel="stylesheet" href="/docs/manual.css"><title>Administrator UI — LiteFW</title></head>
+<body><header><strong>LiteFW Manual</strong><nav>
+<a href="/docs/index.html">Documentation home</a>
+<a href="/docs/ui.html">Web UI</a>
+<a href="/docs/api.html">HTTP API</a>
+<a href="/docs/cli.html">CLI</a>
+<a href="/docs/openapi.json">OpenAPI JSON</a>
+<a href="/">Back to LiteFW</a>
+</nav></header><main><h1>LiteFW Administrator Manual</h1>
+<p>LiteFW is an Alpine firewall/router appliance with a single-page web interface.</p>
+<p>Open the management address from a LAN segment, sign in with Basic administrator</p>
+<p>credentials, then use the sidebar to navigate without full page reloads.</p>
+<h2>Dashboard and navigation</h2>
+<ul>
+<li><strong>Overview</strong> summarizes interfaces, forwarding, services, memory and health.</li>
+<li><strong>Interfaces</strong> manages Linux devices, VLANs and bridges.</li>
+<li><strong>Network segments</strong> assigns WAN/LAN roles, addresses and DHCP servers.</li>
+<li><strong>Firewall &amp; port forwards</strong> edits access rules and NAT using staged</li>
+</ul>
+<p>  apply/confirm protection against losing management access.</p>
+<ul>
+<li><strong>DHCP and DNS</strong> manages reservations, BIND zones, DNSMasq and upstreams.</li>
+<li><strong>Modules</strong> installs optional services, then configures/starts them separately.</li>
+<li><strong>System</strong> manages access, updates, logging, diagnostics and API keys.</li>
+</ul>
+<h2>First-time management</h2>
+<ol>
+<li>Configure a LAN address and administrator account through the appliance console.</li>
+<li>Reach the web UI from the LAN. Do not expose it on an untrusted WAN.</li>
+<li>Configure WAN/LAN and check your default route and DNS resolution.</li>
+<li>Review firewall rules, stage changes, and confirm before rollback timeout.</li>
+<li>Install optional modules only when needed. Installation does not start them.</li>
+</ol>
+<h2>Modules</h2>
+<p>Suricata provides IDS/IPS, an inspection interface, HTTPS rule sources,</p>
+<p>uploaded .rules files, rule-source enable/disable and individual SID controls.</p>
+<p>Start in IDS mode; IPS can alter forwarded traffic.</p>
+<p>GeoIP provides searchable country checkboxes. Save a selection, download</p>
+<p>the IP feeds, then start blocking explicitly. CrowdSec synchronizes local</p>
+<p>decisions to LiteFW-managed IP-set rules.</p>
+<p>WireGuard manages peers and creates downloadable client profiles for</p>
+<p>automatically generated client keys. Cloudflare Tunnel uses an outbound</p>
+<p>connector token that is never exposed by API status responses.</p>
+<p>Multi-WAN provides prioritized failover, not load balancing. BGP/FRRouting</p>
+<p>supports configured peers and explicit prefixes. Captive Portal should be</p>
+<p>limited to guest LAN interfaces; mDNS reflector to chosen LAN interfaces.</p>
+<h2>API keys in System</h2>
+<p>Open System, then API keys, and choose Create API key. Enter a name, choose</p>
+<p>Read only or Administrator permissions, and an expiration period. Copy the</p>
+<p>secret: it is shown <strong>only once</strong>.</p>
+<ul>
+<li>Read-only keys can GET resources, but cannot modify configuration.</li>
+<li>Administrator keys can modify API-managed settings, but cannot create or</li>
+</ul>
+<p>  revoke keys, change the Basic administrator password, or alter management</p>
+<p>  access. Those sensitive operations require Basic credentials.</p>
+<ul>
+<li>Revoke a key in System to invalidate it immediately.</li>
+</ul>
+<p>API keys use the X-API-Key request header. Basic credentials continue to</p>
+<p>work. Both are sensitive bearer-style credentials: use HTTPS or an encrypted</p>
+<p>management tunnel. HTTP over a LAN exposes them to interception.</p>
+<h2>Appliance updates and recovery</h2>
+<p>System &gt; Software updates checks signed-off GitHub release assets and their</p>
+<p>SHA-256 manifests before applying the runtime upgrade. Alpine package updates</p>
+<p>have separate Check and Upgrade buttons. An in-place upgrade preserves</p>
+<p>configuration and creates backups. Keep console/Proxmox access available</p>
+<p>for firewall, WAN, BGP and IPS work.</p>
+<h2>Further references</h2>
+<ul>
+<li><a href="api.html">API reference</a></li>
+<li><a href="cli.html">CLI manual</a></li>
+<li><a href="openapi.json">OpenAPI 3.1 specification</a></li>
+</ul></main><footer>LiteFW 2.2.23 · Documentation is included with the appliance</footer></body></html>

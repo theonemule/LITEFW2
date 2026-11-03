@@ -15,7 +15,7 @@ if [ -z "${LFW_LIB:-}" ]; then
   else LFW_LIB=$(CDPATH='' cd -- "$(dirname -- "$0")/../lib" && pwd -P); fi
 fi
 export LFW_LIB
-for _m in common net fw dhcp sys modules telemetry; do
+for _m in common net fw dhcp sys modules telemetry apikeys; do
   # shellcheck disable=SC1090
   . "$LFW_LIB/$_m.sh"
 done
@@ -118,6 +118,10 @@ lfw_module() {
 }
 
 case "${1:-}" in
+  auth-key)
+    # Keys travel exclusively over stdin, never process command arguments.
+    apikey_verify || exit 1
+    ;;
   state)
     lfw_state
     ;;
@@ -135,6 +139,7 @@ case "${1:-}" in
       system) lfw_system;;
       module) lfw_module "${3:-}";;
       telemetry) jq -n --argjson telemetry "$(telemetry_json)" '{telemetry:$telemetry}';;
+      apikeys) apikey_list;;
       metrics) telemetry_metrics;;
       telemetry-otlp) telemetry_otlp;;
       *) die "unknown resource: ${2:-}";;

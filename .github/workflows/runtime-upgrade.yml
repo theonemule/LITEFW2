@@ -30,6 +30,9 @@ jobs:
           test -x tools/package-runtime-upgrade.sh
           ./tests/module-contract-test.sh
           ./tests/addons-contract-test.sh
+          ./tests/api-keys-integration.sh
+          python3 tools/render-api-docs.py --check
+          sh -n bin/litefw
           ./tests/modules-ux-integration.sh
           ./tests/vendor-install-alpine.sh
           python3 -m py_compile modules/shared/suricata-rules.py modules/shared/wireguard-peers.py
@@ -62,6 +65,7 @@ jobs:
           name: litefw2-runtime-${{ github.sha }}
           path: |
             dist/*.tar.gz
+            dist/*-cli.sh
             dist/SHA256SUMS
           if-no-files-found: error
           retention-days: 30
@@ -77,6 +81,7 @@ jobs:
           version=$(cat VERSION)
           tag="v$version"
           bundle="litefw2-$version-runtime.tar.gz"
+          cli="litefw-$version-cli.sh"
           if [[ "$SOURCE_REF" == refs/tags/* && "$SOURCE_NAME" != "$tag" ]]; then
             echo "Git tag $SOURCE_NAME does not match VERSION $tag" >&2
             exit 1
@@ -84,12 +89,13 @@ jobs:
           # Do not mutate an already published runtime archive. If an ISO
           # workflow won the race, its combined release is sufficient.
           if gh release view "$tag" >/dev/null 2>&1; then
-            if gh release view "$tag" --json assets --jq '.assets[].name' | grep -Fxq "$bundle"; then
-              echo "Release $tag already contains $bundle; leaving it unchanged."
-              exit 0
+            if ! gh release view "$tag" --json assets --jq '.assets[].name' | grep -Fxq "$bundle"; then
+              gh release upload "$tag" "dist/$bundle"
             fi
-            gh release upload "$tag" "dist/$bundle"
-            echo "Attached runtime archive to the existing $tag release."
+            if ! gh release view "$tag" --json assets --jq '.assets[].name' | grep -Fxq "$cli"; then
+              gh release upload "$tag" "dist/$cli"
+            fi
+            echo "Verified runtime and standalone CLI assets for $tag."
             exit 0
           fi
           if gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$tag" >/dev/null 2>&1; then
@@ -99,11 +105,11 @@ jobs:
               echo "Existing $tag tag belongs to another commit; refusing to reassign" >&2
               exit 1
             }
-            gh release create "$tag" "dist/$bundle" dist/SHA256SUMS --verify-tag \
+            gh release create "$tag" "dist/$bundle" "dist/$cli" dist/SHA256SUMS --verify-tag \
               --title "LiteFW2 $tag" \
               --notes "In-place LiteFW runtime upgrade. The System > Software updates UI downloads and verifies this archive before applying it. Existing network, DNS, DHCP and firewall configuration is preserved."
           else
-            gh release create "$tag" "dist/$bundle" dist/SHA256SUMS \
+            gh release create "$tag" "dist/$bundle" "dist/$cli" dist/SHA256SUMS \
               --target "$GITHUB_SHA" --title "LiteFW2 $tag" \
               --notes "In-place LiteFW runtime upgrade. The System > Software updates UI downloads and verifies this archive before applying it. Existing network, DNS, DHCP and firewall configuration is preserved."
           fi

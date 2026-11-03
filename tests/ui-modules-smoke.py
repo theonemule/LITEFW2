@@ -62,6 +62,34 @@ class MockHandler(http.server.SimpleHTTPRequestHandler):
         pass
 
     def do_GET(self):
+        if self.path.startswith("/probe-api-keys"):
+            page = (ROOT / "index.html").read_text()
+            probe = """<script>
+              setTimeout(() => {
+                const panel=[...document.querySelectorAll('#view .card')]
+                  .find(el => el.textContent.includes('API keys'));
+                const create=panel && [...panel.querySelectorAll('button')]
+                  .find(b => b.textContent.trim()==='Create API key');
+                if(create) create.click();
+                const info={
+                  title:document.getElementById('dlgTitle')?.textContent,
+                  inputName:document.getElementById('f_name')?.tagName,
+                  scope:[...document.querySelectorAll('#f_scope option')].map(x=>x.value),
+                  expiration:[...document.querySelectorAll('#f_expiresInDays option')].map(x=>x.value),
+                  revoke:panel?.textContent.includes('Revoke'),
+                  docs:panel?.querySelector('a[href="/docs/api.html"]')!=null
+                };
+                const output=document.createElement('pre');output.id='api-key-ui-probe';
+                output.textContent=JSON.stringify(info);document.body.append(output);
+              },1400);
+            </script>"""
+            data=page.replace('</body>',probe+'</body>').encode()
+            self.send_response(200)
+            self.send_header('Content-Type','text/html')
+            self.send_header('Content-Length',str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+            return
         if self.path.startswith("/probe-cloudflare"):
             html = (ROOT / "index.html").read_text()
             probe = """<script>
@@ -104,6 +132,10 @@ class MockHandler(http.server.SimpleHTTPRequestHandler):
             elif endpoint == "segments":
                 data = {"interfaces": [{"name": "eth1", "kind": "physical", "role": "lan",
                                         "label": "LAN", "addresses": ["10.0.1.199/24"]}]}
+            elif endpoint == "system/api-keys":
+                data = {"apiKeys": [
+                    {"id":"a"*20,"name":"Monitoring","scope":"read",
+                     "createdAt":1793736000,"expiresAt":1796414400,"expired":False}]}
             elif endpoint in ("system", "overview"):
                 data = {"system": SYSTEM}
             elif endpoint == "identity":
@@ -129,7 +161,8 @@ def main():
     try:
         for path, expected in [
             ("modules", ["BIND DNS", "DNSMasq", "Dynamic DNS", "OpenVPN", "Configure"]),
-            ("system", ["Alpine system packages", "Check packages", "Apply package updates", "Software updates", "Telemetry export", "OTLP"]),
+            ("system", ["Alpine system packages", "Check packages", "Apply package updates", "Software updates", "Telemetry export", "OTLP",
+                        "API keys", "Create API key", "Monitoring", "Revoke", "API reference", "CLI manual"]),
             ("module-bind", ["BIND authoritative zones", "Manage records", "Cloudflare"]),
             ("module-dnsmasq", ["DNSMasq DNS engine", "Upstream servers", "DNS resolver (dnsmasq)"]),
             ("module-ddns", ["Dynamic DNS", "Configure Inadyn provider", "Cloudflare DNS (pfSense migration)", "cloud.blaize.net", "home.blaize.net", "Check records"]),
@@ -179,6 +212,23 @@ def main():
         assert probe['apiKeyType'] == 'password' and probe['apiKeyValue'] == '', probe
         assert probe['interval'] == '15' and probe['enabled'] is True and probe['note'] is True, probe
         print('PASS: Chrome opened Cloudflare settings with six editable controls and protected credential')
+        run = subprocess.run(
+            ["google-chrome", "--headless=new", "--no-sandbox", "--disable-gpu",
+             "--disable-dev-shm-usage", "--no-first-run",
+             "--disable-background-networking", "--disable-extensions",
+             "--virtual-time-budget=3500", "--dump-dom", url + "/probe-api-keys#system"],
+            capture_output=True, text=True, timeout=75)
+        import re
+        match = re.search(r'<pre id="api-key-ui-probe">(.*?)</pre>',run.stdout,re.S)
+        if not match:
+            raise AssertionError("API key create button did not open: " + run.stdout[-1200:])
+        probe=json.loads(html_lib.unescape(match.group(1)))
+        assert probe["title"]=="Create API key",probe
+        assert probe["inputName"]=="INPUT",probe
+        assert probe["scope"]==["read","admin"],probe
+        assert probe["expiration"]==["7","30","90","365","0"],probe
+        assert probe["revoke"] and probe["docs"],probe
+        print('PASS: Chrome opened API key create form, expiry/scope choices and revoke/docs links')
     finally:
         server.shutdown()
 

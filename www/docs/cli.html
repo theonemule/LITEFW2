@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="X-Content-Type-Options" content="nosniff">
+<link rel="stylesheet" href="/docs/manual.css"><title>Command-line interface — LiteFW</title></head>
+<body><header><strong>LiteFW Manual</strong><nav>
+<a href="/docs/index.html">Documentation home</a>
+<a href="/docs/ui.html">Web UI</a>
+<a href="/docs/api.html">HTTP API</a>
+<a href="/docs/cli.html">CLI</a>
+<a href="/docs/openapi.json">OpenAPI JSON</a>
+<a href="/">Back to LiteFW</a>
+</nav></header><main><h1>LiteFW CLI Manual</h1>
+<p>The standalone litefw script is a POSIX-shell client for LiteFW. It needs</p>
+<p>curl and base64, with optional jq for formatted JSON output.</p>
+<h2>Installation and login</h2>
+<p>Download litefw from the matching GitHub release and run:</p>
+<pre>
+chmod +x litefw
+
+./litefw login https://firewall.example.net --api-key
+
+./litefw whoami
+
+./litefw get /system
+
+</pre>
+<p>The API key is requested interactively; it is not an argument. To use</p>
+<p>existing Basic credentials instead:</p>
+<pre>
+litefw login https://firewall.example.net --basic admin
+
+</pre>
+<p>For appliances offering only HTTP on a <strong>trusted LAN</strong>, explicit consent</p>
+<p>is required:</p>
+<pre>
+litefw login http://10.0.1.199 --api-key --allow-http
+
+</pre>
+<p>HTTP is unencrypted. Prefer HTTPS or a VPN when transmitting API keys or passwords.</p>
+<h2>Commands</h2>
+<ul>
+<li><strong>litefw login URL --api-key</strong>: Prompt for API key and verify authentication.</li>
+<li><strong>litefw login URL --basic USER</strong>: Prompt for Basic password and verify.</li>
+<li><strong>litefw logout</strong>: Delete locally stored credentials.</li>
+<li><strong>litefw whoami</strong>: Read appliance hostname and version.</li>
+<li><strong>litefw get /RESOURCE</strong>: GET any documented resource.</li>
+<li><strong>litefw post /RESOURCE JSON</strong>: POST JSON to a resource.</li>
+<li><strong>litefw post /RESOURCE @file.json</strong>: POST a JSON file.</li>
+<li><strong>litefw post /RESOURCE -</strong>: POST JSON received on stdin.</li>
+<li><strong>litefw op family.action JSON</strong>: Use a compatibility controller operation.</li>
+<li><strong>litefw module show|install|remove ID</strong>: Inspect or manage optional modules.</li>
+<li><strong>litefw module start|stop|restart ID</strong>: Manage module services.</li>
+<li><strong>litefw upload FILE.tar.gz</strong>: Upload a runtime archive using the binary</li>
+</ul>
+<p>  upgrade endpoint; validate it before using on a production firewall.</p>
+<ul>
+<li><strong>litefw api</strong>: List method/path pairs generated from OpenAPI.</li>
+<li><strong>litefw help</strong>: Print this embedded manual and examples.</li>
+</ul>
+<p>Local credentials are saved in the user configuration directory, usually</p>
+<p>~/.config/litefw/config, with permissions 0600. Protect this workstation.</p>
+<p>They are never passed as command-line arguments to curl. Use litefw logout</p>
+<p>or revoke the key from the appliance when finished.</p>
+<h2>Examples</h2>
+<pre>
+litefw get /modules/wireguard
+
+litefw module install geoip
+
+litefw post /modules/geoip/configure &#x27;{&quot;countries&quot;:[&quot;ru&quot;,&quot;cn&quot;],&quot;enabled&quot;:false}&#x27;
+
+litefw post /modules/geoip/refresh &#x27;{}&#x27;
+
+litefw op upgrade.check &#x27;{}&#x27;
+
+litefw post /firewall/rules/add @rule.json
+
+</pre>
+<h2>API details</h2>
+<p>All endpoints are under /api. GET reads state. POST changes configuration and</p>
+<p>sends Content-Type: application/json and X-LiteFWM: 1. Errors return non-2xx</p>
+<p>HTTP statuses and a JSON error. The CLI exits nonzero on those failures.</p>
+<p>Key management endpoints require Basic credentials, even when an API key has</p>
+<p>Administrator permissions. Read-only keys cannot perform POST operations.</p>
+<p>See <a href="api.html">API reference</a> for all operations and the machine-readable</p>
+<p><a href="openapi.json">OpenAPI specification</a> for client generation.</p></main><footer>LiteFW 2.2.23 · Documentation is included with the appliance</footer></body></html>
