@@ -103,6 +103,7 @@ server_set(){
   } > "$tmp"
   mv "$tmp" "$CONF"
   chmod 0600 "$CONF"
+  [ ! -x "$SELF/site-peers.sh" ] || "$SELF/site-peers.sh" routes-refresh
   restart_vpn
 }
 clients_json(){
@@ -168,8 +169,10 @@ client_profile(){
 }
 snapshot(){
   run=false; running && run=true
+  clientTunnels=$("$SELF/instances.sh" list 2>/dev/null || echo '[]')
+  sitePeers=$("$SELF/site-peers.sh" list 2>/dev/null || echo '[]')
   if [ ! -r "$CONF" ]; then
-    jq -n --argjson running "$run" --argjson clients "$(clients_json)" '{running:$running,configured:false,clients:$clients}'
+    jq -n --argjson running "$run" --argjson clients "$(clients_json)" --argjson clientTunnels "$clientTunnels" --argjson sitePeers "$sitePeers" '{running:$running,configured:false,clients:$clients,clientTunnels:$clientTunnels,sitePeers:$sitePeers}'
     return
   fi
   jq -n --argjson running "$run" \
@@ -177,8 +180,8 @@ snapshot(){
     --arg interface "$(setting device)" --arg protocol "$(setting protocol)" --arg port "$(setting port)" \
     --arg network "$(setting network)" --arg dns "$(setting dns)" --arg routes "$(setting routes)" \
     --argjson redirectGateway "$(setting redirect-gateway)" --argjson clientToClient "$(setting client-to-client)" \
-    --argjson clients "$(clients_json)" \
-    '{running:$running,configured:true,publicHost:$publicHost,inboundInterface:$inboundInterface,interface:$interface,protocol:$protocol,port:($port|tonumber),network:$network,dns:($dns|split(",")|map(select(length>0))),routes:($routes|split(",")|map(select(length>0))),redirectGateway:$redirectGateway,clientToClient:$clientToClient,clients:$clients}'
+    --argjson clients "$(clients_json)" --argjson clientTunnels "$clientTunnels" --argjson sitePeers "$sitePeers" \
+    '{clientTunnels:$clientTunnels,sitePeers:$sitePeers,running:$running,configured:true,publicHost:$publicHost,inboundInterface:$inboundInterface,interface:$interface,protocol:$protocol,port:($port|tonumber),network:$network,dns:($dns|split(",")|map(select(length>0))),routes:($routes|split(",")|map(select(length>0))),redirectGateway:$redirectGateway,clientToClient:$clientToClient,clients:$clients}'
 }
 firewall(){
   [ -r "$CONF" ] || return 0
@@ -232,6 +235,11 @@ case "${1:-}" in
   client-add) client_add "${2:?NAME}";;
   client-revoke) client_revoke "${2:?NAME}";;
   client-profile) client_profile "${2:?NAME}";;
+  instance-save) "$SELF/instances.sh" save "$2";;
+  instance-delete) "$SELF/instances.sh" delete "$2";;
+  instance-service) "$SELF/instances.sh" service "$2" "$3";;
+  site-peer-save) "$SELF/site-peers.sh" save "$2";;
+  site-peer-delete) "$SELF/site-peers.sh" delete "$2";;
   service)
     case "${2:-}" in
       start) [ -r "$CONF" ] || die "Configure OpenVPN first"; restart_vpn;;

@@ -79,6 +79,13 @@ out=$(mktemp)
 trap 'rm -f "$out" "$out.err" "${body:-}"' EXIT
 
 case "$method:$path" in
+  GET:/telemetry) read_resource telemetry;;
+  GET:/telemetry/metrics)
+    if ctl get metrics >"$out" 2>"$out.err"; then
+      printf 'Status: 200 OK\r\nContent-Type: text/plain; version=0.0.4; charset=utf-8\r\nCache-Control: no-store\r\n\r\n'
+      cat "$out"
+    else fail '403 Forbidden' "$(cat "$out.err")"; fi
+    ;;
   GET:/identity) read_resource identity;;
   GET:/overview) read_resource overview;;
   GET:/interfaces) read_resource interfaces;;
@@ -139,6 +146,7 @@ case "$method:$path" in
 
   POST:/firewall/batch) op_request firewall.batch;;
   POST:/firewall/confirm) op_request firewall.confirm;;
+  POST:/system/telemetry) op_request telemetry.set;;
   POST:/system/set) op_request system.set;;
   POST:/system/management) op_request mgmt.set;;
   POST:/system/logging) op_request logging.set;;

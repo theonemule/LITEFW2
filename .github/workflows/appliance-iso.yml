@@ -42,6 +42,8 @@ jobs:
           ./tests/bind-zone-management.sh
           ./tests/dns-provider-presets.sh
           ./tests/module-contract-test.sh
+          ./tests/addons-contract-test.sh
+          ./tests/simulations.sh
           ./tests/module-install-verification.sh
           ./tests/alpine-package-update.sh
           ./tests/ddns-native-config.sh

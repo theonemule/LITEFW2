@@ -1,0 +1,22 @@
+#!/sbin/openrc-run
+description="LiteFW managed WireGuard VPN"
+depend() { need net; after iptables; }
+wg_interface() {
+  [ -r /etc/litefw-addons/wireguard.json ] || return 1
+  jq -r '.interface // empty' /etc/litefw-addons/wireguard.json
+}
+start() {
+  local iface
+  iface=$(wg_interface) || { eerror "Configure WireGuard first"; return 1; }
+  [ -r "/etc/wireguard/$iface.conf" ] || return 1
+  ebegin "Starting WireGuard $iface"
+  /bin/bash /usr/bin/wg-quick up "$iface"
+  eend $?
+}
+stop() {
+  local iface
+  iface=$(wg_interface) || return 0
+  ebegin "Stopping WireGuard $iface"
+  /bin/bash /usr/bin/wg-quick down "$iface"
+  eend $?
+}

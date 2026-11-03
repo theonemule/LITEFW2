@@ -20,8 +20,8 @@ function h(tag, attrs, ...kids) {
 }
 const badge = (text, cls) => h('span', { class: 'badge ' + (cls || 'text-bg-secondary') }, text);
 const btn = (text, onclick, cls) => h('button', { type: 'button', class: 'btn btn-sm ' + (cls || 'btn-outline-secondary'), onclick }, text);
-const card = (title, actions, body) => h('div', { class: 'card mb-3' },
-  h('div', { class: 'card-header' }, title, h('div', { class: 'actions' }, actions || [])), body);
+const card = (title, actions, ...body) => h('div', { class: 'card mb-3' },
+  h('div', { class: 'card-header' }, title, h('div', { class: 'actions' }, actions || [])), ...body);
 const table = (heads, rows, empty) => h('div', { class: 'table-responsive' },
   h('table', { class: 'table table-sm table-hover mb-0' },
     h('thead', {}, h('tr', {}, heads.map(x => h('th', {}, x)))),
@@ -51,6 +51,7 @@ const VIEW_APIS = {
   'module-dnsmasq': ['dns', 'segments', 'system', 'modules/dnsmasq', 'modules/bind'],
   'module-ddns': ['segments', 'system', 'modules/ddns'],
   'module-openvpn': ['segments', 'system', 'modules/openvpn'],
+  'module-ipsec': ['segments', 'system', 'modules/ipsec'],
   firewall: ['firewall', 'port-forwards', 'segments', 'dhcp', 'system'],
   system: ['system', 'segments']
 };
@@ -132,7 +133,10 @@ function opPath(name, body) {
   if (family === 'reservation') return '/api/dhcp/reservations/' + action;
   if (family === 'dns') return '/api/dns/set';
   if (family === 'module') return '/api/modules/' + encodeURIComponent(body.id) + '/' + action;
-  if (['bind', 'openvpn', 'ddns', 'dnsmasq'].includes(family)) return '/api/modules/' + family + '/' + action;
+  if (['bind', 'openvpn', 'ddns', 'dnsmasq', 'ipsec'].includes(family)) return '/api/modules/' + family + '/' + action;
+  if (['suricata','geoip','crowdsec','wireguard','cloudflared','multiwan','mdns','captive','frr'].includes(family))
+    return '/api/modules/' + family + '/' + action;
+  if (family === 'telemetry') return '/api/system/telemetry';
   if (family === 'upgrade') return '/api/system/updates/' + action;
   if (family === 'packages') return '/api/system/packages/' + action;
   if (family === 'system') return '/api/system/set';
@@ -914,9 +918,92 @@ async function openvpnGetProfile(name) {
   a.href = u; a.download = name + '.ovpn'; a.click();
   setTimeout(() => URL.revokeObjectURL(u), 1000);
 }
+function openvpnClientTunnelForm(existing = null) {
+  const x = existing || {};
+  const current = moduleState('openvpn').clientTunnels || [];
+  const used = new Set(current.filter(t => t.id !== x.id).map(t => t.interface));
+  const guess = Array.from({length:15},(_,i)=>'tun'+(i+1)).find(i => !used.has(i)) || 'tun1';
+  form(existing ? 'Edit OpenVPN client tunnel' : 'New OpenVPN client tunnel', [
+    {k:'id',label:'Client tunnel name',value:x.id||'',placeholder:'office',help:'Lowercase letters, numbers and hyphens. Cannot be renamed after creation.'},
+    {k:'mode',label:'Tunnel type',type:'select',value:x.mode||'point-to-site',
+      options:[['point-to-site','Point-to-site (remote access client)'],['site-to-site','Site-to-site (branch gateway client)']]},
+    {k:'interface',label:'Tunnel interface',value:x.interface||guess,help:'Unique tunN device, different from the OpenVPN server.'},
+    {k:'localSubnet',label:'Local LAN subnet',value:x.localSubnet||'',placeholder:'10.0.1.0/24',show:v=>v.mode==='site-to-site',
+      help:'The peer server must also have this network routed through your client certificate.'},
+    {k:'remoteSubnet',label:'Remote network',value:x.remoteSubnet||'',placeholder:'192.168.20.0/24',
+      help:'Required for site-to-site; optional for point-to-site.'},
+    {k:'profile',label:'Client .ovpn profile (with inline certificates)',type:'textarea',rows:11,value:'',
+      placeholder:'client\nproto udp\nremote vpn.example.com 1194\n<ca>\n...\n</ca>\n<cert>\n...\n</cert>\n<key>\n...\n</key>\n<tls-crypt>\n...\n</tls-crypt>',
+      help:existing?'Leave empty to keep the current certificate/key profile.':'Paste a certificate-based OpenVPN client profile with inline CA, cert, key and TLS key. Executable script directives are rejected.'}
+  ],v=>apply('openvpn.instanceadd',v,'OpenVPN client profile saved; start it explicitly when ready'),{
+    note:'Saving does not start the tunnel, change the default route, or modify the existing OpenVPN server. Imported private keys remain on the appliance; they are never returned by the API.',
+    applyText:'Validate and save'
+  });
+}
+function openvpnSitePeerForm(existing = null) {
+  const x=existing||{};
+  form(existing?'Edit site-to-site peer':'Add site-to-site peer',[
+    {k:'id',label:'Client certificate name',value:x.id||'',placeholder:'branch-office',
+      help:'Create a client certificate below first. Use exactly its name.'},
+    {k:'localSubnet',label:'This site LAN subnet',value:x.localSubnet||'',placeholder:'10.0.1.0/24'},
+    {k:'remoteSubnet',label:'Peer site LAN subnet',value:x.remoteSubnet||'',placeholder:'10.55.0.0/24'}
+  ],v=>apply('openvpn.sitepeeradd',v,'Site-to-site peer routing saved; restart OpenVPN server to apply'),{
+    note:'Adds a certificate-bound CCD route and a server route for the remote subnet. Client profile certificate must already exist. Server restart is explicit; existing remote access sessions may disconnect on restart.',
+    applyText:'Save peer routes'
+  });
+}
+function ipsecTunnelForm(existing=null) {
+  const x=existing||{};
+  form(existing?'Edit IPsec site-to-site tunnel':'New IPsec site-to-site tunnel',[
+    {k:'id',label:'Tunnel name',value:x.id||'',placeholder:'branch-office',help:'Lowercase letters, numbers and hyphens.'},
+    {k:'peer',label:'Remote VPN gateway (IP or DNS)',value:x.peer||'',placeholder:'198.51.100.10'},
+    {k:'localId',label:'Local IKE identity',value:x.localId||'',placeholder:'fw.example.net'},
+    {k:'remoteId',label:'Remote IKE identity',value:x.remoteId||'',placeholder:'branch.example.net'},
+    {k:'localSubnet',label:'Local protected network',value:x.localSubnet||'',placeholder:'10.0.1.0/24'},
+    {k:'remoteSubnet',label:'Remote protected network',value:x.remoteSubnet||'',placeholder:'10.44.0.0/24'},
+    {k:'psk',label:'IKEv2 pre-shared key',type:'password',value:'',
+      help:x.credentialConfigured?'Leave blank to preserve the existing secret.':'At least 20 characters. Prefer a long randomly generated secret.'},
+    {k:'enabled',label:'Allow manual initiation of this tunnel',type:'check',value:!!x.enabled}
+  ],v=>apply('ipsec.tunnelset',v,'IPsec tunnel saved; use Start to initiate when ready'),{
+    note:'IKEv2 site-to-site using strongSwan. Saves protected native swanctl configuration without starting the tunnel. Ensure the peer has matching IDs, subnets, cipher proposals, and PSK.',
+    applyText:'Validate and save'
+  });
+}
+function ipsecPanel() {
+  const m=moduleBy('ipsec');if(!m)return [];
+  if(!m.installed)return [card('IPsec (strongSwan)',
+    [btn('Install IPsec',()=>moduleInstall(m),'btn-primary')],
+    h('div',{class:'card-body small'},'Optional IPsec module. Installation adds Alpine strongSwan packages but does not enable or start any tunnel.'))];
+  const x=moduleState('ipsec'), tunnels=x.tunnels||[];
+  return [
+    card('IPsec service (IKEv2 / strongSwan)',[
+      btn('Add site-to-site tunnel',()=>ipsecTunnelForm(),'btn-primary'),
+      ...moduleServiceButtons('ipsec.service',!!x.running,true)
+    ], h('div',{class:'card-body small'},
+      h('div',{class:'mb-2'},'Status: ',x.running?badge('running','text-bg-success'):badge('stopped')),
+      h('p',{class:'mb-0'},'Native swanctl configurations. Save profiles first, then start strongSwan and explicitly initiate a tunnel. Traffic is subject to your existing firewall rules; the IKE ports are opened only while the service runs.'))),
+    card('IPsec site-to-site tunnels',
+      [btn('Add tunnel',()=>ipsecTunnelForm(),'btn-primary')],
+      table(['Tunnel','Gateway','Traffic selectors','Enabled','Actions'],
+        tunnels.map(t=>h('tr',{},
+          h('td',{class:'mono'},t.id),
+          h('td',{class:'mono'},t.peer),
+          h('td',{class:'mono small'},t.localSubnet+' ⇄ '+t.remoteSubnet),
+          h('td',{},t.established ? badge('connected','text-bg-success') : (t.enabled?'Ready / disconnected':'Disabled')),
+          h('td',{class:'text-end'},
+            btn('Edit',()=>ipsecTunnelForm(t),'btn-outline-primary'),' ',
+            ...(t.enabled&&x.running?[btn('Start',()=>apply('ipsec.tunnelstart',{id:t.id},'IPsec initiation requested'),'btn-primary'),' ',
+                btn('Stop',()=>apply('ipsec.tunnelstop',{id:t.id},'IPsec tunnel stopped'),'btn-outline-secondary'),' ']:[]),
+            btn('Delete',()=>confirmDo('Delete IPsec tunnel','Remove '+t.id+'? A backup of its native configuration will remain on the firewall.',
+              ()=>apply('ipsec.tunneldelete',{id:t.id},'IPsec tunnel deleted'),'Delete'),'btn-outline-danger')))),
+        'No site-to-site IPsec tunnels are configured.'))
+  ];
+}
+
 function openvpnPanel() {
   const m = moduleBy('openvpn'); if (!m || !m.installed) return [];
-  const x = moduleState('openvpn'), clients = x.clients || [];
+  const x = moduleState('openvpn'), clients = x.clients || [],
+    clientTunnels = x.clientTunnels || [], sitePeers = x.sitePeers || [];
   return [
     card('OpenVPN routed server', [
       btn('Configure', openvpnSettingsForm, 'btn-primary'),
@@ -928,6 +1015,33 @@ function openvpnPanel() {
         h('dt', { class: 'col-sm-3' }, 'Tunnel'), h('dd', { class: 'col-sm-9 mono' }, x.interface || 'tun0'),
         h('dt', { class: 'col-sm-3' }, 'Client network'), h('dd', { class: 'col-sm-9 mono' }, x.network || '—')),
       h('div', { class: 'alert alert-light border mt-3 mb-0' }, 'OpenVPN owns the TUN interface lifecycle. LiteFWM reads that interface live and exposes it to firewall rules.'))),
+    card('OpenVPN client tunnels', [btn('Add client tunnel',()=>openvpnClientTunnelForm(),'btn-primary')],
+      h('div',{class:'card-body small'},'Independent point-to-site or site-to-site client connections. Import a certificate-based .ovpn profile; each tunnel uses a separate OpenRC instance and tun interface. Saving never auto-starts the connection.'),
+      table(['Tunnel','Type','Endpoint','Device','Status','Actions'],
+        clientTunnels.map(t=>h('tr',{},
+          h('td',{class:'mono'},t.id),
+          h('td',{},t.mode),
+          h('td',{class:'mono'},t.remoteHost),
+          h('td',{class:'mono'},t.interface),
+          h('td',{},t.running?badge('running','text-bg-success'):badge('stopped')),
+          h('td',{class:'text-end'},
+            btn('Edit',()=>openvpnClientTunnelForm(t),'btn-outline-primary'),' ',
+            btn(t.running?'Stop':'Start',()=>apply('openvpn.instanceservice',{id:t.id,action:t.running?'stop':'start'},'Client tunnel service changed'),'btn-primary'),' ',
+            btn('Remove',()=>confirmDo('Remove OpenVPN client','Stop and remove client tunnel '+t.id+'? A protected backup is retained.',
+              ()=>apply('openvpn.instancedelete',{id:t.id},'Client tunnel removed'),'Remove'),'btn-outline-danger')))),
+        'No outbound OpenVPN clients configured.')),
+    card('Site-to-site peers (server side)',[btn('Add site peer',()=>openvpnSitePeerForm(),'btn-primary')],
+      h('div',{class:'card-body small'},'Certificate-bound OpenVPN CCD routing: each peer gets a remote-site route (iroute) and a pushed local-site route. Restart the server to apply changes.'),
+      table(['Certificate','Local LAN','Remote LAN','Actions'],
+        sitePeers.map(p=>h('tr',{},
+          h('td',{class:'mono'},p.id),
+          h('td',{class:'mono'},p.localSubnet),
+          h('td',{class:'mono'},p.remoteSubnet),
+          h('td',{class:'text-end'},
+            btn('Edit',()=>openvpnSitePeerForm(p),'btn-outline-primary'),' ',
+            btn('Delete',()=>confirmDo('Remove site peer','Remove server-side site route for '+p.id+'? Restart the server to apply.',
+              ()=>apply('openvpn.sitepeerdelete',{id:p.id},'Site peer removed'),'Delete'),'btn-outline-danger')))),
+        'No server-side site peers configured.')),
     card('OpenVPN clients', [btn('Add client', openvpnAddClient, 'btn-primary')],
       table(['Client', 'Certificate', 'Profile', ''], clients.map(c => h('tr', {},
         h('td', { class: 'mono' }, c.name),
@@ -1070,6 +1184,10 @@ views['module-ddns'] = () => [
 views['module-openvpn'] = () => [
   h('div', { class:'mb-3' }, btn('Back to modules', () => location.hash = '#modules')),
   ...openvpnPanel()
+];
+views['module-ipsec'] = () => [
+  h('div', { class:'mb-3' }, btn('Back to modules', () => location.hash = '#modules')),
+  ...ipsecPanel()
 ];
 
 // Firewall rules editor: ALL edits remain in browser memory until Apply.
@@ -1708,4 +1826,3 @@ $('#mobileNavLinks').replaceChildren(...[...document.querySelectorAll('#sideNav 
 window.addEventListener('hashchange', load);
 $('#refresh').addEventListener('click', load);
 loadIdentity();
-load();

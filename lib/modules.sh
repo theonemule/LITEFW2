@@ -220,6 +220,52 @@ op_openvpn_profile() {
   _p=$(module_call openvpn client-profile "$(jget name)")
   jq -n --arg profile "$_p" '{profile:$profile}' >"$RESULT"
 }
+op_openvpn_instanceadd() {
+  module_call openvpn instance-save "$BODY" >"$RESULT" || die "OpenVPN client profile invalid or could not be saved"
+  log_op "openvpn.instanceadd $(jget id)"
+}
+op_openvpn_instancedelete() {
+  module_call openvpn instance-delete "$(jget id)" || die "Could not remove OpenVPN client tunnel"
+  log_op "openvpn.instancedelete $(jget id)"
+}
+op_openvpn_instanceservice() {
+  _action=$(jget action)
+  case "$_action" in start|stop|restart) :;; *) die "Invalid OpenVPN client action";; esac
+  module_call openvpn instance-service "$(jget id)" "$_action" || die "OpenVPN client service action failed"
+  log_op "openvpn.instanceservice $(jget id) $_action"
+}
+op_openvpn_sitepeeradd() {
+  module_call openvpn site-peer-save "$BODY" >"$RESULT" || die "OpenVPN site peer configuration failed"
+  log_op "openvpn.sitepeeradd $(jget id)"
+}
+op_openvpn_sitepeerdelete() {
+  module_call openvpn site-peer-delete "$(jget id)" || die "OpenVPN site peer removal failed"
+  log_op "openvpn.sitepeerdelete $(jget id)"
+}
+op_ipsec_tunnelset() {
+  module_call ipsec tunnel-save "$BODY" >"$RESULT" || die "IPsec tunnel validation or save failed"
+  log_op "ipsec.tunnelset $(jget id)"
+}
+op_ipsec_tunneldelete() {
+  module_call ipsec tunnel-delete "$(jget id)" || die "IPsec tunnel removal failed"
+  module_sync_firewall
+  log_op "ipsec.tunneldelete $(jget id)"
+}
+op_ipsec_tunnelstart() {
+  module_call ipsec tunnel-start "$(jget id)" >"$RESULT" || die "IPsec tunnel negotiation failed"
+  log_op "ipsec.tunnelstart $(jget id)"
+}
+op_ipsec_tunnelstop() {
+  module_call ipsec tunnel-stop "$(jget id)" || die "Could not stop IPsec tunnel"
+  log_op "ipsec.tunnelstop $(jget id)"
+}
+op_ipsec_service() {
+  _action=$(jget action)
+  case "$_action" in start|stop|restart) :;; *) die "Invalid IPsec service action";; esac
+  module_call ipsec service "$_action" || die "IPsec service operation failed"
+  module_sync_firewall
+  log_op "ipsec.service $_action"
+}
 op_openvpn_service() {
   _a=$(jget action)
   case "$_a" in start|stop|restart) :;; *) die "action must be start, stop or restart";; esac
@@ -266,4 +312,150 @@ op_ddns_service() {
   case "$_a" in start|stop|restart) :;; *) die "action must be start, stop or restart";; esac
   module_call ddns service "$_a"
   log_op "ddns.service $_a"
+}
+
+op_suricata_configure() {
+  module_call suricata configure "$BODY" >"$RESULT" || die "suricata configuration failed"
+  module_sync_firewall
+  log_op "suricata.configure"
+}
+op_suricata_service() {
+  _a=$(jget action)
+  case "$_a" in start|stop|restart) :;; *) die "Invalid service action";; esac
+  module_call suricata service "$_a" >"$RESULT" || die "suricata service action failed"
+  module_sync_firewall
+  log_op "suricata.service $_a"
+}
+
+op_geoip_configure() {
+  module_call geoip configure "$BODY" >"$RESULT" || die "geoip configuration failed"
+  module_sync_firewall
+  log_op "geoip.configure"
+}
+op_geoip_service() {
+  _a=$(jget action)
+  case "$_a" in start|stop|restart) :;; *) die "Invalid service action";; esac
+  module_call geoip service "$_a" >"$RESULT" || die "geoip service action failed"
+  module_sync_firewall
+  log_op "geoip.service $_a"
+}
+
+op_crowdsec_configure() {
+  module_call crowdsec configure "$BODY" >"$RESULT" || die "crowdsec configuration failed"
+  module_sync_firewall
+  log_op "crowdsec.configure"
+}
+op_crowdsec_service() {
+  _a=$(jget action)
+  case "$_a" in start|stop|restart) :;; *) die "Invalid service action";; esac
+  module_call crowdsec service "$_a" >"$RESULT" || die "crowdsec service action failed"
+  module_sync_firewall
+  log_op "crowdsec.service $_a"
+}
+
+op_wireguard_configure() {
+  module_call wireguard configure "$BODY" >"$RESULT" || die "wireguard configuration failed"
+  module_sync_firewall
+  log_op "wireguard.configure"
+}
+op_wireguard_service() {
+  _a=$(jget action)
+  case "$_a" in start|stop|restart) :;; *) die "Invalid service action";; esac
+  module_call wireguard service "$_a" >"$RESULT" || die "wireguard service action failed"
+  module_sync_firewall
+  log_op "wireguard.service $_a"
+}
+
+op_cloudflared_configure() {
+  module_call cloudflared configure "$BODY" >"$RESULT" || die "cloudflared configuration failed"
+  module_sync_firewall
+  log_op "cloudflared.configure"
+}
+op_cloudflared_service() {
+  _a=$(jget action)
+  case "$_a" in start|stop|restart) :;; *) die "Invalid service action";; esac
+  module_call cloudflared service "$_a" >"$RESULT" || die "cloudflared service action failed"
+  module_sync_firewall
+  log_op "cloudflared.service $_a"
+}
+
+op_multiwan_configure() {
+  module_call multiwan configure "$BODY" >"$RESULT" || die "multiwan configuration failed"
+  module_sync_firewall
+  log_op "multiwan.configure"
+}
+op_multiwan_service() {
+  _a=$(jget action)
+  case "$_a" in start|stop|restart) :;; *) die "Invalid service action";; esac
+  module_call multiwan service "$_a" >"$RESULT" || die "multiwan service action failed"
+  module_sync_firewall
+  log_op "multiwan.service $_a"
+}
+
+op_mdns_configure() {
+  module_call mdns configure "$BODY" >"$RESULT" || die "mdns configuration failed"
+  module_sync_firewall
+  log_op "mdns.configure"
+}
+op_mdns_service() {
+  _a=$(jget action)
+  case "$_a" in start|stop|restart) :;; *) die "Invalid service action";; esac
+  module_call mdns service "$_a" >"$RESULT" || die "mdns service action failed"
+  module_sync_firewall
+  log_op "mdns.service $_a"
+}
+
+op_captive_configure() {
+  module_call captive configure "$BODY" >"$RESULT" || die "captive configuration failed"
+  module_sync_firewall
+  log_op "captive.configure"
+}
+op_captive_service() {
+  _a=$(jget action)
+  case "$_a" in start|stop|restart) :;; *) die "Invalid service action";; esac
+  module_call captive service "$_a" >"$RESULT" || die "captive service action failed"
+  module_sync_firewall
+  log_op "captive.service $_a"
+}
+
+op_frr_configure() {
+  module_call frr configure "$BODY" >"$RESULT" || die "frr configuration failed"
+  module_sync_firewall
+  log_op "frr.configure"
+}
+op_frr_service() {
+  _a=$(jget action)
+  case "$_a" in start|stop|restart) :;; *) die "Invalid service action";; esac
+  module_call frr service "$_a" >"$RESULT" || die "frr service action failed"
+  module_sync_firewall
+  log_op "frr.service $_a"
+}
+
+op_geoip_refresh() {
+  module_call geoip refresh >"$RESULT" || die 'GeoIP feed update failed'
+  module_sync_firewall
+  log_op 'geoip.refresh'
+}
+
+# Extend SNAT to all configured backup WAN devices only when failover enabled.
+module_firewall_snat_rules() {
+  _primary=${1:-}
+  _file="${LFW_MODULE_CONFIG_DIR:-/etc/litefw-addons}/multiwan.json"
+  [ -r "$_file" ] || return 0
+  [ "$(jq -r '.enabled // false' "$_file" 2>/dev/null)" = true ] || return 0
+  jq -r '.uplinks[].interface' "$_file" | sort -u | while IFS= read -r _iface; do
+    is_ifname "$_iface" || continue
+    [ "$_iface" = "$_primary" ] && continue
+    printf '%s\n' "-A LFW_SNAT -o $_iface -j MASQUERADE"
+  done
+}
+op_suricata_rulesupdate() {
+  module_call suricata rules-update >"$RESULT" || die 'Suricata rule feed update failed'
+  log_op 'suricata.rulesupdate'
+}
+
+op_crowdsec_decisionssync() {
+  module_call crowdsec decisions-sync >"$RESULT" || die 'CrowdSec decision sync failed'
+  module_sync_firewall
+  log_op 'crowdsec.decisionssync'
 }

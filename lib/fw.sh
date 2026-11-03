@@ -41,6 +41,11 @@ fw_gen_snat() {
   local _w
   _w=$(wan_iface)
   [ -z "$_w" ] || echo "-A LFW_SNAT -o $_w -j MASQUERADE"
+  # Multi-WAN alternative uplinks also require NAT. The primary WAN rule
+  # remains first, and user-managed NAT rules are otherwise unchanged.
+  if command -v module_firewall_snat_rules >/dev/null 2>&1; then
+    module_firewall_snat_rules "$_w"
+  fi
 }
 # Current management access list: "any" or interface names, read from LFW_MGMT.
 mgmt_access_live() {
@@ -90,6 +95,11 @@ fw_commit() {
     echo ':LFW_DNAT - [0:0]'
     echo ':LFW_SNAT - [0:0]'
     echo '-A PREROUTING -j LFW_DNAT'
+    # Exempt only kernel-IPsec-protected traffic from generic WAN masquerade.
+    # Internal site traffic still requires explicit FORWARD permits.
+    if command -v swanctl >/dev/null 2>&1 && rc-service charon status >/dev/null 2>&1; then
+      echo '-A POSTROUTING -m policy --dir out --pol ipsec -j ACCEPT'
+    fi
     echo '-A POSTROUTING -j LFW_SNAT'
     cat "$FWT/LFW_DNAT"
     fw_gen_snat
@@ -125,6 +135,14 @@ fw_commit() {
   fi
   mkdir -p "$(dirname "$LFW_FW_SAVE")"
   iptables-save >"$LFW_FW_SAVE.tmp" && mv "$LFW_FW_SAVE.tmp" "$LFW_FW_SAVE"
+  # openNDS owns ephemeral portal redirection chains. The canonical LiteFW
+  # firewall remains sole owner of persistent rules; reapply the running
+  # portal hooks after the main iptables-restore replaces the NAT table.
+  if command -v opennds >/dev/null 2>&1 &&
+     rc-service opennds status >/dev/null 2>&1; then
+    rc-service opennds restart >/dev/null 2>&1 ||
+      warn 'Captive portal could not restore its NAT hooks after firewall reload'
+  fi
   fw_cleanup
 }
 

@@ -1,0 +1,13 @@
+#!/sbin/openrc-run
+description="Restore LiteFW GeoIP country IP sets before firewall"
+depend() { before iptables; }
+start() {
+  ebegin "Restoring LiteFW GeoIP blocklist"
+  ipset create litefw_geo4 hash:net family inet maxelem 300000 -exist || return 1
+  if [ -s /etc/litefw-addons/geoip.ipset ]; then
+    ipset flush litefw_geo4 || return 1
+    ipset restore -exist < /etc/litefw-addons/geoip.ipset || return 1
+  fi
+  eend $?
+}
+stop() { return 0; }

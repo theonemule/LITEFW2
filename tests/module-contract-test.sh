@@ -2,13 +2,13 @@
 set -eu
 cd "$(dirname "$0")/.."
 
-for m in bind openvpn ddns dnsmasq; do
+for m in bind openvpn ddns dnsmasq ipsec suricata geoip crowdsec wireguard cloudflared multiwan mdns captive frr; do
   test -x "modules/$m/module.sh"
   test -x "modules/$m/install.sh"
   test -x "modules/$m/uninstall.sh"
 done
 test -r modules/manifest.json
-jq -e '.schemaVersion==1 and (.modules|length)==4 and
+jq -e '.schemaVersion==1 and (.modules|length)==14 and
   (any(.modules[]; .id=="dnsmasq" and .core==true)) and
   (any(.modules[]; .id=="ddns" and (.packages|index("inadyn-openrc")!=null)))' modules/manifest.json >/dev/null
 grep -q 'module_manifest_entry' lib/modules.sh
@@ -19,7 +19,7 @@ test -r lib/module-compat.sh
 
 # Optional packages are not part of the base appliance.
 base_apk=$(grep '^apk add --no-cache ' install.sh | head -1)
-for p in bind bind-tools bind-openrc openvpn openvpn-openrc easy-rsa inadyn inadyn-openrc; do
+for p in bind bind-tools bind-openrc openvpn openvpn-openrc easy-rsa inadyn inadyn-openrc strongswan strongswan-openrc; do
   ! printf '%s\n' "$base_apk" | grep -Eq "(^|[[:space:]])$p([[:space:]]|$)"
 done
 grep -q 'cp -R "$BASE/modules" /usr/lib/litefwm/modules' install.sh
@@ -47,6 +47,15 @@ grep -q 'CONF=/etc/openvpn/litefwm.conf' modules/openvpn/module.sh
 grep -q "grep -Eq '\^tun" modules/openvpn/module.sh
 grep -q 'tls-crypt' modules/openvpn/module.sh
 grep -q 'EASYRSA' modules/openvpn/module.sh
+grep -q 'instance-save)' modules/openvpn/module.sh
+grep -q 'site-peer-save)' modules/openvpn/module.sh
+grep -q 'op_openvpn_instanceadd()' lib/modules.sh
+grep -q 'op_openvpn_sitepeeradd()' lib/modules.sh
+grep -q 'op_ipsec_tunnelset()' lib/modules.sh
+grep -q 'op_ipsec_service()' lib/modules.sh
+grep -q 'module-ipsec' www/app.js
+grep -q 'swanctl' modules/ipsec/module.sh
+grep -q 'policy --dir out --pol ipsec' lib/fw.sh
 grep -q 'client-profile' modules/openvpn/module.sh
 grep -q 'ovpn.*echo vpn' lib/net.sh
 grep -q 'kind == "physical" or .kind == "bridge" or .kind == "vlan"' lib/persist.jq
@@ -86,7 +95,7 @@ grep -q 'function bindPanel()' www/app.js
 grep -q 'function openvpnPanel()' www/app.js
 grep -q 'function ddnsPanel()' www/app.js
 grep -q 'openvpnGetProfile' www/app.js
-for module in bind ddns openvpn dnsmasq; do
+for module in bind ddns openvpn dnsmasq ipsec; do
   grep -Fq "views['module-$module']" www/app.js
 done
 grep -q 'function bindManageZoneRecords' www/app.js

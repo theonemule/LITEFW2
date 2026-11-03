@@ -124,17 +124,19 @@ system_json() {
   _dm=false; dnsmasq_running && _dm=true
   _cif=$(client_iface "${LFW_CLIENT:-}")
   _logging=$(logging_json)
+  _telemetry=$(telemetry_json)
   jq -n --arg host "$(hostname)" --arg ver "$(cat "$LFW_LIB/VERSION" 2>/dev/null || echo dev)" \
     --arg kernel "$(uname -r)" --arg os "$(cat /etc/alpine-release 2>/dev/null || echo unknown)" \
     --argjson uptime "$_up" --arg load "$_load" --argjson mem "$_mem" \
     --argjson port "$(mgmt_port)" --argjson sshPort "$(ssh_port)" --argjson ssh "$_sshon" \
     --argjson access "$_acc" --argjson resolv "$_dns" --argjson dnsmasq "$_dm" \
-    --arg fwd "$(cat /proc/sys/net/ipv4/ip_forward)" --arg cif "$_cif" --arg client "${LFW_CLIENT:-}" --argjson logging "$_logging" '
+    --arg fwd "$(cat /proc/sys/net/ipv4/ip_forward)" --arg cif "$_cif" --arg client "${LFW_CLIENT:-}" --argjson logging "$_logging" --argjson telemetry "$_telemetry" '
     { hostname: $host, version: $ver, kernel: $kernel, alpine: $os, uptime: $uptime,
       load: $load, memory: $mem, ipForward: ($fwd == "1"),
       management: { port: $port, access: $access, clientIp: $client, clientInterface: $cif },
       ssh: { enabled: $ssh, port: $sshPort },
       logging: $logging,
+      telemetry: $telemetry,
       resolvers: $resolv, services: { dnsmasq: $dnsmasq } }'
 }
 

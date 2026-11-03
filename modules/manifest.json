@@ -2,9 +2,199 @@
   "schemaVersion": 1,
   "description": "Trusted, Git-tracked LiteFW module catalog, bundled in runtime releases.",
   "modules": [
-    {"id":"bind","version":"1","packages":["bind","bind-tools","bind-openrc"],"scripts":{"controller":"bind/module.sh","install":"bind/install.sh","remove":"bind/uninstall.sh"},"core":false},
-    {"id":"dnsmasq","version":"1","packages":["dnsmasq"],"scripts":{"controller":"dnsmasq/module.sh","install":"dnsmasq/install.sh","remove":"dnsmasq/uninstall.sh"},"core":true},
-    {"id":"ddns","version":"1","packages":["inadyn","inadyn-openrc"],"scripts":{"controller":"ddns/module.sh","install":"ddns/install.sh","remove":"ddns/uninstall.sh"},"core":false},
-    {"id":"openvpn","version":"1","packages":["openvpn","openvpn-openrc","easy-rsa"],"scripts":{"controller":"openvpn/module.sh","install":"openvpn/install.sh","remove":"openvpn/uninstall.sh"},"core":false}
+    {
+      "id": "bind",
+      "version": "1",
+      "packages": [
+        "bind",
+        "bind-tools",
+        "bind-openrc"
+      ],
+      "scripts": {
+        "controller": "bind/module.sh",
+        "install": "bind/install.sh",
+        "remove": "bind/uninstall.sh"
+      },
+      "core": false
+    },
+    {
+      "id": "dnsmasq",
+      "version": "1",
+      "packages": [
+        "dnsmasq"
+      ],
+      "scripts": {
+        "controller": "dnsmasq/module.sh",
+        "install": "dnsmasq/install.sh",
+        "remove": "dnsmasq/uninstall.sh"
+      },
+      "core": true
+    },
+    {
+      "id": "ddns",
+      "version": "1",
+      "packages": [
+        "inadyn",
+        "inadyn-openrc"
+      ],
+      "scripts": {
+        "controller": "ddns/module.sh",
+        "install": "ddns/install.sh",
+        "remove": "ddns/uninstall.sh"
+      },
+      "core": false
+    },
+    {
+      "id": "openvpn",
+      "version": "2",
+      "packages": [
+        "openvpn",
+        "openvpn-openrc",
+        "easy-rsa"
+      ],
+      "scripts": {
+        "controller": "openvpn/module.sh",
+        "install": "openvpn/install.sh",
+        "remove": "openvpn/uninstall.sh"
+      },
+      "core": false
+    },
+    {
+      "id": "ipsec",
+      "version": "1",
+      "packages": [
+        "strongswan",
+        "strongswan-openrc"
+      ],
+      "scripts": {
+        "controller": "ipsec/module.sh",
+        "install": "ipsec/install.sh",
+        "remove": "ipsec/uninstall.sh"
+      },
+      "core": false
+    },
+    {
+      "id": "suricata",
+      "version": "1",
+      "packages": [
+        "suricata",
+        "suricata-openrc"
+      ],
+      "scripts": {
+        "controller": "suricata/module.sh",
+        "install": "suricata/install.sh",
+        "remove": "suricata/uninstall.sh"
+      },
+      "core": false
+    },
+    {
+      "id": "geoip",
+      "version": "1",
+      "packages": [
+        "ipset",
+        "curl"
+      ],
+      "scripts": {
+        "controller": "geoip/module.sh",
+        "install": "geoip/install.sh",
+        "remove": "geoip/uninstall.sh"
+      },
+      "core": false
+    },
+    {
+      "id": "crowdsec",
+      "version": "1",
+      "packages": [
+        "crowdsec",
+        "crowdsec-openrc",
+        "ipset"
+      ],
+      "scripts": {
+        "controller": "crowdsec/module.sh",
+        "install": "crowdsec/install.sh",
+        "remove": "crowdsec/uninstall.sh"
+      },
+      "core": false
+    },
+    {
+      "id": "wireguard",
+      "version": "1",
+      "packages": [
+        "wireguard-tools"
+      ],
+      "scripts": {
+        "controller": "wireguard/module.sh",
+        "install": "wireguard/install.sh",
+        "remove": "wireguard/uninstall.sh"
+      },
+      "core": false
+    },
+    {
+      "id": "cloudflared",
+      "version": "1",
+      "packages": [
+        "cloudflared"
+      ],
+      "scripts": {
+        "controller": "cloudflared/module.sh",
+        "install": "cloudflared/install.sh",
+        "remove": "cloudflared/uninstall.sh"
+      },
+      "core": false
+    },
+    {
+      "id": "multiwan",
+      "version": "1",
+      "packages": [
+        "iproute2"
+      ],
+      "scripts": {
+        "controller": "multiwan/module.sh",
+        "install": "multiwan/install.sh",
+        "remove": "multiwan/uninstall.sh"
+      },
+      "core": false
+    },
+    {
+      "id": "mdns",
+      "version": "1",
+      "packages": [
+        "avahi",
+        "avahi-openrc"
+      ],
+      "scripts": {
+        "controller": "mdns/module.sh",
+        "install": "mdns/install.sh",
+        "remove": "mdns/uninstall.sh"
+      },
+      "core": false
+    },
+    {
+      "id": "captive",
+      "version": "1",
+      "packages": [
+        "opennds"
+      ],
+      "scripts": {
+        "controller": "captive/module.sh",
+        "install": "captive/install.sh",
+        "remove": "captive/uninstall.sh"
+      },
+      "core": false
+    },
+    {
+      "id": "frr",
+      "version": "1",
+      "packages": [
+        "frr",
+        "frr-openrc"
+      ],
+      "scripts": {
+        "controller": "frr/module.sh",
+        "install": "frr/install.sh",
+        "remove": "frr/uninstall.sh"
+      },
+      "core": false
+    }
   ]
 }

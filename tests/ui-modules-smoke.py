@@ -12,7 +12,18 @@ MODULES = [
     {"id": "dnsmasq", "name": "DNSMasq", "description": "LAN DNS and DHCP", "installed": True, "core": True, "packages": ["dnsmasq"]},
     {"id": "ddns", "name": "Dynamic DNS", "description": "DDNS updates", "installed": True, "core": False, "packages": ["inadyn"]},
     {"id": "openvpn", "name": "OpenVPN", "description": "VPN access", "installed": True, "core": False, "packages": ["openvpn"]},
+    {"id": "ipsec", "name": "IPsec (strongSwan)", "description": "IKEv2 site tunnels", "installed": True, "core": False, "packages": ["strongswan","strongswan-openrc"]},
 ]
+ADDONS = [
+    ("suricata","Suricata IDS/IPS","security"),("geoip","GeoIP Blocking","security"),
+    ("crowdsec","CrowdSec","security"),("wireguard","WireGuard VPN","vpn"),
+    ("cloudflared","Cloudflare Tunnel","connectivity"),("multiwan","Multi-WAN Failover","network"),
+    ("mdns","mDNS Repeater","network"),("captive","Captive Portal","network"),
+    ("frr","BGP / FRRouting","routing"),
+]
+for addon_id, name, category in ADDONS:
+    MODULES.append({"id": addon_id, "name": name, "description": name + " integration",
+                    "installed": True, "core": False, "packages": []})
 BIND = {"running": True, "configured": True, "zones": [
     {"name": "example.net", "serial": "2026110301", "records": []}],
     "listenAddresses": ["10.0.1.199"], "recursion": True,
@@ -21,13 +32,26 @@ BIND = {"running": True, "configured": True, "zones": [
 STATES = {
     "bind": BIND, "dnsmasq": {"running": True, "configured": True, "dnsEnabled": False},
     "ddns": {"running": True, "configured": True, "provider":"default@opendns.com","hostnames":["mynetwork"],"period":300,"interface":"", "username":"opendns-migrated","credentialConfigured":True, "custom":{}, "cloudflare":{"configured":True, "enabled":True, "scheduleMinutes":15, "credentialConfigured":True, "email":"admin@example.net", "zone":"blaize.net", "hostnames":["cloud.blaize.net","home.blaize.net"],"last":{"checkedAt":"2026-11-03T15:22:43Z","publicIPv4":"108.255.76.134"}}},
-    "openvpn": {"running": False, "configured": False, "clients": []},
+    "openvpn": {"running": False, "configured": False, "clients": [],
+        "clientTunnels":[{"id":"office","mode":"site-to-site","remoteHost":"vpn.example.net",
+                          "interface":"tun2","localSubnet":"10.1.0.0/24","remoteSubnet":"10.66.0.0/24","running":False}],
+        "sitePeers":[{"id":"branch","localSubnet":"10.1.0.0/24","remoteSubnet":"10.88.0.0/24"}]},
+    "ipsec": {"running":False,"configured":True,"tunnels":[
+        {"id":"branch","mode":"site-to-site","peer":"198.51.100.24",
+         "localSubnet":"10.1.0.0/24","remoteSubnet":"10.44.0.0/24",
+         "localId":"fw.example.net","remoteId":"branch.example.net",
+         "enabled":False,"established":False,"credentialConfigured":True}]}
 }
+for addon_id, name, category in ADDONS:
+    STATES[addon_id] = {"running": False, "configured": True,
+                        "settings":{"enabled": False, "credentialConfigured":False}}
 SYSTEM = {"hostname": "testfw", "version": "2.2.13-dev", "resolvers": ["1.1.1.1"],
           "management": {"clientInterface": "eth1", "port": 80, "access": ["eth1"]},
           "ssh": {"enabled": True, "port": 22},
           "logging": {"remoteEnabled": False,"server":"","port":514,"localEnabled":True,"serviceRunning":True},
-          "memory": {"availableKb": 10, "totalKb": 100}}
+          "telemetry": {"prometheus": True, "otlpEnabled": False,
+                        "endpoint": "", "intervalMinutes": 5, "tokenConfigured": False},
+"memory": {"availableKb": 10, "totalKb": 100}}
 
 
 class MockHandler(http.server.SimpleHTTPRequestHandler):
@@ -105,11 +129,21 @@ def main():
     try:
         for path, expected in [
             ("modules", ["BIND DNS", "DNSMasq", "Dynamic DNS", "OpenVPN", "Configure"]),
-            ("system", ["Alpine system packages", "Check packages", "Apply package updates", "Software updates"]),
+            ("system", ["Alpine system packages", "Check packages", "Apply package updates", "Software updates", "Telemetry export", "OTLP"]),
             ("module-bind", ["BIND authoritative zones", "Manage records", "Cloudflare"]),
             ("module-dnsmasq", ["DNSMasq DNS engine", "Upstream servers", "DNS resolver (dnsmasq)"]),
             ("module-ddns", ["Dynamic DNS", "Configure Inadyn provider", "Cloudflare DNS (pfSense migration)", "cloud.blaize.net", "home.blaize.net", "Check records"]),
-            ("module-openvpn", ["OpenVPN routed server", "OpenVPN clients"]),
+            ("module-openvpn", ["OpenVPN routed server", "OpenVPN clients", "OpenVPN client tunnels", "Site-to-site peers", "office", "branch"]),
+            ("module-ipsec", ["IPsec service", "IPsec site-to-site tunnels", "branch", "198.51.100.24", "Add site-to-site tunnel"]),
+            ("module-suricata", ["Suricata IDS/IPS", "Configure", "Update signatures"]),
+            ("module-geoip", ["GeoIP Blocking", "Refresh country lists"]),
+            ("module-crowdsec", ["CrowdSec", "Configure"]),
+            ("module-wireguard", ["WireGuard VPN", "Configure"]),
+            ("module-cloudflared", ["Cloudflare Tunnel", "Configure"]),
+            ("module-multiwan", ["Multi-WAN Failover", "Configure"]),
+            ("module-mdns", ["mDNS Repeater", "Configure"]),
+            ("module-captive", ["Captive Portal", "Configure"]),
+            ("module-frr", ["BGP / FRRouting", "Configure"]),
         ]:
             run = subprocess.run(
                 ["google-chrome", "--headless=new", "--no-sandbox", "--disable-gpu",
@@ -120,6 +154,7 @@ def main():
                 capture_output=True, text=True, timeout=75)
             html = run.stdout
             if run.returncode or any(x not in html for x in expected) or "Could not read live state" in html:
+                print('UI_ERROR_CONTEXT:', html[html.find('id="view"')-100:html.find('id="view"')+1600], flush=True)
                 raise AssertionError(f"UI smoke failed for #{path}: code={run.returncode}, "
                                      f"missing={[x for x in expected if x not in html]}, "
                                      f"stderr={run.stderr[-400:]}, html={html[-700:]}")
