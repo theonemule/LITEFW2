@@ -964,8 +964,8 @@ function ddnsSettingsForm() {
 function ddnsPanel() {
   const m = moduleBy('ddns'); if (!m || !m.installed) return [];
   const x = moduleState('ddns');
-  const actions = [btn('Configure', ddnsSettingsForm, 'btn-primary')];
-  if (x.configured) actions.push(btn('Force update', async () => {
+  const actions = [btn('Configure Inadyn provider', ddnsSettingsForm, 'btn-primary')];
+  if (x.configured) actions.push(btn('Force Inadyn update', async () => {
     const j = await op('ddns.force', {});
     toast((j.result && j.result.output) || 'Dynamic DNS update completed', 'success');
     await load();
@@ -977,7 +977,34 @@ function ddnsPanel() {
       h('dt', { class: 'col-sm-3' }, 'Provider'), h('dd', { class: 'col-sm-9 mono' }, x.provider),
       h('dt', { class: 'col-sm-3' }, 'Hostnames'), h('dd', { class: 'col-sm-9 mono' }, (x.hostnames || []).join(', ') || '—'),
       h('dt', { class: 'col-sm-3' }, 'Source'), h('dd', { class: 'col-sm-9' }, x.interface || 'automatic'))
-    : 'Installed but not configured.'))];
+    : (x.nativeConfig ? 'Installed but not configured in LiteFW. An existing native inadyn file will be backed up when you configure the module.' : 'Installed but not configured. Choose Configure to set a provider, hostnames and credentials.'))),
+    ...(x.cloudflare && x.cloudflare.configured ? [
+      card('Cloudflare DNS (pfSense migration)', [
+        btn('Check records', async () => {
+          try {
+            const j = await op('ddns.cfcheck', {});
+            toast((j.result && j.result.output) || 'Cloudflare records checked', 'success');
+            await load();
+          } catch (e) { toast('Cloudflare check failed: ' + e.message, 'danger'); }
+        }, 'btn-outline-primary'),
+        btn('Force refresh', () => confirmDo('Refresh Cloudflare DNS',
+          'Update managed Cloudflare A records using the current public IPv4? CNAME aliases and other DNS records will be preserved.',
+          () => apply('ddns.cfupdate', {}, 'Cloudflare DNS updated'), 'Refresh'), 'btn-primary')
+      ], h('div', {class:'card-body small'},
+        h('p', {class:'mb-2'}, 'Secure HTTPS updates for the migrated A records. The existing credential is protected in a root-only file and never exposed to the browser. Consider replacing the legacy global key with a scoped Cloudflare API token.'),
+        h('dl', {class:'row mb-0'},
+          h('dt', {class:'col-sm-3'}, 'Zone'),
+          h('dd', {class:'col-sm-9 mono'}, x.cloudflare.zone || ''),
+          h('dt', {class:'col-sm-3'}, 'Records'),
+          h('dd', {class:'col-sm-9 mono'}, (x.cloudflare.hostnames || []).join(', ')),
+          h('dt', {class:'col-sm-3'}, 'Last check'),
+          h('dd', {class:'col-sm-9'}, (x.cloudflare.last || {}).checkedAt || 'Never'),
+          h('dt', {class:'col-sm-3'}, 'Public IPv4'),
+          h('dd', {class:'col-sm-9 mono'}, (x.cloudflare.last || {}).publicIPv4 || 'Unknown'),
+          h('dt', {class:'col-sm-3'}, 'Schedule'),
+          h('dd', {class:'col-sm-9'}, 'Every 15 minutes via Alpine cron'))))
+    ] : [])
+  ];
 }
 
 views.modules = () => {

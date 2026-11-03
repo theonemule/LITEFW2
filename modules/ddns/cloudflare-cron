@@ -1,0 +1,3 @@
+#!/bin/sh
+# LiteFW Cloudflare legacy DNS updater, invoked by Alpine run-parts every 15m.
+/usr/lib/litefwm/modules/ddns/cloudflare-legacy.sh sync 2>&1 | logger -t litefw-ddns

@@ -237,6 +237,16 @@ op_ddns_configure() {
   module_call ddns configure "$(jget provider)" "$(module_csv hostnames)" "$(jget username)" "$(jget password)"     "$(jget period)" "$(jget interface)" "$_check" "$_checkpath" "$_update" "$_updatepath" "$_ssl"
   log_op "ddns.configure $(jget provider)"
 }
+op_ddns_cfcheck() {
+  _out=$(module_call ddns cloudflare-check)
+  jq -n --arg output "$_out" '{output:$output}' >"$RESULT"
+  log_op "ddns.cfcheck"
+}
+op_ddns_cfupdate() {
+  _out=$(module_call ddns cloudflare-update)
+  jq -n --arg output "$_out" '{output:$output}' >"$RESULT"
+  log_op "ddns.cfupdate"
+}
 op_ddns_force() {
   _out=$(module_call ddns force-update 2>&1)
   jq -n --arg output "$_out" '{output:$output}' >"$RESULT"

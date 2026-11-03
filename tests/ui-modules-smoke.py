@@ -20,7 +20,7 @@ BIND = {"running": True, "configured": True, "zones": [
     "forwardMode": "only", "dnssecValidation": "auto", "maxCacheTtl": 7200}
 STATES = {
     "bind": BIND, "dnsmasq": {"running": True, "configured": True, "dnsEnabled": False},
-    "ddns": {"running": False, "configured": False},
+    "ddns": {"running": True, "configured": True, "provider":"default@opendns.com","hostnames":["mynetwork"],"period":300,"interface":"", "username":"opendns-migrated","credentialConfigured":True, "custom":{}, "cloudflare":{"configured":True, "zone":"blaize.net", "hostnames":["cloud.blaize.net","home.blaize.net"],"last":{"checkedAt":"2026-11-03T15:22:43Z","publicIPv4":"108.255.76.134"}}},
     "openvpn": {"running": False, "configured": False, "clients": []},
 }
 SYSTEM = {"hostname": "testfw", "version": "2.2.13-dev", "resolvers": ["1.1.1.1"],
@@ -78,7 +78,7 @@ def main():
             ("system", ["Alpine system packages", "Check packages", "Apply package updates", "Software updates"]),
             ("module-bind", ["BIND authoritative zones", "Manage records", "Cloudflare"]),
             ("module-dnsmasq", ["DNSMasq DNS engine", "Upstream servers", "DNS resolver (dnsmasq)"]),
-            ("module-ddns", ["Dynamic DNS", "Configure"]),
+            ("module-ddns", ["Dynamic DNS", "Configure Inadyn provider", "Cloudflare DNS (pfSense migration)", "cloud.blaize.net", "home.blaize.net", "Check records"]),
             ("module-openvpn", ["OpenVPN routed server", "OpenVPN clients"]),
         ]:
             run = subprocess.run(

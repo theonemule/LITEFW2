@@ -44,6 +44,8 @@ jobs:
           ./tests/module-contract-test.sh
           ./tests/module-install-verification.sh
           ./tests/alpine-package-update.sh
+          ./tests/ddns-native-config.sh
+          ./tests/ddns-cloudflare-legacy.sh
           ./tests/firewall-staged-apply.sh
           ./tests/firewall-recovery.sh
           while IFS= read -r -d '' script; do

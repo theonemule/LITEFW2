@@ -31,6 +31,8 @@ jobs:
           ./tests/module-contract-test.sh
           ./tests/module-install-verification.sh
           ./tests/alpine-package-update.sh
+          ./tests/ddns-native-config.sh
+          ./tests/ddns-cloudflare-legacy.sh
           ./tests/api-resource-test.sh
           ./tests/dns-provider-presets.sh
           ./tests/bind-zone-management.sh

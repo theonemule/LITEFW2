@@ -52,13 +52,17 @@ grep -q 'ovpn.*echo vpn' lib/net.sh
 grep -q 'kind == "physical" or .kind == "bridge" or .kind == "vlan"' lib/persist.jq
 
 # DDNS uses inadyn native configuration and never exposes the credential in state.
-grep -q 'CONF=/etc/inadyn/inadyn.conf' modules/ddns/module.sh
+grep -q 'LFW_INADYN_CONF' modules/ddns/module.sh
 grep -q 'credentialConfigured' modules/ddns/module.sh
 ! grep -q 'password:$' modules/ddns/module.sh
 grep -q 'chmod 0640 "$CONF"' modules/ddns/module.sh
 grep -q 'inadyn --check-config' modules/ddns/module.sh
 grep -Fq '[ -f /etc/init.d/inadyn ]' modules/ddns/module.sh
 grep -q 'Dynamic DNS installation failed' modules/ddns/module.sh
+grep -q 'op_ddns_cfcheck()' lib/modules.sh
+grep -q 'op_ddns_cfupdate()' lib/modules.sh
+grep -q 'cloudflare-check)' modules/ddns/module.sh
+grep -q 'Cloudflare DNS (pfSense migration)' www/app.js
 grep -q 'Installer exited but' lib/modules.sh
 grep -q 'DNSMasq provides' modules/dnsmasq/module.sh
 grep -q 'zone-records)' modules/bind/module.sh

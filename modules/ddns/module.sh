@@ -9,7 +9,12 @@ COMPAT="$SELF/../../lib/module-compat.sh"
 [ -r "$COMPAT" ] || COMPAT="$SELF/../../module-compat.sh"
 . "$COMPAT"
 
-CONF=/etc/inadyn/inadyn.conf
+CONF=${LFW_INADYN_CONF:-/etc/inadyn/inadyn.conf}
+CFHELPER="$SELF/cloudflare-legacy.sh"
+cf_status(){
+  if [ -x "$CFHELPER" ]; then "$CFHELPER" status
+  else printf '%s\n' '{"configured":false,"hostnames":[]}'; fi
+}
 
 meta(){ jq -n '{id:"ddns",name:"Dynamic DNS",description:"Lightweight inadyn client for common DDNS providers and custom update endpoints.",category:"network-service"}'; }
 installed(){ command -v inadyn >/dev/null 2>&1 && [ -f /etc/init.d/inadyn ]; }
@@ -41,7 +46,7 @@ configure(){
   [ "$period" -ge 60 ] || die "Minimum update period is 60 seconds"
   [ -z "$iface" ] || { safe_iface "$iface" && ip link show dev "$iface" >/dev/null 2>&1; } || die "Invalid source interface"
   case "$custom_ssl" in true|false) ;; *) die "Invalid SSL setting";; esac
-  if [ -z "$secret" ] && [ -r "$CONF" ]; then secret=$(old_secret); fi
+  if [ -z "$secret" ] && [ -r "$CONF" ] && grep -q "^# litefwm:provider=" "$CONF"; then secret=$(old_secret); fi
   [ -n "$secret" ] || die "Provider credential is required"
 
   mkdir -p /etc/inadyn
@@ -88,6 +93,10 @@ configure(){
   } > "$tmp"
   chmod 0600 "$tmp"
   inadyn --check-config -f "$tmp" >/dev/null
+  if [ -f "$CONF" ]; then
+    # Native/package-provided config must not be silently discarded.
+    cp -p "$CONF" "$CONF.litefw-backup.$(date -u +%Y%m%dT%H%M%SZ)" || die "Failed to back up existing inadyn configuration"
+  fi
   mv "$tmp" "$CONF"
   chown root:inadyn "$CONF" 2>/dev/null || true
   chmod 0640 "$CONF"
@@ -96,16 +105,26 @@ configure(){
 }
 snapshot(){
   run=false; running && run=true
-  [ -r "$CONF" ] || { jq -n --argjson running "$run" '{running:$running,configured:false}'; return; }
+  cf=$(cf_status)
+  # Alpine's inadyn package ships a sample /etc/inadyn/inadyn.conf. It is
+  # not an appliance-managed provider configuration; do not attempt to parse
+  # nonexistent LiteFW metadata (e.g. period="" -> jq tonumber failure).
+  if [ ! -r "$CONF" ] || ! grep -q '^# litefwm:provider=' "$CONF"; then
+    native=false
+    [ ! -f "$CONF" ] || native=true
+    jq -n --argjson running "$run" --argjson nativeConfig "$native" --argjson cloudflare "$cf" '{running:$running,configured:false,nativeConfig:$nativeConfig,cloudflare:$cloudflare}'
+    return
+  fi
   provider=$(field provider); hosts=$(field hosts); user=$(field username); period=$(field period); iface=$(field interface)
+  case "$period" in ''|*[!0-9]*) period=300;; esac
   secret=false; grep -q '^[[:space:]]*password[[:space:]]*=' "$CONF" && secret=true
   ssl=$(field custom-ssl); [ -n "$ssl" ] || ssl=true
   jq -n --argjson running "$run" --arg provider "$provider" --arg hosts "$hosts" --arg username "$user" \
     --arg period "$period" --arg interface "$iface" --argjson credentialConfigured "$secret" \
     --arg checkServer "$(field custom-check-server)" --arg checkPath "$(field custom-check-path)" \
     --arg updateServer "$(field custom-update-server)" --arg updatePath "$(field custom-update-path)" \
-    --argjson customSsl "$ssl" \
-    '{running:$running,configured:true,provider:$provider,hostnames:($hosts|split(",")|map(select(length>0))),username:$username,period:($period|tonumber),interface:$interface,credentialConfigured:$credentialConfigured,custom:{checkServer:$checkServer,checkPath:$checkPath,updateServer:$updateServer,updatePath:$updatePath,ssl:$customSsl}}'
+    --argjson customSsl "$ssl" --argjson cloudflare "$cf" \
+    '{cloudflare:$cloudflare,running:$running,configured:true,provider:$provider,hostnames:($hosts|split(",")|map(select(length>0))),username:$username,period:($period|tonumber),interface:$interface,credentialConfigured:$credentialConfigured,custom:{checkServer:$checkServer,checkPath:$checkPath,updateServer:$updateServer,updatePath:$updatePath,ssl:$customSsl}}'
 }
 force_update(){
   require_root
@@ -131,6 +150,7 @@ uninstall_module(){
   rc-service inadyn stop >/dev/null 2>&1 || true
   rc-update del inadyn default >/dev/null 2>&1 || true
   apk del inadyn-openrc inadyn >/dev/null 2>&1 || true
+  rm -f /etc/periodic/15min/litefw-cloudflare
   rm -rf /etc/inadyn /var/cache/inadyn
 }
 case "${1:-}" in
@@ -143,6 +163,8 @@ case "${1:-}" in
   firewall) : ;;
   configure) shift; configure "$@";;
   force-update) force_update;;
+  cloudflare-check) require_root; [ -x "$CFHELPER" ] || die "Cloudflare helper missing"; "$CFHELPER" check;;
+  cloudflare-update) require_root; [ -x "$CFHELPER" ] || die "Cloudflare helper missing"; "$CFHELPER" force;;
   service)
     case "${2:-}" in
       start) [ -r "$CONF" ] || die "Configure Dynamic DNS first"; rc-update add inadyn default >/dev/null 2>&1 || true; rc-service inadyn start;;

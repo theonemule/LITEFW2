@@ -46,3 +46,22 @@ Check repositories and package availability using:
 Check the service using:
     rc-service inadyn status
 Configure a provider and hostname via Modules > Dynamic DNS.
+
+
+## Migrated pfSense Dynamic DNS profiles
+
+The Cloudflare legacy updater (modules/ddns/cloudflare-legacy.sh) uses HTTPS
+with Global API Key headers. Its credential is restricted to root in
+/etc/inadyn/litefw-cloudflare-legacy.json (0600). The key never appears in
+URLs, client API responses, or GitHub. The cron helper at
+/etc/periodic/15min/litefw-cloudflare is enabled to update every 15 minutes.
+It never creates records, overwrites CNAMEs or touches other zones. The DDNS
+module page displays its status and last verified public IPv4.
+
+OpenDNS networks use native Inadyn, configured via the Dynamic DNS form.
+Both clients work behind the upstream pfSense firewall: each discovers the
+public IPv4 through HTTPS instead of treating an RFC1918 WAN as public.
+
+For long-term Cloudflare use, migrate the legacy Global API Key to a zone-scoped
+API token and use the Inadyn Cloudflare bearer-token provider. pfSense source
+DDNS entries may be kept disabled for rollback to avoid competing updates.
