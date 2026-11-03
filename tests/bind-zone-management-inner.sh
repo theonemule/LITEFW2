@@ -24,6 +24,14 @@ grep -Fq 'max-cache-ttl 7200;' /etc/bind/named.conf
 grep -Fq 'max-ncache-ttl 600;' /etc/bind/named.conf
 "$bind" snapshot | jq -e '.forwarders==["9.9.9.9","1.1.1.1"] and .forwardMode=="only" and .dnssecValidation=="auto" and .maxCacheTtl==7200' >/dev/null
 echo "PASS: advanced forwarder, cache and DNSSEC settings validated by real BIND"
+# Family-protection forwarders must never fall back to root recursion.
+"$bind" settings-set 127.0.0.1 127.0.0.1/32 "" true 127.0.0.1/32 1.1.1.3,1.0.0.3 only auto yes 7200 600 false
+named-checkconf -z /etc/bind/named.conf
+grep -Fq 'forward only;' /etc/bind/named.conf
+grep -Fq '1.1.1.3;' /etc/bind/named.conf
+grep -Fq '1.0.0.3;' /etc/bind/named.conf
+! grep -Fq '1.1.1.1;' /etc/bind/named.conf
+echo "PASS: Cloudflare Family BIND forwarders retain strict forward-only policy"
 cat >/tmp/newzone <<'EOF'
 $TTL 3600
 @ IN SOA ns1.test.lan. hostmaster.test.lan. ( 2026110201 3600 600 1209600 300 )

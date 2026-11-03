@@ -248,6 +248,7 @@ function form(title, fields, onApply, o = {}) {
   const ui = buildFields(fields);
   dlgChrome(title, o.applyText, o.danger);
   $('#dlgBody').replaceChildren(h('div', {}, o.note && h('div', { class: 'alert alert-' + (o.noteKind || 'info') + ' py-2 small' }, o.note), ui.body));
+  if (o.decorate) o.decorate(ui.body, ui.vals);
   dlgApply = () => onApply(ui.vals());
   showDlg();
 }
@@ -508,19 +509,97 @@ views.dhcp = () => {
   ];
 };
 
+// Presets contain published IPv4 DNS addresses; native server IPs remain the source of truth.
+function dnsResolverMatch(ips, emptyChoice) {
+  if (!ips || !ips.length) return emptyChoice;
+  const sorted = [...ips].sort().join(',');
+  const preset = DNS_RESOLVER_PRESETS.find(p => [...p.ips].sort().join(',') === sorted);
+  return preset ? preset.id : 'custom';
+}
+function dnsResolverFields(ips, emptyChoice, emptyLabel) {
+  return [
+    { k:'resolverChoice', label:'Upstream DNS provider / protection level', type:'select',
+      value:dnsResolverMatch(ips, emptyChoice),
+      options:[[emptyChoice,emptyLabel],['custom','Custom DNS servers — enter IPs manually']]
+        .concat(DNS_RESOLVER_PRESETS.map(p => [p.id, p.provider + ' — ' + p.name + ' · ' + p.level])),
+      help:'Choose a provider and its filtering profile. Never mix filtered and unfiltered DNS resolvers; filtering only works if clients use this resolver.' },
+    { k:'customResolvers', label:'Custom upstream DNS IP addresses', type:'list',
+      value:ips || [], placeholder:'192.168.1.1, 1.1.1.1',
+      show:v => v.resolverChoice === 'custom',
+      help:'Enter IPv4 addresses. For family policies, use only resolvers enforcing the same filtering level.' }
+  ];
+}
+function dnsResolverIPs(v) {
+  if (v.resolverChoice === 'custom') {
+    if (!v.customResolvers || !v.customResolvers.length) throw new Error('Enter at least one custom upstream DNS address.');
+    return v.customResolvers;
+  }
+  if (v.resolverChoice === 'automatic' || v.resolverChoice === 'direct') return [];
+  const preset = DNS_RESOLVER_PRESETS.find(p => p.id === v.resolverChoice);
+  if (!preset) throw new Error('Select an upstream DNS provider.');
+  return [...preset.ips];
+}
+function dnsResolverIsFiltered(v) {
+  const p = DNS_RESOLVER_PRESETS.find(x => x.id === v.resolverChoice);
+  return !!p && !!p.filters;
+}
+function dnsResolverDetails(root, getValues) {
+  const select = root.querySelector('#f_resolverChoice');
+  if (!select) return;
+  const detail = h('div', { class:'alert alert-light border small mb-3' });
+  select.closest('.mb-3').after(detail);
+  const update = () => {
+    const v = getValues(), p = DNS_RESOLVER_PRESETS.find(x => x.id === v.resolverChoice);
+    if (!p) {
+      detail.textContent = v.resolverChoice === 'custom'
+        ? 'Custom DNS — enter upstream IPs. Filtering depends entirely on your servers.'
+        : v.resolverChoice === 'automatic'
+          ? 'Automatic WAN DNS — uses resolvers supplied by the network; filtering depends on those servers.'
+          : 'Direct recursion — BIND resolves via root DNS servers, without an upstream filtering provider.';
+      return;
+    }
+    detail.replaceChildren(
+      h('div', { class:'fw-semibold' }, p.provider + ' — ' + p.name),
+      h('div', {}, p.details),
+      h('div', { class:'mono mt-1' }, p.ips.join('  ·  ')),
+      h('div', { class:'mt-1 text-secondary' },
+        p.filters ? 'Filtering relies on these upstream resolvers. Clients may bypass it using VPNs or encrypted DNS.' :
+          'This profile does not provide a built-in family filtering policy.'),
+      h('a', { href:p.docs, target:'_blank', rel:'noopener noreferrer', class:'d-inline-block mt-1' }, 'Provider documentation'));
+  };
+  select.addEventListener('change', update);
+  update();
+}
+function dnsResolverSummary(ips, emptyLabel) {
+  if (!ips || !ips.length) return emptyLabel;
+  const p = DNS_RESOLVER_PRESETS.find(x => [...x.ips].sort().join(',') === [...ips].sort().join(','));
+  return p ? p.provider + ' — ' + p.name + ' (' + p.level + ') · ' + ips.join(', ') :
+    'Custom DNS · ' + ips.join(', ');
+}
+
 // ---------- DNS
 views.dns = () => {
   const d = S.dns;
   const edit = () => form('DNS settings', [
     { k: 'domain', label: 'Local domain', value: d.domain || 'lan', help: 'DHCP clients and reservations resolve as name.domain.' },
-    { k: 'upstream', label: 'Upstream DNS servers', type: 'list', value: d.upstream, placeholder: 'empty = the WAN\'s resolvers (' + S.system.resolvers.join(', ') + ')' },
+    ...dnsResolverFields(d.upstream, 'automatic', 'Automatic — use WAN / system DNS resolvers'),
     { k: 'hosts', label: 'Local host records (one per line: name ip)', type: 'textarea', value: d.hosts.map(x => `${x.name} ${x.ip}`).join('\n'), placeholder: 'nas 192.168.10.5' }
-  ], v => apply('dns.set', { domain: v.domain, upstream: v.upstream, hosts: v.hosts.split('\n').map(l => l.trim().split(/\s+/)).filter(x => x[0]).map(([name, ip]) => ({ name, ip })) }, 'DNS applied'));
+  ], v => apply('dns.set', {
+    domain:v.domain, upstream:dnsResolverIPs(v),
+    hosts:v.hosts.split('\n').map(l => l.trim().split(/\s+/)).filter(x => x[0]).map(([name, ip]) => ({name, ip}))
+  }, 'DNS applied'), {
+    note: moduleState('bind').running
+      ? 'BIND9 owns DNS port 53. The dnsmasq upstream choices here can be saved but will not serve DNS queries until BIND releases the port.'
+      : 'Plain DNS forwarding on UDP/TCP port 53. A filtering preset blocks only the categories its provider identifies.',
+    decorate:dnsResolverDetails
+  });
   const core = card('DNS resolver (dnsmasq)', [btn('Edit', edit, 'btn-primary')], h('div', { class: 'card-body' },
     h('dl', { class: 'row mb-0' },
       h('dt', { class: 'col-sm-3' }, 'Local domain'), h('dd', { class: 'col-sm-9 mono' }, dash(d.domain)),
-      h('dt', { class: 'col-sm-3' }, 'Upstream servers'), h('dd', { class: 'col-sm-9 mono' }, d.upstream.join(', ') || `WAN resolvers (${S.system.resolvers.join(', ') || 'none'})`),
-      h('dt', { class: 'col-sm-3' }, 'Serves'), h('dd', { class: 'col-sm-9' }, l3().filter(i => i.role === 'lan').map(i => disp(i.name)).join(', ') || 'no LAN segments'),
+      h('dt', { class: 'col-sm-3' }, 'Upstream servers'), h('dd', { class: 'col-sm-9 mono' }, dnsResolverSummary(d.upstream, 'WAN resolvers (' + S.system.resolvers.join(', ') + ')')),
+      h('dt', { class: 'col-sm-3' }, 'DNS listener'), h('dd', { class: 'col-sm-9' },
+        moduleState('bind').running ? 'Disabled — BIND9 currently serves DNS on port 53' : 'dnsmasq (LAN interfaces)'),
+      h('dt', { class: 'col-sm-3' }, 'Configured LANs'), h('dd', { class: 'col-sm-9' }, l3().filter(i => i.role === 'lan').map(i => disp(i.name)).join(', ') || 'none'),
       h('dt', { class: 'col-sm-3' }, 'Host records'), h('dd', { class: 'col-sm-9 mono' }, d.hosts.length ? d.hosts.map(x => h('div', {}, `${x.name} → ${x.ip}`)) : '—'))));
   return [core, ...bindPanel()];
 };
@@ -557,13 +636,12 @@ function bindSettingsForm() {
     { k: 'allowTransfer', label: 'Allow zone transfers from', type: 'list', value: x.allowTransfer || [], placeholder: 'empty = none' },
     { k: 'recursion', label: 'Enable recursion', type: 'check', value: !!x.recursion },
     { k: 'recursiveClients', label: 'Recursive clients', type: 'list', value: x.recursiveClients || lanCidrs, placeholder: '192.168.10.0/24', help: 'Required when recursion is enabled. Open recursion is rejected.', show: v => v.recursion },
-    { k: 'forwarders', label: 'Upstream DNS forwarders', type: 'list',
-      value: x.forwarders || [], placeholder: '10.0.1.1, 1.1.1.1, 9.9.9.9', show: v => v.recursion,
-      help: 'Send client queries outside authoritative zones to these servers, in priority order. Leave empty to resolve directly using DNS root servers.' },
-    { k: 'forwardMode', label: 'Forwarder policy', type: 'select', value: x.forwardMode || 'first',
+    ...dnsResolverFields(x.forwarders || [], 'direct', 'Direct recursion — no upstream forwarders'),
+    { k: 'forwardMode', label: 'Forwarder policy (custom or unfiltered)', type: 'select', value: x.forwardMode || 'first',
       options: [['first', 'First — try forwarders, then resolve directly if they fail'],
                 ['only', 'Only — send recursive queries exclusively to forwarders']],
-      show: v => v.recursion && v.forwarders && v.forwarders.length > 0 },
+      show: v => v.recursion && v.resolverChoice !== 'direct' && !dnsResolverIsFiltered(v),
+      help:'Filtered presets always use forward-only so a failed upstream cannot silently bypass filtering.' },
     { k: 'dnssecValidation', label: 'DNSSEC validation', type: 'select', value: x.dnssecValidation || 'auto',
       options: [['auto','Automatic (recommended)'], ['yes','Enabled'],['no','Disabled']],
       help: 'Validates signed DNS data. Requires working DNSSEC trust anchors and upstream connectivity.' },
@@ -575,8 +653,18 @@ function bindSettingsForm() {
       help: 'Maximum caching for NXDOMAIN/no-answer responses (0–604800 seconds).' },
     { k: 'listenIPv6', label: 'Also listen on all IPv6 interfaces', type: 'check', value: !!x.listenIPv6,
       help: 'May expose DNS on WAN IPv6. Use appropriate network/firewall restrictions.' }
-  ], v => apply('bind.settings', v, 'BIND settings applied'), {
-    note: 'BIND serves authoritative zones and optionally forwards recursive queries. On this appliance, BIND owns DNS port 53; dnsmasq DHCP settings and DHCP server state are unaffected.'
+  ], v => {
+    const ips = dnsResolverIPs(v);
+    if (ips.length && !v.recursion &&
+        v.resolverChoice !== dnsResolverMatch(x.forwarders || [], 'direct'))
+      throw new Error('Enable recursion to activate a new upstream DNS provider.');
+    return apply('bind.settings', {
+      ...v, forwarders:ips,
+      forwardMode:dnsResolverIsFiltered(v) ? 'only' : (v.forwardMode || 'first')
+    }, 'BIND settings applied');
+  }, {
+    note: 'BIND owns DNS port 53. Filtered provider presets automatically use forward-only mode; they never fail over to unfiltered root resolution. DHCP remains unchanged.',
+    decorate:dnsResolverDetails
   });
 }
 
@@ -670,7 +758,7 @@ function bindPanel() {
             h('dt', { class: 'col-sm-3' }, 'Listen'), h('dd', { class: 'col-sm-9 mono' }, (x.listenAddresses || []).join(', ') || '—'),
             h('dt', { class: 'col-sm-3' }, 'Recursion'), h('dd', { class: 'col-sm-9' }, x.recursion ? 'restricted to ' + (x.recursiveClients || []).join(', ') : 'off'),
             h('dt', { class: 'col-sm-3' }, 'Forwarders'), h('dd', { class: 'col-sm-9 mono' },
-              (x.forwarders || []).join(', ') || 'direct recursion / none',
+              dnsResolverSummary(x.forwarders, 'direct recursion / none'),
               x.forwarders && x.forwarders.length ? ' (' + (x.forwardMode || 'first') + ')' : ''),
             h('dt', { class: 'col-sm-3' }, 'DNSSEC / caching'), h('dd', { class: 'col-sm-9' },
               (x.dnssecValidation || 'auto') + ' · max TTL ' + (x.maxCacheTtl ?? 86400) + 's'))

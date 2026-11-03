@@ -40,6 +40,7 @@ jobs:
           ./tests/upgrade-check-test.sh
           ./tests/dhcp-per-interface-options.sh
           ./tests/bind-zone-management.sh
+          ./tests/dns-provider-presets.sh
           ./tests/firewall-staged-apply.sh
           ./tests/firewall-recovery.sh
           while IFS= read -r -d '' script; do

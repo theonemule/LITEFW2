@@ -212,3 +212,36 @@ prevent arbitrary file access and excessive resource consumption.
 As with all LiteFW runtime upgrades, the upgrade to 2.2.11 changes only code:
 existing DNS forwarders, zones, firewall/NAT, DHCP reservations, and enabled
 states are not changed until you explicitly save a BIND setting or zone.
+
+## LiteFW 2.2.12 — Plain DNS upstream provider presets
+
+The dnsmasq DNS and BIND9 settings editors offer an Upstream DNS provider /
+protection level selector, with profile descriptions, primary/secondary IPv4
+addresses, and links to official provider documentation. Selections include
+Cloudflare Standard/Malware/Family, OpenDNS Home/FamilyShield/Sandbox,
+Quad9 secure/unfiltered, CleanBrowsing Security/Adult/Family, AdGuard
+default/family/non-filtering, Google Public DNS, and Custom DNS servers.
+
+- A preset fills its matched IPv4 servers into native dnsmasq server= and
+  BIND forwarders; neither stores a separate provider database.
+- Existing resolver IPs are detected from live config. No match means Custom,
+  preserving existing addresses.
+- dnsmasq retains Automatic WAN/system DNS with no fixed resolvers.
+- BIND retains Direct recursion with no forwarders.
+- Filtered BIND presets force forward only; to avoid unfiltered root fallback.
+  Unfiltered and custom forwarders retain their existing first/only setting.
+- When BIND owns DNS port 53, dnsmasq choices are saved but cannot serve
+  client DNS requests until BIND releases port 53.
+- These use ordinary plaintext UDP/TCP DNS, NOT DoH or DoT. Domain filtering
+  is best effort and can be bypassed with alternate DNS, VPN, encrypted DNS.
+  OpenDNS Home custom filtering needs an OpenDNS account and registered network.
+- Merely upgrading does not change DNS, BIND zones, firewall, DHCP, routing.
+
+Provider documentation:
+https://developers.cloudflare.com/1.1.1.1/ip-addresses/
+https://www.opendns.com/setupguide/
+https://www.cisco.com/c/en/us/support/docs/security/umbrella/225803-understand-opendns-familyshield.html
+https://docs.quad9.net/services/
+https://cleanbrowsing.org/filters
+https://adguard-dns.io/en/public-dns.html
+https://developers.google.com/speed/public-dns/docs/using
