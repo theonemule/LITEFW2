@@ -238,17 +238,21 @@ op_ddns_configure() {
   log_op "ddns.configure $(jget provider)"
 }
 op_ddns_cfconfigure() {
-  # Pass a root-only request file path; never expose provider credentials in argv.
-  module_call ddns cloudflare-configure "$BODY" >"$RESULT"
+  # Explicit failure handling is mandatory: lfwctl uses set -u, not set -e.
+  # A failed provider validation must never be logged as a successful save.
+  module_call ddns cloudflare-configure "$BODY" >"$RESULT" ||
+    die "Cloudflare validation failed; no configuration changes were saved"
+  jq -e 'type == "object" and .credentialConfigured == true' "$RESULT" >/dev/null 2>&1 ||
+    die "Cloudflare configuration handler did not return a valid result"
   log_op "ddns.cfconfigure"
 }
 op_ddns_cfcheck() {
-  _out=$(module_call ddns cloudflare-check)
+  _out=$(module_call ddns cloudflare-check) || die "Cloudflare record check failed"
   jq -n --arg output "$_out" '{output:$output}' >"$RESULT"
   log_op "ddns.cfcheck"
 }
 op_ddns_cfupdate() {
-  _out=$(module_call ddns cloudflare-update)
+  _out=$(module_call ddns cloudflare-update) || die "Cloudflare DNS refresh failed"
   jq -n --arg output "$_out" '{output:$output}' >"$RESULT"
   log_op "ddns.cfupdate"
 }

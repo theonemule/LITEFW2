@@ -26,7 +26,7 @@ grep -Fq 'POST:/system/packages/check)' cgi/api.cgi
 grep -Fq 'POST:/system/packages/upgrade)' cgi/api.cgi
 grep -Fq "btn('Check packages'" www/app.js
 grep -Fq "btn('Apply package updates'" www/app.js
-grep -Fq '/app.js?v=2.2.16' www/index.html
+grep -Fq '/app.js?v=2.2.17' www/index.html
 grep -Fq "btn('Check for updates'" www/app.js
 grep -Fq "btn('Install update'" www/app.js
 grep -Fq "btn('Install uploaded file'" www/app.js

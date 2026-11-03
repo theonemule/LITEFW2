@@ -62,6 +62,7 @@ grep -q 'Dynamic DNS installation failed' modules/ddns/module.sh
 grep -q 'op_ddns_cfcheck()' lib/modules.sh
 grep -q 'op_ddns_cfupdate()' lib/modules.sh
 grep -q 'op_ddns_cfconfigure()' lib/modules.sh
+grep -q "Cloudflare validation failed; no configuration changes were saved" lib/modules.sh
 grep -q 'cloudflare-configure)' modules/ddns/module.sh
 grep -q 'function cloudflareSettingsForm()' www/app.js
 grep -q 'cloudflare-check)' modules/ddns/module.sh
