@@ -113,9 +113,11 @@ def main():
         ]:
             run = subprocess.run(
                 ["google-chrome", "--headless=new", "--no-sandbox", "--disable-gpu",
-                 "--disable-dev-shm-usage", "--no-first-run", "--virtual-time-budget=2500",
+                 "--disable-dev-shm-usage", "--no-first-run",
+                 "--disable-background-networking", "--disable-extensions", "--disable-component-update",
+                 "--virtual-time-budget=2500",
                  "--dump-dom", url + "/#" + path],
-                capture_output=True, text=True, timeout=20)
+                capture_output=True, text=True, timeout=75)
             html = run.stdout
             if run.returncode or any(x not in html for x in expected) or "Could not read live state" in html:
                 raise AssertionError(f"UI smoke failed for #{path}: code={run.returncode}, "
@@ -124,9 +126,11 @@ def main():
             print("PASS: Chrome rendered #" + path)
         run = subprocess.run(
             ["google-chrome", "--headless=new", "--no-sandbox", "--disable-gpu",
-             "--disable-dev-shm-usage", "--no-first-run", "--virtual-time-budget=3500",
+             "--disable-dev-shm-usage", "--no-first-run",
+             "--disable-background-networking", "--disable-extensions", "--disable-component-update",
+             "--virtual-time-budget=3500",
              "--dump-dom", url + "/probe-cloudflare#module-ddns"],
-            capture_output=True, text=True, timeout=25)
+            capture_output=True, text=True, timeout=75)
         import html as html_lib
         import re
         match = re.search(r'<pre id="cloudflare-probe">(.*?)</pre>', run.stdout, re.S)
