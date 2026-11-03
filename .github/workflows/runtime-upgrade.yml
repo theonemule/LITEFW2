@@ -30,6 +30,7 @@ jobs:
           test -x tools/package-runtime-upgrade.sh
           ./tests/module-contract-test.sh
           ./tests/module-install-verification.sh
+          ./tests/alpine-package-update.sh
           ./tests/api-resource-test.sh
           ./tests/dns-provider-presets.sh
           ./tests/bind-zone-management.sh

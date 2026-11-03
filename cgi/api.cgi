@@ -143,6 +143,8 @@ case "$method:$path" in
   POST:/system/management) op_request mgmt.set;;
   POST:/system/logging) op_request logging.set;;
   POST:/system/password) op_request password.set;;
+  POST:/system/packages/check) op_request packages.check;;
+  POST:/system/packages/upgrade) op_request packages.upgrade;;
   POST:/system/updates/check) op_request upgrade.check;;
   POST:/system/updates/install) op_request upgrade.install;;
   POST:/system/updates/upload)

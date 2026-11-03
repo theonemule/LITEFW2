@@ -22,6 +22,11 @@ jq -e '.installed=="2.2.8" and .available==false' "$RESULT" >/dev/null
 grep -Fq 'POST:/system/updates/check)' cgi/api.cgi
 grep -Fq 'POST:/system/updates/install)' cgi/api.cgi
 grep -Fq 'POST:/system/updates/upload)' cgi/api.cgi
+grep -Fq 'POST:/system/packages/check)' cgi/api.cgi
+grep -Fq 'POST:/system/packages/upgrade)' cgi/api.cgi
+grep -Fq "btn('Check packages'" www/app.js
+grep -Fq "btn('Apply package updates'" www/app.js
+grep -Fq '/app.js?v=2.2.14' www/index.html
 grep -Fq "btn('Check for updates'" www/app.js
 grep -Fq "btn('Install update'" www/app.js
 grep -Fq "btn('Install uploaded file'" www/app.js

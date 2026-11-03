@@ -11,6 +11,7 @@ bundle="$stage/litefw2-$ver-runtime.tar.gz"
 tar -tzf "$bundle" | grep -Fxq 'modules/manifest.json'
 tar -tzf "$bundle" | grep -Fxq 'modules/dnsmasq/module.sh'
 tar -tzf "$bundle" | grep -Fxq 'www/app.js'
+grep -Fq "/app.js?v=$ver" www/index.html
 [ "$(tar -xzOf "$bundle" VERSION)" = "$ver" ]
 grep -Fq 'Publish LiteFW runtime upgrade' .github/workflows/runtime-upgrade.yml
 grep -Fq 'gh release upload "$tag" dist/SHA256SUMS --clobber' .github/workflows/appliance-iso.yml

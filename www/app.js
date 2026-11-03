@@ -134,6 +134,7 @@ function opPath(name, body) {
   if (family === 'module') return '/api/modules/' + encodeURIComponent(body.id) + '/' + action;
   if (['bind', 'openvpn', 'ddns', 'dnsmasq'].includes(family)) return '/api/modules/' + family + '/' + action;
   if (family === 'upgrade') return '/api/system/updates/' + action;
+  if (family === 'packages') return '/api/system/packages/' + action;
   if (family === 'system') return '/api/system/set';
   if (family === 'mgmt') return '/api/system/management';
   if (family === 'logging') return '/api/system/logging';
@@ -1002,7 +1003,12 @@ views['module-bind'] = () => [
 ];
 views['module-ddns'] = () => [
   h('div', { class:'mb-3' }, btn('Back to modules', () => location.hash = '#modules')),
-  ...ddnsPanel()
+  ...(moduleBy('ddns') && moduleBy('ddns').installed ? ddnsPanel() : [
+    card('Dynamic DNS (inadyn)',
+      moduleBy('ddns') ? [btn('Install Dynamic DNS', () => moduleInstall(moduleBy('ddns')), 'btn-primary')] : null,
+      h('div', {class:'card-body small'},
+        'Install the optional Dynamic DNS module before choosing a provider, hostnames and credentials.'))
+  ])
 ];
 views['module-openvpn'] = () => [
   h('div', { class:'mb-3' }, btn('Back to modules', () => location.hash = '#modules')),
@@ -1511,6 +1517,71 @@ function updatesPanel() {
       rel: 'noopener noreferrer', class: 'small' }, 'Official LiteFW releases')));
 }
 
+// Alpine OS package management is intentionally separate from LiteFW releases.
+// Check fetches official APK indexes and returns a per-package current/update list.
+function alpinePackagesPanel() {
+  const info = h('div', { class:'small text-secondary mb-3' },
+    'Checks installed Alpine packages against configured repositories. No system packages are upgraded until you explicitly choose Apply package updates.');
+  const results = h('div', { class:'mt-2' });
+  const applyBtn = btn('Apply package updates', async () => {
+    if (!confirm('Upgrade the listed Alpine system packages? Package scripts can restart services and affect connectivity. LiteFW will not reboot automatically. Continue?')) return;
+    applyBtn.disabled = true;
+    checkBtn.disabled = true;
+    results.replaceChildren(h('p', { class:'small' }, 'Installing Alpine package updates. This can take several minutes…'));
+    try {
+      const r = (await op('packages.upgrade', {confirmed:true})).result;
+      const summary = r.upgradedCount
+        ? r.upgradedCount + ' packages upgraded. ' + (r.remainingCount || 0) + ' updates remain.'
+        : (r.message || 'No packages required upgrading.');
+      results.replaceChildren(
+        h('div', { class:'alert alert-success small' }, summary,
+          r.rebootSuggested ? ' A reboot is recommended for some updated system packages; no reboot was performed.' : ''),
+        h('div', {class:'small text-secondary mb-2'}, 'Review the updated package inventory with Check packages. Upgrade log: ' + (r.log || 'not needed')),
+        h('ul', {class:'small'}, (r.upgraded || []).map(p =>
+          h('li', {class:'mono'}, p.name + ': ' + p.previousVersion + ' → ' + p.installedVersion))));
+    } catch (e) {
+      results.replaceChildren(h('div', {class:'alert alert-danger small'}, 'Alpine package upgrade failed: ' + e.message));
+    } finally { applyBtn.disabled = true; checkBtn.disabled = false; }
+  }, 'btn-primary');
+  applyBtn.disabled = true;
+  const checkBtn = btn('Check packages', async () => {
+    checkBtn.disabled = true;
+    applyBtn.disabled = true;
+    results.replaceChildren(h('p', {class:'small'}, 'Refreshing official Alpine package indexes and checking installed packages…'));
+    try {
+      const r = (await op('packages.check', {})).result;
+      const tableOf = (items, updated) => h('div', {class:'table-responsive mb-2'},
+        h('table', {class:'table table-sm table-hover small align-middle mb-0'},
+          h('thead', {}, h('tr', {}, [
+            'Package', 'Installed version', updated ? 'Available version' : 'Status'
+          ].map(x => h('th', {}, x)))),
+          h('tbody', {}, items.map(p => h('tr', {},
+            h('td', {class:'mono'}, p.name),
+            h('td', {class:'mono'}, p.installedVersion),
+            h('td', {class:'mono'}, updated ? p.availableVersion : 'Current'))))));
+      const up = r.upgradable || [];
+      const current = r.current || [];
+      results.replaceChildren(
+        h('div', {class:'small mb-2'},
+          h('strong', {}, up.length + ' updates available'),
+          ' · ' + current.length + ' already current · ' + r.installedCount + ' installed packages'),
+        h('div', {class:'small fw-semibold mb-2'}, 'Updates available'),
+        up.length ? tableOf(up, true) : h('p', {class:'small text-secondary'}, 'All installed Alpine packages are current.'),
+        h('details', {class:'mt-3'}, h('summary', {class:'small'}, 'Already current (' + current.length + ')'),
+          tableOf(current, false)),
+        h('p', {class:'small text-secondary mt-2'},
+          'Repositories: ' + (r.repositories || []).join(' · ')));
+      applyBtn.disabled = up.length === 0;
+    } catch (e) {
+      results.replaceChildren(h('div', {class:'alert alert-danger small'}, 'Could not check Alpine packages: ' + e.message));
+    } finally { checkBtn.disabled = false; }
+  }, 'btn-outline-primary');
+  return card('Alpine system packages', null,
+    h('div', {class:'card-body'}, info,
+      h('div', {class:'d-flex gap-2 flex-wrap'}, checkBtn, applyBtn),
+      results));
+}
+
 // ---------- system
 views.system = () => {
   const s = S.system, m = s.management;
@@ -1552,7 +1623,7 @@ views.system = () => {
       card('Admin password', [btn('Change', () => form('Change password', [
         { k: 'user', label: 'User', value: 'admin' }, { k: 'password', label: 'New password', type: 'password', help: 'At least 8 characters.' }
       ], v => apply('password.set', v, 'Password changed')))], h('div', { class: 'card-body small text-secondary' }, 'The browser will ask for the new password on the next request.'))),
-    h('div', { class: 'col-lg-6' }, updatesPanel(), card('Diagnostics', null, h('div', { class: 'card-body' },
+    h('div', { class: 'col-lg-6' }, updatesPanel(), alpinePackagesPanel(), card('Diagnostics', null, h('div', { class: 'card-body' },
       h('div', { class: 'input-group mb-2' }, host, btn('Ping', () => diag('ping'), 'btn-outline-primary'), btn('DNS lookup', () => diag('lookup'), 'btn-outline-primary')), out))));
 };
 

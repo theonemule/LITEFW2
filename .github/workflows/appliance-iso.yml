@@ -43,6 +43,7 @@ jobs:
           ./tests/dns-provider-presets.sh
           ./tests/module-contract-test.sh
           ./tests/module-install-verification.sh
+          ./tests/alpine-package-update.sh
           ./tests/firewall-staged-apply.sh
           ./tests/firewall-recovery.sh
           while IFS= read -r -d '' script; do

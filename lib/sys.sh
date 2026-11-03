@@ -237,6 +237,89 @@ op_diag_lookup() {
   jq -n --arg o "$_o" '{output:$o}' >"$RESULT"
 }
 
+# ------------------------------------------------------------- Alpine APK packages
+# These operations are intentionally distinct from the LiteFW runtime upgrade.
+# They never change network topology, appliance services, or perform a reboot.
+# The administrator must request both the check and the actual package upgrade.
+packages_repositories() {
+  [ -f /etc/apk/repositories ] ||
+    die "No Alpine package repositories configured. Set official main/community repositories first."
+  _repositories=$(grep -Ev '^[[:space:]]*(#|$)' /etc/apk/repositories || :)
+  [ -n "$_repositories" ] ||
+    die "Alpine package repositories are disabled. Configure official main/community repositories first."
+}
+packages_refresh() {
+  packages_repositories
+  _apkl=$(mktemp)
+  if ! apk --timeout 12 update >"$_apkl" 2>&1; then
+    _detail=$(tail -n 8 "$_apkl")
+    rm -f "$_apkl"
+    die "Alpine package index refresh failed: $_detail"
+  fi
+  rm -f "$_apkl"
+}
+packages_inventory() {
+  _pkg_installed=$(apk list --installed 2>&1) ||
+    die "Could not read installed Alpine packages: $_pkg_installed"
+  _pkg_upgradable=$(apk list --upgradable 2>&1) ||
+    die "Could not list available Alpine upgrades: $_pkg_upgradable"
+  jq -n --arg all "$_pkg_installed" --arg updates "$_pkg_upgradable" '
+    def parse_packages:
+      split("\n") |
+      map(select(test("^[^ ]+-[0-9][^ ]*-r[0-9]+[[:space:]]"))) |
+      map(split(" ")[0] | try capture("^(?<name>.+)-(?<version>[0-9][^ ]*-r[0-9]+)$") catch empty) |
+      unique_by(.name);
+    ($all | parse_packages) as $installed |
+    ($updates | parse_packages | INDEX(.name)) as $candidates |
+    {
+      installedCount: ($installed | length),
+      upgradable: [$installed[] |
+        select($candidates[.name] != null) |
+        {name,installedVersion:.version,availableVersion:$candidates[.name].version}],
+      current: [$installed[] |
+        select($candidates[.name] == null) |
+        {name,installedVersion:.version}]
+    } |
+    . + {upgradableCount:(.upgradable|length),currentCount:(.current|length)}'
+}
+op_packages_check() {
+  packages_refresh
+  packages_inventory >"$RESULT"
+  _repo_json=$(printf '%s\n' "$_repositories" | jq -R -s 'split("\n") | map(select(length>0))')
+  _tmp=$(mktemp)
+  jq -n --argjson result "$(cat "$RESULT")" --argjson repos "$_repo_json" \
+    --arg checkedAt "$(date -u +%FT%TZ)" '$result + {checkedAt:$checkedAt,repositories:$repos}' >"$_tmp"
+  mv "$_tmp" "$RESULT"
+}
+op_packages_upgrade() {
+  jbool confirmed || die "Confirm Alpine system package upgrades explicitly"
+  packages_refresh
+  _before=$(packages_inventory)
+  _count=$(printf '%s' "$_before" | jq -r '.upgradableCount')
+  if [ "$_count" -eq 0 ]; then
+    jq -n --argjson before "$_before" '{upgraded:[],upgradedCount:0,rebootSuggested:false,
+      remaining:$before.upgradable,currentCount:$before.currentCount,
+      message:"All installed Alpine packages are already current."}' >"$RESULT"
+    return
+  fi
+  _log=${LFW_APK_UPGRADE_LOG:-/var/log/litefw-alpine-upgrade.log}
+  if ! apk --timeout 12 upgrade >"$_log" 2>&1; then
+    die "Alpine package upgrade failed; check $_log: $(tail -n 8 "$_log")"
+  fi
+  _after=$(packages_inventory)
+  jq -n --argjson before "$_before" --argjson after "$_after" --arg log "$_log" '
+    ($after.current + $after.upgradable | INDEX(.name)) as $now |
+    [$before.upgradable[] |
+      select($now[.name] != null and $now[.name].installedVersion != .installedVersion) |
+      {name,previousVersion:.installedVersion,
+       installedVersion:$now[.name].installedVersion}] as $changed |
+    {upgraded:$changed,upgradedCount:($changed|length),
+     rebootSuggested: any($changed[]; .name | test("^(linux|linux-lts|linux-virt|musl|busybox|openrc)$")),
+     remaining:$after.upgradable,remainingCount:$after.upgradableCount,
+     currentCount:$after.currentCount,log:$log}' >"$RESULT"
+  log_op "packages.upgrade packages=$_count"
+}
+
 # ------------------------------------------------------------- upgrades
 # GitHub is a fixed trusted origin, never a caller-provided download URL.
 LITEFW_RELEASE_REPO=theonemule/LITEFW2

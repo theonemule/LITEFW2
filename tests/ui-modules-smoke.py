@@ -24,7 +24,10 @@ STATES = {
     "openvpn": {"running": False, "configured": False, "clients": []},
 }
 SYSTEM = {"hostname": "testfw", "version": "2.2.13-dev", "resolvers": ["1.1.1.1"],
-          "management": {"clientInterface": "eth1"}, "memory": {"availableKb": 10, "totalKb": 100}}
+          "management": {"clientInterface": "eth1", "port": 80, "access": ["eth1"]},
+          "ssh": {"enabled": True, "port": 22},
+          "logging": {"remoteEnabled": False,"server":"","port":514,"localEnabled":True,"serviceRunning":True},
+          "memory": {"availableKb": 10, "totalKb": 100}}
 
 
 class MockHandler(http.server.SimpleHTTPRequestHandler):
@@ -72,6 +75,7 @@ def main():
     try:
         for path, expected in [
             ("modules", ["BIND DNS", "DNSMasq", "Dynamic DNS", "OpenVPN", "Configure"]),
+            ("system", ["Alpine system packages", "Check packages", "Apply package updates", "Software updates"]),
             ("module-bind", ["BIND authoritative zones", "Manage records", "Cloudflare"]),
             ("module-dnsmasq", ["DNSMasq DNS engine", "Upstream servers", "DNS resolver (dnsmasq)"]),
             ("module-ddns", ["Dynamic DNS", "Configure"]),

@@ -54,6 +54,19 @@ if command -v nft >/dev/null 2>&1 && nft list table inet litefwm >/dev/null 2>&1
   echo "    retired the old LiteFWM nftables table"
 fi
 
+# The installer may run entirely from the ISO with only a commented CD-ROM
+# repository. Keep that offline install intact, but configure trusted online
+# repositories for subsequent module installs and Alpine system package updates.
+# dl-4 is an official Alpine mirror with IPv4 DNS (important for IPv4-only WAN).
+if ! grep -Eq '^[[:space:]]*[^#[:space:]]' /etc/apk/repositories 2>/dev/null; then
+  branch=$(cut -d. -f1-2 </etc/alpine-release)
+  case "$branch" in [0-9]*.[0-9]*) :;; *) echo "Invalid Alpine version" >&2; exit 1;; esac
+  cp -p /etc/apk/repositories "/etc/apk/repositories.pre-litefwm.$(date -u +%Y%m%dT%H%M%SZ)" 2>/dev/null || true
+  printf '%s\n' "https://dl-4.alpinelinux.org/alpine/v$branch/main" \
+    "https://dl-4.alpinelinux.org/alpine/v$branch/community" >/etc/apk/repositories
+  echo "    configured official Alpine main and community repositories"
+fi
+
 echo "==> files"
 install -d -m 0755 /usr/lib/litefwm /usr/lib/litefwm/cgi /usr/lib/litefwm/modules /usr/share/litefwm/www /etc/litefwm \
   /etc/dnsmasq.d /etc/dnsmasq.hosts.d /etc/iptables /var/lib/misc
