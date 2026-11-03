@@ -30,6 +30,9 @@ jobs:
           test -x tools/package-runtime-upgrade.sh
           ./tests/module-contract-test.sh
           ./tests/addons-contract-test.sh
+          ./tests/modules-ux-integration.sh
+          ./tests/vendor-install-alpine.sh
+          python3 -m py_compile modules/shared/suricata-rules.py modules/shared/wireguard-peers.py
           ./tests/simulations.sh
           ./tests/module-install-verification.sh
           ./tests/alpine-package-update.sh

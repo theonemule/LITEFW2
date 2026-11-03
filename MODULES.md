@@ -99,11 +99,15 @@ native packages, executable, and (when appropriate) OpenRC service.
 
 ### Alpine deployment caveats
 
-Do **not** enable Alpine edge/testing globally as an installation shortcut.
-The Alpine 3.24 main/community repositories contain WireGuard, Suricata,
-Avahi and FRR. CrowdSec and cloudflared currently appear in edge/testing,
-and openNDS availability also needs a compatible package/source. Their
-install attempts report a package error instead of claiming success.
+Do **not** enable Alpine edge/testing globally. The Alpine 3.24
+main/community repositories contain WireGuard, Suricata, Avahi and FRR.
+The optional Cloudflare Tunnel now installs the pinned official cloudflared
+2026.10.7 static Linux binary with a verified SHA256; CrowdSec installs the
+official v1.8.2 static Linux release with verified SHA256 and an OpenRC
+service; openNDS is built from the verified 11.0.0 source archive with Alpine
+build tools that are removed afterward. The source-based installer path is
+verified by `tests/vendor-install-alpine.sh` with actual Alpine 3.24 container
+installation and removal; it does not add untrusted APK repositories.
 
 GeoIP lists and CrowdSec remediation are IPv4 only for this version.
 Multi-WAN provides prioritized failover, not weighted load balancing or
@@ -171,3 +175,21 @@ loopback sockets. Cloudflare publishing, live CrowdSec community enrollment,
 Avahi multicast discovery across physical VLANs, openNDS guest redirection,
 and hardware link-loss scenarios still need dedicated appliance/integration
 testing. These tests are **not** a guarantee of production readiness.
+
+
+### 2.2.21 module administration improvements
+
+GeoIP now uses a searchable ISO-3166 country/territory picker with A-Z groups,
+multi-select checkboxes, clear/select-visible controls and separate save,
+CIDR refresh and activation actions. Configuration supports up to 100 codes.
+Suricata has source list management, uploaded .rules imports, individual SID
+toggles, source enable/disable, import/export, HTTPS refresh, and native
+Suricata validation of candidate rules. Rule changes are staged and require
+an explicit engine restart. WireGuard now generates protected server and
+client keys, provides individual peer add/edit/enable/delete controls, and
+downloads authenticated client profiles with private keys never included in
+a normal snapshot. Multi-WAN uplinks are staged together before saving.
+BGP settings and peers are edited through dedicated controls, not raw JSON.
+
+These UX paths are covered by headless Chrome and additional disposable
+Alpine integration tests: `tests/modules-ux-integration.sh`.

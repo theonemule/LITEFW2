@@ -78,7 +78,8 @@
       "version": "1",
       "packages": [
         "suricata",
-        "suricata-openrc"
+        "suricata-openrc",
+        "python3"
       ],
       "scripts": {
         "controller": "suricata/module.sh",
@@ -105,8 +106,8 @@
       "id": "crowdsec",
       "version": "1",
       "packages": [
-        "crowdsec",
-        "crowdsec-openrc",
+        "curl",
+        "ca-certificates",
         "ipset"
       ],
       "scripts": {
@@ -114,13 +115,15 @@
         "install": "crowdsec/install.sh",
         "remove": "crowdsec/uninstall.sh"
       },
-      "core": false
+      "core": false,
+      "installSource": "CrowdSec 1.8.2 static release (SHA256 verified)"
     },
     {
       "id": "wireguard",
       "version": "1",
       "packages": [
-        "wireguard-tools"
+        "wireguard-tools",
+        "python3"
       ],
       "scripts": {
         "controller": "wireguard/module.sh",
@@ -133,14 +136,16 @@
       "id": "cloudflared",
       "version": "1",
       "packages": [
-        "cloudflared"
+        "curl",
+        "ca-certificates"
       ],
       "scripts": {
         "controller": "cloudflared/module.sh",
         "install": "cloudflared/install.sh",
         "remove": "cloudflared/uninstall.sh"
       },
-      "core": false
+      "core": false,
+      "installSource": "Cloudflare signed release (SHA256 verified)"
     },
     {
       "id": "multiwan",
@@ -173,14 +178,20 @@
       "id": "captive",
       "version": "1",
       "packages": [
-        "opennds"
+        "curl",
+        "ca-certificates",
+        "libmicrohttpd",
+        "bash",
+        "iptables",
+        "iproute2"
       ],
       "scripts": {
         "controller": "captive/module.sh",
         "install": "captive/install.sh",
         "remove": "captive/uninstall.sh"
       },
-      "core": false
+      "core": false,
+      "installSource": "openNDS 11.0.0 source build (SHA256 verified)"
     },
     {
       "id": "frr",

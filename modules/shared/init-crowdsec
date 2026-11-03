@@ -1,0 +1,8 @@
+#!/sbin/openrc-run
+description="LiteFW CrowdSec local detection API"
+command="/usr/local/bin/crowdsec"
+command_args="-c /etc/crowdsec/config.yaml"
+command_background="yes"
+pidfile="/run/crowdsec.pid"
+depend() { need net; after iptables; }
+start_pre() { [ -s /etc/crowdsec/config.yaml ] && [ -x "$command" ]; }

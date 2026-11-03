@@ -1155,7 +1155,7 @@ views.modules = () => {
   const mods = S.modules || [];
   return [
     h('div', { class:'alert alert-light border small' },
-      'Modules are installed from the versioned appliance runtime’s Git-tracked manifest and bundled scripts. Installed status is verified against native executables and services; no separate state database is used.'),
+      'Optional services install from Alpine packages or verified, pinned vendor releases. Installation is checked against the actual executable and service before displaying Installed. Nothing starts automatically.'),
     h('div', { class:'row g-3' }, mods.map(m => h('div', { class:'col-lg-4' },
       card(m.name, m.installed
         ? [badge(m.core ? 'built in' : 'installed', 'text-bg-success'),
@@ -1164,7 +1164,7 @@ views.modules = () => {
         : [badge('not installed'), btn('Install', () => moduleInstall(m), 'btn-primary')],
         h('div', { class:'card-body small' },
           h('p', {}, m.description),
-          h('div', { class:'text-secondary mono' }, 'Packages: ' + (m.packages || []).join(', ')))))))
+          h('div', { class:'text-secondary mono' }, (m.installSource ? 'Verified source: '+m.installSource : 'Alpine packages: ' + (m.packages || []).join(', '))))))))
   ];
 };
 views['module-bind'] = () => [

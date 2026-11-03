@@ -1,6 +1,6 @@
 #!/sbin/openrc-run
 description="LiteFW outbound Cloudflare Tunnel"
-command="/usr/bin/cloudflared"
+command="/usr/local/bin/cloudflared"
 command_args="tunnel --no-autoupdate run --token-file /etc/cloudflared/litefw-token"
 command_background="yes"
 pidfile="/run/litefw-cloudflared.pid"

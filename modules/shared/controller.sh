@@ -13,14 +13,14 @@ DIR=${LFW_MODULE_CONFIG_DIR:-/etc/litefw-addons}
 CONF="$DIR/$MOD.json"
 modinfo(){
  case "$MOD" in
- suricata) NAME="Suricata IDS/IPS"; DESC="Network intrusion detection and optional inline inspection"; CAT=security; PKGS="suricata suricata-openrc"; BIN=suricata; SERVICE=litefw-suricata;;
+ suricata) NAME="Suricata IDS/IPS"; DESC="Network intrusion detection and optional inline inspection"; CAT=security; PKGS="suricata suricata-openrc python3"; BIN=suricata; SERVICE=litefw-suricata;;
  geoip) NAME="GeoIP Blocking"; DESC="Country IPv4 network blocklists backed by ipset"; CAT=security; PKGS="ipset curl"; BIN=ipset; SERVICE=litefw-geoip;;
- crowdsec) NAME="CrowdSec"; DESC="CrowdSec threat detection with local IPv4 decision-to-ipset remediation"; CAT=security; PKGS="crowdsec crowdsec-openrc ipset"; BIN=cscli; SERVICE=crowdsec;;
- wireguard) NAME="WireGuard"; DESC="Managed wg-quick tunnels with key/peer configuration"; CAT=vpn; PKGS="wireguard-tools"; BIN=wg; SERVICE=litefw-wireguard;;
- cloudflared) NAME="Cloudflare Tunnel"; DESC="Token-managed outbound Cloudflare tunnel"; CAT=connectivity; PKGS="cloudflared"; BIN=cloudflared; SERVICE=litefw-cloudflared;;
+ crowdsec) NAME="CrowdSec"; DESC="CrowdSec threat detection with local IPv4 decision-to-ipset remediation"; CAT=security; PKGS="curl ca-certificates ipset"; BIN=cscli; SERVICE=crowdsec;;
+ wireguard) NAME="WireGuard"; DESC="Managed wg-quick tunnels with key/peer configuration"; CAT=vpn; PKGS="wireguard-tools python3"; BIN=wg; SERVICE=litefw-wireguard;;
+ cloudflared) NAME="Cloudflare Tunnel"; DESC="Token-managed outbound Cloudflare tunnel"; CAT=connectivity; PKGS="curl ca-certificates"; BIN=cloudflared; SERVICE=litefw-cloudflared;;
  multiwan) NAME="Multi-WAN Failover"; DESC="Priority-based multi-uplink default route and gateway health checks"; CAT=network; PKGS="iproute2"; BIN=ip; SERVICE=litefw-multiwan;;
  mdns) NAME="mDNS Repeater"; DESC="LAN-only Avahi DNS-SD reflector across selected segments"; CAT=network; PKGS="avahi avahi-openrc"; BIN=avahi-daemon; SERVICE=avahi-daemon;;
- captive) NAME="Captive Portal"; DESC="Guest splash portal with openNDS"; CAT=network; PKGS="opennds"; BIN=opennds; SERVICE=opennds;;
+ captive) NAME="Captive Portal"; DESC="Guest splash portal with openNDS"; CAT=network; PKGS="curl ca-certificates libmicrohttpd bash iptables iproute2"; BIN=opennds; SERVICE=opennds;;
  frr) NAME="BGP / FRRouting"; DESC="BGP sessions with explicit neighbors and advertised prefixes"; CAT=routing; PKGS="frr frr-openrc"; BIN=vtysh; SERVICE=frr;;
  *) die "Unknown optional module";;
  esac
@@ -29,6 +29,7 @@ modinfo
 installed(){
  if [ "$MOD" = multiwan ]; then [ -x /usr/local/sbin/litefw-multiwan-check ]; return; fi
  command -v "$BIN" >/dev/null 2>&1 || return 1
+ case "$MOD" in suricata|wireguard) command -v python3 >/dev/null 2>&1 || return 1;; esac
  if [ -n "$SERVICE" ]; then
    [ -e "/etc/init.d/$SERVICE" ] || return 1
  fi
@@ -49,11 +50,20 @@ snapshot(){
  # Credentials are never emitted, including WireGuard private keys and Cloudflare tokens.
  safe=$(printf '%s' "$data" | jq 'del(.privateKey,.token,.secret,.psk) + {credentialConfigured:((.privateKey // .token // .secret // .psk // "") != "")}')
  case "$MOD" in
- wireguard) safe=$(printf '%s' "$safe" | jq '.peers=((.peers // [])|map(del(.presharedKey)))');;
+ wireguard)
+   safe=$(printf '%s' "$safe" | jq '.peers=((.peers // [])|map(del(.presharedKey)))')
+   peer_state=$(python3 "$SELF/shared/wireguard-peers.py" list 2>/dev/null || echo '{"peers":[]}')
+   safe=$(printf '%s' "$safe" | jq --argjson peers "$peer_state" '. + {peers:$peers.peers,publicKey:($peers.publicKey//"")}')
+   ;;
  geoip) count=$(ipset list litefw_geo4 2>/dev/null | awk '/^Number of entries:/{print $4}'); safe=$(printf '%s' "$safe" | jq --argjson count "${count:-0}" '.+{loadedNetworks:$count}');;
+ suricata) rule_state=$(python3 "$SELF/shared/suricata-rules.py" list 2>/dev/null || echo '{"sources":[],"rules":[],"activeRules":0,"totalRules":0}');;
  frr) peers=$(vtysh -c 'show bgp ipv4 unicast summary json' 2>/dev/null || echo '{}'); safe=$(printf '%s' "$safe" | jq --argjson p "$peers" '.+{sessions:$p}');;
  esac
- jq -n --argjson running "$run" --argjson settings "$safe" '{running:$running,configured:($settings|has("enabled") or has("interface") or has("interfaces") or has("asn") or .credentialConfigured),settings:$settings}'
+ if [ "$MOD" = suricata ]; then
+   jq -n --argjson running "$run" --argjson settings "$safe" --argjson extra "$rule_state"      '{running:$running,configured:($settings|has("interface")),settings:$settings} + $extra'
+ else
+   jq -n --argjson running "$run" --argjson settings "$safe" '{running:$running,configured:($settings|has("enabled") or has("interface") or has("interfaces") or has("asn") or .credentialConfigured),settings:$settings}'
+ fi
 }
 # Accept bounded JSON, checked against module-specific validation before mutating native config.
 validate(){
@@ -63,7 +73,7 @@ validate(){
  jq -e '(.interface|type=="string" and test("^[a-zA-Z0-9_.-]{1,15}$")) and (.mode=="ids" or .mode=="ips")' "$1" >/dev/null || die 'Specify valid interface and ids/ips mode'
  ;;
  geoip)
- jq -e '(.countries|type=="array" and length>0 and length<=20 and all(.[];type=="string" and test("^[a-z]{2}$"))) and ((.enabled//false)|type=="boolean")' "$1" >/dev/null || die 'Choose 1-20 two-letter country codes'
+ jq -e '(.countries|type=="array" and length>0 and length<=100 and all(.[];type=="string" and test("^[a-z]{2}$"))) and ((.enabled//false)|type=="boolean")' "$1" >/dev/null || die 'Choose 1-100 two-letter country codes'
  ;;
  crowdsec) jq -e '((.enabled//false)|type=="boolean")' "$1" >/dev/null || die 'Invalid CrowdSec settings';;
  wireguard)
@@ -117,7 +127,7 @@ EOF
    fi
    tmp=$(mktemp)
    { printf '# managed by LiteFW\n[Interface]\nAddress = %s\nListenPort = %s\nPrivateKey = %s\n' "$address" "$port" "$priv"
-     jq -r '.peers[]? | "\n[Peer]\nPublicKey = \(.publicKey)\nAllowedIPs = \(.allowedIPs)\n" + (if (.endpoint//"")!="" then "Endpoint = \(.endpoint)\n" else "" end) + (if (.persistentKeepalive//0)>0 then "PersistentKeepalive = \(.persistentKeepalive)\n" else "" end)' "$1"
+     jq -r '.peers[]? | select(.enabled != false) | "\n[Peer]\nPublicKey = \(.publicKey)\nAllowedIPs = \(.allowedIPs)\n" + (if (.endpoint//"")!="" then "Endpoint = \(.endpoint)\n" else "" end) + (if (.persistentKeepalive//0)>0 then "PersistentKeepalive = \(.persistentKeepalive)\n" else "" end)' "$1"
    } >"$tmp"
    install -m 0600 "$tmp" "/etc/wireguard/$iface.conf"; rm -f "$tmp"
    ;;
@@ -206,6 +216,17 @@ configure(){
  else cp "$1" "$DIR/$MOD.pending"; fi
  chmod 0600 "$DIR/$MOD.pending"
  validate "$DIR/$MOD.pending"
+ if [ "$MOD" = wireguard ]; then
+   if [ "$(jq -r '.privateKey // ""' "$DIR/$MOD.pending")" = "" ]; then
+     iface=$(jq -r '.interface' "$DIR/$MOD.pending")
+     key=$(sed -n 's/^PrivateKey = //p' "/etc/wireguard/$iface.conf" 2>/dev/null | head -1)
+     [ -n "$key" ] || key=$(wg genkey) || die 'Could not generate server WireGuard key'
+     jq --arg key "$key" '.privateKey=$key' "$DIR/$MOD.pending" >"$DIR/$MOD.keytmp"
+     chmod 0600 "$DIR/$MOD.keytmp"
+     mv "$DIR/$MOD.keytmp" "$DIR/$MOD.pending"
+   fi
+   jq -e '((.serverEndpoint//"")|type=="string" and test("^[A-Za-z0-9.-]{0,253}$")) and ((.dns//"")|type=="string" and test("^[0-9.]{0,15}$"))' "$DIR/$MOD.pending" >/dev/null || die 'Invalid WireGuard client endpoint or DNS'
+ fi
  if [ "$MOD" = multiwan ]; then
    jq -r '.uplinks[].gateway' "$DIR/$MOD.pending" | while IFS= read -r gateway; do
      is_ipv4 "$gateway" || die 'Invalid multi-WAN gateway IPv4 address'
@@ -220,10 +241,16 @@ configure(){
 install_mod(){
  require_root
  [ "$MOD" != multiwan ] || { apk add --no-cache iproute2; mkdir -p /usr/local/sbin; install -m 0755 "$SELF/shared/multiwan-check.sh" /usr/local/sbin/litefw-multiwan-check; return; }
- if ! apk add --no-cache $PKGS; then die "Alpine packages unavailable: $PKGS (verify community repository)"; fi
  case "$MOD" in
- suricata|cloudflared|geoip|wireguard) install -m 0755 "$SELF/shared/init-$MOD" "/etc/init.d/$SERVICE";;
+   cloudflared|crowdsec|captive)
+     "$SELF/shared/vendor-install.sh" "$MOD" || die "Verified vendor installer for $MOD failed";;
+   *)
+     apk add --no-cache $PKGS || die "Alpine packages unavailable: $PKGS";;
+ esac
+ case "$MOD" in
+ suricata|cloudflared|geoip|wireguard|captive) install -m 0755 "$SELF/shared/init-$MOD" "/etc/init.d/$SERVICE";;
  crowdsec)
+   install -m 0755 "$SELF/shared/init-crowdsec" /etc/init.d/crowdsec;
    mkdir -p /usr/local/sbin
    install -m 0755 "$SELF/shared/init-crowdsec-bouncer" /etc/init.d/litefw-crowdsec-bouncer
    install -m 0755 "$SELF/shared/crowdsec-sync.sh" /usr/local/sbin/litefw-crowdsec-sync;;
@@ -251,8 +278,8 @@ remove_mod(){
        mv /etc/crontabs/root.lfw.tmp /etc/crontabs/root
    fi
    ipset destroy litefw_cs4 >/dev/null 2>&1 || true
-   rm -f /etc/init.d/litefw-crowdsec-bouncer /usr/local/sbin/litefw-crowdsec-sync;;
- cloudflared) rm -f /etc/init.d/litefw-cloudflared /etc/cloudflared/litefw-token;;
+   rm -f /etc/init.d/litefw-crowdsec-bouncer /usr/local/sbin/litefw-crowdsec-sync /etc/init.d/crowdsec /usr/local/bin/crowdsec /usr/local/bin/cscli;;
+ cloudflared) rm -f /etc/init.d/litefw-cloudflared /usr/local/bin/cloudflared /etc/cloudflared/litefw-token;;
  suricata) rm -f /etc/init.d/litefw-suricata /etc/conf.d/litefw-suricata;;
  multiwan)
    if [ -r /etc/crontabs/root ]; then
@@ -269,6 +296,7 @@ remove_mod(){
    if [ -r /etc/avahi/avahi-daemon.conf.litefw.backup ]; then
      mv /etc/avahi/avahi-daemon.conf.litefw.backup /etc/avahi/avahi-daemon.conf
    fi;;
+ captive) rm -f /etc/init.d/opennds /usr/local/bin/opennds /usr/local/bin/ndsctl;;
  frr)
    if [ -r /etc/frr/frr.conf.litefw.backup ]; then
      mv /etc/frr/frr.conf.litefw.backup /etc/frr/frr.conf
@@ -278,8 +306,9 @@ remove_mod(){
  # Shared OS tools must never be uninstalled by removing one module.
  # Otherwise DNS updates or another firewall module could lose curl/ipset.
  case "$MOD" in
-   multiwan|geoip) :;;
-   crowdsec) apk del crowdsec crowdsec-openrc >/dev/null 2>&1 || true;;
+   multiwan|geoip|cloudflared|crowdsec|captive) :;;
+   suricata) apk del suricata suricata-openrc >/dev/null 2>&1 || true;;
+   wireguard) apk del wireguard-tools >/dev/null 2>&1 || true;;
    *) apk del $PKGS >/dev/null 2>&1 || true;;
  esac
 }
@@ -287,6 +316,10 @@ service_action(){
  action=$1; case "$action" in start|stop|restart) :;; *) die 'Invalid service action';; esac
  [ -r "$CONF" ] || die 'Configure module first'
  case "$MOD" in
+ frr)
+   if [ "$action" != stop ]; then jq -e '.neighbors|length>=1' "$CONF" >/dev/null || die 'Add at least one BGP neighbor before starting'; fi
+   if [ "$action" = stop ]; then rc-service frr stop; rc-update del frr default >/dev/null 2>&1 || true
+   else rc-update add frr default >/dev/null 2>&1 || true; rc-service frr "$action"; fi;;
  wireguard)
    if [ "$action" = stop ]; then
      rc-service litefw-wireguard stop
@@ -415,11 +448,15 @@ case "${1:-}" in
  decisions-sync)
    [ "$MOD" = crowdsec ] || die 'Unsupported decision action'
    /usr/local/sbin/litefw-crowdsec-sync;;
+ peerset|peerenable|peerremove|clientprofile)
+   [ "$MOD" = wireguard ] || die 'Unsupported action'
+   python3 "$SELF/shared/wireguard-peers.py" "$1" "${2:?JSON body}";;
+  sourceset|sourceenable|sourceremove|sourcerefresh|rulesupload|ruleenable|rulesexport|rulesupdate)
+   [ "$MOD" = suricata ] || die 'Unsupported action'
+   python3 "$SELF/shared/suricata-rules.py" "$1" "${2:?JSON body}";;
  rules-update)
    [ "$MOD" = suricata ] || die 'Unsupported action'
-   command -v suricata-update >/dev/null 2>&1 || die 'suricata-update not installed'
-   suricata-update
-   echo '{"rulesUpdated":true,"restartRequired":true}';;
+   python3 "$SELF/shared/suricata-rules.py" rulesupdate "${2:?JSON body}";;
  validate) validate "${2:?JSON-file}";;
  *) die "Unknown $MOD action: ${1:-}";;
 esac

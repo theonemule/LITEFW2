@@ -37,7 +37,7 @@ module_json() {
   _mf=$(module_script "$_mid")
   _meta=$("$_mf" meta 2>/dev/null) || die "could not read module metadata: $_mid"
   _manifest=$(module_manifest_entry "$_mid")
-  _meta=$(jq -n --argjson m "$_meta" --argjson entry "$_manifest" '$m + {core:$entry.core,packages:$entry.packages,version:$entry.version}')
+  _meta=$(jq -n --argjson m "$_meta" --argjson entry "$_manifest" '$m + {core:$entry.core,packages:$entry.packages,version:$entry.version,installSource:($entry.installSource // null)}')
   if "$_mf" installed >/dev/null 2>&1; then
     _ins=true
     _state=$("$_mf" snapshot 2>/dev/null || echo '{}')
@@ -59,7 +59,7 @@ modules_catalog_json() {
       _meta=$("$_mf" meta 2>/dev/null) || continue
       _id=$(printf '%s' "$_meta" | jq -r '.id')
       _manifest=$(module_manifest_entry "$_id")
-      _meta=$(jq -n --argjson m "$_meta" --argjson entry "$_manifest" '$m + {core:$entry.core,packages:$entry.packages,version:$entry.version}')
+      _meta=$(jq -n --argjson m "$_meta" --argjson entry "$_manifest" '$m + {core:$entry.core,packages:$entry.packages,version:$entry.version,installSource:($entry.installSource // null)}')
       if "$_mf" installed >/dev/null 2>&1; then _ins=true; else _ins=false; fi
       jq -n --argjson m "$_meta" --argjson i "$_ins" '$m + {installed:$i,state:{}}'
     done
@@ -450,7 +450,8 @@ module_firewall_snat_rules() {
   done
 }
 op_suricata_rulesupdate() {
-  module_call suricata rules-update >"$RESULT" || die 'Suricata rule feed update failed'
+  _out=$(module_call suricata rulesupdate "$BODY" 2>&1) || die "Suricata rule update: $_out"
+  printf '%s\n' "$_out" >"$RESULT"
   log_op 'suricata.rulesupdate'
 }
 
@@ -458,4 +459,70 @@ op_crowdsec_decisionssync() {
   module_call crowdsec decisions-sync >"$RESULT" || die 'CrowdSec decision sync failed'
   module_sync_firewall
   log_op 'crowdsec.decisionssync'
+}
+
+op_wireguard_peerset() {
+  _out=$(module_call wireguard peerset "$BODY" 2>&1) || die "WireGuard peerset: $_out"
+  printf '%s\n' "$_out" >"$RESULT"
+  log_op "wireguard.peerset"
+}
+
+op_wireguard_peerenable() {
+  _out=$(module_call wireguard peerenable "$BODY" 2>&1) || die "WireGuard peerenable: $_out"
+  printf '%s\n' "$_out" >"$RESULT"
+  log_op "wireguard.peerenable"
+}
+
+op_wireguard_peerremove() {
+  _out=$(module_call wireguard peerremove "$BODY" 2>&1) || die "WireGuard peerremove: $_out"
+  printf '%s\n' "$_out" >"$RESULT"
+  log_op "wireguard.peerremove"
+}
+
+op_wireguard_clientprofile() {
+  _out=$(module_call wireguard clientprofile "$BODY" 2>&1) || die "WireGuard clientprofile: $_out"
+  printf '%s\n' "$_out" >"$RESULT"
+  log_op "wireguard.clientprofile"
+}
+
+op_suricata_sourceset() {
+  _out=$(module_call suricata sourceset "$BODY" 2>&1) || die "Suricata sourceset: $_out"
+  printf '%s\n' "$_out" >"$RESULT"
+  log_op "suricata.sourceset"
+}
+
+op_suricata_sourceenable() {
+  _out=$(module_call suricata sourceenable "$BODY" 2>&1) || die "Suricata sourceenable: $_out"
+  printf '%s\n' "$_out" >"$RESULT"
+  log_op "suricata.sourceenable"
+}
+
+op_suricata_sourceremove() {
+  _out=$(module_call suricata sourceremove "$BODY" 2>&1) || die "Suricata sourceremove: $_out"
+  printf '%s\n' "$_out" >"$RESULT"
+  log_op "suricata.sourceremove"
+}
+
+op_suricata_sourcerefresh() {
+  _out=$(module_call suricata sourcerefresh "$BODY" 2>&1) || die "Suricata sourcerefresh: $_out"
+  printf '%s\n' "$_out" >"$RESULT"
+  log_op "suricata.sourcerefresh"
+}
+
+op_suricata_rulesupload() {
+  _out=$(module_call suricata rulesupload "$BODY" 2>&1) || die "Suricata rulesupload: $_out"
+  printf '%s\n' "$_out" >"$RESULT"
+  log_op "suricata.rulesupload"
+}
+
+op_suricata_ruleenable() {
+  _out=$(module_call suricata ruleenable "$BODY" 2>&1) || die "Suricata ruleenable: $_out"
+  printf '%s\n' "$_out" >"$RESULT"
+  log_op "suricata.ruleenable"
+}
+
+op_suricata_rulesexport() {
+  _out=$(module_call suricata rulesexport "$BODY" 2>&1) || die "Suricata rulesexport: $_out"
+  printf '%s\n' "$_out" >"$RESULT"
+  log_op "suricata.rulesexport"
 }

@@ -150,4 +150,4 @@ views.system=()=>{
   return root;
 };
 // Start the initial view only once the add-on routes are registered.
-load();
+// Advanced module UIs register after this file; the last script invokes load.
