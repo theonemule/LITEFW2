@@ -1,6 +1,6 @@
 # LiteFW HTTP API Reference
 
-OpenAPI 3.1 · Version 2.2.23
+OpenAPI 3.1 · Version 2.2.24
 
 Base URL: /api. Authentication: HTTP Basic or X-API-Key.
 All POST mutations require X-LiteFWM: 1 and JSON, except the binary upgrade upload.
@@ -47,9 +47,6 @@ API keys have read or admin scope; sensitive key/password/management operations 
 | POST | /api/modules/captive/service | Captive — service |
 | POST | /api/modules/cloudflared/configure | Cloudflared — configure |
 | POST | /api/modules/cloudflared/service | Cloudflared — service |
-| POST | /api/modules/crowdsec/configure | Crowdsec — configure |
-| POST | /api/modules/crowdsec/decisionssync | Crowdsec — decisionssync |
-| POST | /api/modules/crowdsec/service | Crowdsec — service |
 | POST | /api/modules/ddns/cfcheck | Ddns — cfcheck |
 | POST | /api/modules/ddns/cfconfigure | Ddns — cfconfigure |
 | POST | /api/modules/ddns/cfupdate | Ddns — cfupdate |
@@ -80,16 +77,10 @@ API keys have read or admin scope; sensitive key/password/management operations 
 | POST | /api/modules/openvpn/service | Openvpn — service |
 | POST | /api/modules/openvpn/sitepeeradd | Openvpn — sitepeeradd |
 | POST | /api/modules/openvpn/sitepeerdelete | Openvpn — sitepeerdelete |
-| POST | /api/modules/suricata/configure | Suricata — configure |
-| POST | /api/modules/suricata/ruleenable | Suricata — ruleenable |
-| POST | /api/modules/suricata/rulesexport | Suricata — rulesexport |
-| POST | /api/modules/suricata/rulesupdate | Suricata — rulesupdate |
-| POST | /api/modules/suricata/rulesupload | Suricata — rulesupload |
-| POST | /api/modules/suricata/service | Suricata — service |
-| POST | /api/modules/suricata/sourceenable | Suricata — sourceenable |
-| POST | /api/modules/suricata/sourcerefresh | Suricata — sourcerefresh |
-| POST | /api/modules/suricata/sourceremove | Suricata — sourceremove |
-| POST | /api/modules/suricata/sourceset | Suricata — sourceset |
+| POST | /api/modules/tailscale/configure | Save Tailscale hostname, route acceptance and subnet advertisement |
+| POST | /api/modules/tailscale/connect | Join tailnet explicitly using a transient authentication key |
+| POST | /api/modules/tailscale/disconnect | Disconnect tailnet without uninstalling Tailscale |
+| POST | /api/modules/tailscale/service | Start, stop or restart the daemon without automatic tailnet join |
 | POST | /api/modules/wireguard/clientprofile | Wireguard — clientprofile |
 | POST | /api/modules/wireguard/configure | Wireguard — configure |
 | POST | /api/modules/wireguard/peerenable | Wireguard — peerenable |

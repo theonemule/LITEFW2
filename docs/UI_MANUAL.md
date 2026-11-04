@@ -22,17 +22,19 @@ credentials, then use the sidebar to navigate without full page reloads.
 5. Install optional modules only when needed. Installation does not start them.
 
 ## Modules
-Suricata provides IDS/IPS, an inspection interface, HTTPS rule sources,
-uploaded .rules files, rule-source enable/disable and individual SID controls.
-Start in IDS mode; IPS can alter forwarded traffic.
-
-GeoIP provides searchable country checkboxes. Save a selection, download
-the IP feeds, then start blocking explicitly. CrowdSec synchronizes local
-decisions to LiteFW-managed IP-set rules.
+LiteFW focuses on network connectivity rather than packet inspection.
+GeoIP country blocking remains optional, independently configured and disabled
+until explicitly started.
 
 WireGuard manages peers and creates downloadable client profiles for
 automatically generated client keys. Cloudflare Tunnel uses an outbound
 connector token that is never exposed by API status responses.
+
+Tailscale provides encrypted tailnet connectivity and optional advertised
+subnet routes. Installation never joins a tailnet; an explicit Connect action
+uses a one-time authentication key, which is never stored by LiteFW.
+DNS takeover and Tailscale-owned firewall rules stay disabled, so access
+permissions must be configured in LiteFW's firewall.
 
 Multi-WAN provides prioritized failover, not load balancing. BGP/FRRouting
 supports configured peers and explicit prefixes. Captive Portal should be
@@ -58,7 +60,7 @@ System > Software updates checks signed-off GitHub release assets and their
 SHA-256 manifests before applying the runtime upgrade. Alpine package updates
 have separate Check and Upgrade buttons. An in-place upgrade preserves
 configuration and creates backups. Keep console/Proxmox access available
-for firewall, WAN, BGP and IPS work.
+for firewall, WAN, BGP and subnet routing work.
 
 ## Further references
 - [API reference](api.html)

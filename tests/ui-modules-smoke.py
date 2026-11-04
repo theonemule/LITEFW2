@@ -15,8 +15,8 @@ MODULES = [
     {"id": "ipsec", "name": "IPsec (strongSwan)", "description": "IKEv2 site tunnels", "installed": True, "core": False, "packages": ["strongswan","strongswan-openrc"]},
 ]
 ADDONS = [
-    ("suricata","Suricata IDS/IPS","security"),("geoip","GeoIP Blocking","security"),
-    ("crowdsec","CrowdSec","security"),("wireguard","WireGuard VPN","vpn"),
+    ("geoip","GeoIP Blocking","security"),("wireguard","WireGuard VPN","vpn"),
+    ("tailscale","Tailscale","connectivity"),
     ("cloudflared","Cloudflare Tunnel","connectivity"),("multiwan","Multi-WAN Failover","network"),
     ("mdns","mDNS Repeater","network"),("captive","Captive Portal","network"),
     ("frr","BGP / FRRouting","routing"),
@@ -45,6 +45,9 @@ STATES = {
 for addon_id, name, category in ADDONS:
     STATES[addon_id] = {"running": False, "configured": True,
                         "settings":{"enabled": False, "credentialConfigured":False}}
+    if addon_id == "tailscale":
+        STATES[addon_id].update({"backendState":"Stopped","tailnet":"","addresses":[],
+                                 "settings":{"hostname":"","acceptRoutes":False,"advertiseRoutes":[]}})
 SYSTEM = {"hostname": "testfw", "version": "2.2.13-dev", "resolvers": ["1.1.1.1"],
           "management": {"clientInterface": "eth1", "port": 80, "access": ["eth1"]},
           "ssh": {"enabled": True, "port": 22},
@@ -168,10 +171,9 @@ def main():
             ("module-ddns", ["Dynamic DNS", "Configure Inadyn provider", "Cloudflare DNS (pfSense migration)", "cloud.blaize.net", "home.blaize.net", "Check records"]),
             ("module-openvpn", ["OpenVPN routed server", "OpenVPN clients", "OpenVPN client tunnels", "Site-to-site peers", "office", "branch"]),
             ("module-ipsec", ["IPsec service", "IPsec site-to-site tunnels", "branch", "198.51.100.24", "Add site-to-site tunnel"]),
-            ("module-suricata", ["Suricata IDS/IPS", "Inspection settings", "Rule sources", "Signature controls", "Add HTTPS source", "Upload .rules"]),
             ("module-geoip", ["GeoIP Blocking", "Save selected countries", "Search countries", "Select shown", "Clear all", "Argentina", "United States"]),
-            ("module-crowdsec", ["CrowdSec", "Configure"]),
             ("module-wireguard", ["WireGuard VPN", "Server settings", "VPN peers", "Add peer"]),
+            ("module-tailscale", ["Tailscale", "Connect", "Disconnect", "Configure routes", "Tailnet status"]),
             ("module-cloudflared", ["Cloudflare Tunnel", "Configure"]),
             ("module-multiwan", ["Multi-WAN Failover", "Add WAN uplink", "Save WAN configuration"]),
             ("module-mdns", ["mDNS Repeater", "Configure"]),

@@ -2,13 +2,13 @@
 set -eu
 cd "$(dirname "$0")/.."
 
-for m in bind openvpn ddns dnsmasq ipsec suricata geoip crowdsec wireguard cloudflared multiwan mdns captive frr; do
+for m in bind openvpn ddns dnsmasq ipsec geoip tailscale wireguard cloudflared multiwan mdns captive frr; do
   test -x "modules/$m/module.sh"
   test -x "modules/$m/install.sh"
   test -x "modules/$m/uninstall.sh"
 done
 test -r modules/manifest.json
-jq -e '.schemaVersion==1 and (.modules|length)==14 and
+jq -e '.schemaVersion==1 and (.modules|length)==13 and
   (any(.modules[]; .id=="dnsmasq" and .core==true)) and
   (any(.modules[]; .id=="ddns" and (.packages|index("inadyn-openrc")!=null)))' modules/manifest.json >/dev/null
 grep -q 'module_manifest_entry' lib/modules.sh

@@ -5,8 +5,8 @@ set -eu
 cd "$(dirname "$0")/.."
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT HUP INT TERM
-new='suricata geoip crowdsec wireguard cloudflared multiwan mdns captive frr'
-test "$(jq '.modules | length' modules/manifest.json)" -eq 14
+new='geoip wireguard tailscale cloudflared multiwan mdns captive frr'
+test "$(jq '.modules | length' modules/manifest.json)" -eq 13
 for m in $new; do
   for f in module install uninstall; do test -x "modules/$m/$f.sh"; sh -n "modules/$m/$f.sh"; done
   modules/"$m"/module.sh meta | jq -e --arg id "$m" '.id == $id and (.name|length>0)' >/dev/null
@@ -18,9 +18,8 @@ for f in modules/shared/init-* modules/shared/multiwan-check.sh; do sh -n "$f"; 
 node --check www/app.js
 node --check www/addons.js
 for fixture in \
-  'suricata|{"interface":"eth1","mode":"ids"}' \
   'geoip|{"countries":["us","ca"],"enabled":false}' \
-  'crowdsec|{"enabled":true}' \
+  'tailscale|{"hostname":"litefw-edge","acceptRoutes":false,"advertiseRoutes":["10.0.1.0/24"]}' \
   'wireguard|{"interface":"wg0","address":"10.100.0.1/24","listenPort":51820,"peers":[{"publicKey":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=","allowedIPs":"10.100.0.2/32"}]}' \
   'cloudflared|{"token":"abcdefghijklmnopqrstuv"}' \
   'multiwan|{"uplinks":[{"interface":"eth0","gateway":"192.0.2.1","priority":10},{"interface":"eth2","gateway":"192.0.2.2","priority":20}],"enabled":false}' \
@@ -56,4 +55,4 @@ done
 grep -q 'module_firewall_snat_rules' lib/fw.sh
 grep -q 'POST:/system/telemetry' cgi/api.cgi
 grep -q 'GET:/telemetry/metrics' cgi/api.cgi
-echo "PASS: nine add-on contracts, telemetry exporters, UI routing and safety input checks"
+echo "PASS: eight connectivity-focused add-on contracts, telemetry exporters, UI routing and safety input checks"

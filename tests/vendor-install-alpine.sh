@@ -6,7 +6,7 @@ command -v docker >/dev/null 2>&1 || { echo 'Docker required for vendor integrat
 docker run --rm --network bridge -v "$PWD":/workspace:ro alpine:3.24 sh -ec '
   cd /workspace
   apk add --no-cache jq openrc >/dev/null
-  for m in cloudflared crowdsec captive; do
+  for m in cloudflared captive; do
     echo "CASE vendor/$m full-install"
     ./modules/$m/module.sh install >/tmp/litefw-module.log 2>&1 ||
       { tail -35 /tmp/litefw-module.log >&2; exit 1; }
@@ -15,7 +15,7 @@ docker run --rm --network bridge -v "$PWD":/workspace:ro alpine:3.24 sh -ec '
     ./modules/$m/module.sh meta | jq -e --arg id "$m" ".id == \$id" >/dev/null
     echo "PASS $m Alpine install and native service verification"
   done
-  for m in cloudflared crowdsec captive; do
+  for m in cloudflared captive; do
     ./modules/$m/module.sh uninstall >/tmp/litefw-remove.log 2>&1 ||
       { tail -25 /tmp/litefw-remove.log >&2; exit 1; }
     if PATH=/usr/sbin:/usr/bin:/sbin:/bin ./modules/$m/module.sh installed >/dev/null 2>&1; then

@@ -47,6 +47,9 @@ or revoke the key from the appliance when finished.
 
 ## Examples
 
+    litefw get /modules/tailscale
+    litefw module install tailscale
+    litefw post /modules/tailscale/configure '{"hostname":"litefw-edge","acceptRoutes":false,"advertiseRoutes":[]}'
     litefw get /modules/wireguard
     litefw module install geoip
     litefw post /modules/geoip/configure '{"countries":["ru","cn"],"enabled":false}'

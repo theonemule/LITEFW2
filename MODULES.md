@@ -79,7 +79,7 @@ with root-only permissions. Cron scheduling is idempotent, preserves unrelated
 root jobs, removes the old fixed periodic job, and survives runtime upgrades.
 The detected public IPv4 and last successful check remain read-only status.
 
-## Optional security, routing, VPN and network modules (2.2.19)
+## Optional connectivity, routing, VPN and network modules (2.2.24)
 
 All modules ship in the tracked runtime manifest and remain off until explicitly
 installed, configured, and started. An installed status verifies required
@@ -87,9 +87,8 @@ native packages, executable, and (when appropriate) OpenRC service.
 
 | Module | Implementation |
 | --- | --- |
-| Suricata IDS/IPS | Native Suricata/OpenRC, interface selection, IDS capture or explicit IPS NFQUEUE, manual signature updates. |
 | GeoIP Blocking | HTTPS IPdeny aggregated IPv4 country feeds, atomic ipset updates, generated LiteFW INPUT/FORWARD block rules. |
-| CrowdSec | Local CrowdSec engine, LAPI ban decisions synchronized to ipset, LiteFW-owned INPUT/FORWARD block rules and cron. |
+| Tailscale | Alpine/OpenRC tailnet peer connectivity, explicit Connect, protected one-time auth-key use, optional subnet advertisement and remote-route acceptance. |
 | WireGuard | wg-quick with protected private key, peer configuration, UDP firewall rule, OpenRC start/stop and boot persistence. |
 | Cloudflare Tunnel | Outbound remotely-managed cloudflared tunnel with root-only token file; ingress hosts configured in Cloudflare. |
 | Multi-WAN | Two or more priority-ranked uplinks, explicit activation, gateway checks, periodic failover, alternate-WAN SNAT and route rollback. |
@@ -99,23 +98,20 @@ native packages, executable, and (when appropriate) OpenRC service.
 
 ### Alpine deployment caveats
 
-Do **not** enable Alpine edge/testing globally. The Alpine 3.24
-main/community repositories contain WireGuard, Suricata, Avahi and FRR.
-The optional Cloudflare Tunnel now installs the pinned official cloudflared
-2026.10.7 static Linux binary with a verified SHA256; CrowdSec installs the
-official v1.8.2 static Linux release with verified SHA256 and an OpenRC
-service; openNDS is built from the verified 11.0.0 source archive with Alpine
-build tools that are removed afterward. The source-based installer path is
-verified by `tests/vendor-install-alpine.sh` with actual Alpine 3.24 container
-installation and removal; it does not add untrusted APK repositories.
+Optional packages use the supported Alpine 3.24 main/community repositories
+where available. Tailscale uses native tailscale and tailscale-openrc packages.
+Cloudflare Tunnel uses a SHA-256-verified vendor release, and openNDS uses a
+pinned verified source archive. No Alpine edge/testing repository is enabled.
 
-GeoIP lists and CrowdSec remediation are IPv4 only for this version.
-Multi-WAN provides prioritized failover, not weighted load balancing or
-policy routing. Captive portal and IPS require packet-path validation.
-BGP is deliberately conservative: learned routes default deny and only
-named IPv4 networks can be advertised. This code has passed source, API,
-headless UI, and existing firewall regression tests but has not yet
-passed a full Alpine VM/live-service integration run.
+Tailscale is disabled until explicitly installed, configured and connected.
+Tailnet authentication uses a temporary root-only file; LiteFW never persists
+a plaintext Tailscale auth key. Tailnet DNS takeover, exit-node advertising
+and Tailscale-managed netfilter rules are disabled. Traffic permissions on
+tailscale0 and subnet routing must use LiteFW firewall controls.
+
+GeoIP uses optional IPv4 country feeds. Multi-WAN provides prioritized
+failover, not weighted load balancing. BGP requires explicit neighbors
+and advertised prefixes.
 
 ### Telemetry management
 
@@ -125,71 +121,31 @@ System > Telemetry provides authenticated Prometheus text metrics at
 management interface; bearer tokens are root-only and never returned.
 There is no centralized log storage, ACME/HAProxy, or DNS filtering module.
 
-`tests/addons-contract-test.sh` covers nine module contracts, valid and
+`tests/addons-contract-test.sh` covers eight module contracts, valid and
 invalid configuration fixtures, and telemetry formats. The headless browser
 smoke checks each optional module page and the telemetry admin view.
 
 ### Disposable Alpine network behavioral simulations
 
-Run the same suite enforced by the appliance and runtime CI workflows:
+Run the tests/simulations.sh script in an isolated Alpine container to test
+multi-WAN failover, real FRRouting/BIRD BGP sessions, GeoIP kernel IP-set
+filtering, WireGuard peer handshakes and protected Cloudflare credentials.
+The tests never change the host appliance network.
 
-    ./tests/simulations.sh
-
-The runner uses a disposable privileged **Alpine 3.24 Docker container** with
-its own network namespace, veth pairs, BIRD and FRRouting, and the actual
-Suricata NFQUEUE engine. It does not change networking, rules or routes on
-the host LiteFW appliance. The test refuses to execute its inner scripts
-outside Docker, and failures return nonzero so CI blocks the build.
-
-The fail-closed CI assertions cover:
-
-- **Multi-WAN:** original default route unchanged while disabled; reachable
-  primary selected; simulated upstream failure switches to backup; no-healthy-
-  WAN reports failure without replacing the last route; preferred WAN returns;
-  backup SNAT enabled only for configured alternate uplinks; original route
-  restored.
-- **Suricata IDS/IPS:** synthetic ICMP traffic crosses two isolated network
-  namespaces; IDS detects but does not block; real NFQUEUE IPS drops matching
-  packets; the module emits the queue rule; when Suricata stops, --queue-bypass
-  preserves connectivity.
-- **BGP:** the LiteFW-generated FRR configuration dry-runs; a real BIRD router
-  establishes an external BGP session; the explicitly configured prefix is
-  received at the peer; an unexpected prefix exported by the peer is rejected;
-  session loss and recovery reconverge.
-- **GeoIP/CrowdSec:** deterministic offline threat-source fixtures populate
-  actual kernel ipsets; rules block forwarded traffic; invalid/non-ban records
-  do not add entries; feed or LAPI failure preserves previously loaded bans.
-- **WireGuard:** generated native configuration produces an encrypted tunnel
-  between two kernel interfaces; ICMP crosses the encrypted link; handshake
-  timestamps and UDP firewall rule are present; secrets are not returned or
-  removed by a blank edit; invalid CIDRs are rejected.
-- **Cloudflare/mDNS/captive:** native root-only token storage and masked API
-  output, token retention on a blank edit, WAN exclusions, reflector interface
-  selection and guest interface selection.
-
-Coverage limitations: CrowdSec and GeoIP use offline, deterministic *source*
-fixtures, while ipset/iptables are real; BIRD is a real BGP peer but not an
-upstream ISP; Suricata itself runs with the production argument modes but
-without an OpenRC booted appliance; the WireGuard underlay uses isolated
-loopback sockets. Cloudflare publishing, live CrowdSec community enrollment,
-Avahi multicast discovery across physical VLANs, openNDS guest redirection,
-and hardware link-loss scenarios still need dedicated appliance/integration
-testing. These tests are **not** a guarantee of production readiness.
-
+The tests/modules-ux-integration.sh suite includes WireGuard peer management
+and native Tailscale package and configuration tests. Tailscale Connect is
+tested with a simulated CLI and synthetic auth keys, without joining a real
+tailnet. Production routing and tailnet enrollment require separate testing.
 
 ### 2.2.21 module administration improvements
 
 GeoIP now uses a searchable ISO-3166 country/territory picker with A-Z groups,
 multi-select checkboxes, clear/select-visible controls and separate save,
 CIDR refresh and activation actions. Configuration supports up to 100 codes.
-Suricata has source list management, uploaded .rules imports, individual SID
-toggles, source enable/disable, import/export, HTTPS refresh, and native
-Suricata validation of candidate rules. Rule changes are staged and require
-an explicit engine restart. WireGuard now generates protected server and
-client keys, provides individual peer add/edit/enable/delete controls, and
-downloads authenticated client profiles with private keys never included in
-a normal snapshot. Multi-WAN uplinks are staged together before saving.
-BGP settings and peers are edited through dedicated controls, not raw JSON.
+WireGuard generates protected server/client keys and supports peer
+management and downloadable client profiles. Multi-WAN uplinks are staged
+before activation; BGP settings and neighbors have dedicated controls.
+Tailscale has subnet routing settings and explicit connection controls.
 
 These UX paths are covered by headless Chrome and additional disposable
 Alpine integration tests: `tests/modules-ux-integration.sh`.
@@ -197,10 +153,19 @@ Alpine integration tests: `tests/modules-ux-integration.sh`.
 ### 2.2.22 live appliance installation correction
 
 The LiteFW control process intentionally uses a restricted PATH that excludes
-`/usr/local/bin`. Optional Cloudflare Tunnel, CrowdSec and openNDS binaries
+`/usr/local/bin`. Optional Cloudflare Tunnel and openNDS binaries
 are verified and installed there; module detection now checks those absolute
 locations without broadening the root command search path.
 `tests/vendor-install-alpine.sh` explicitly runs `installed` checks under the
 production restricted PATH before and after removal. This defect was caught
 by real appliance installation on 10.0.1.199, not by the initial container
 smoke tests.
+
+### 2.2.24 connectivity focus
+
+Removed packet inspection engines from the module catalog, UI, API operations
+and tests. Legacy modules are no longer enumerated by the API after an upgrade,
+even when their old module directories are present. Existing installed
+system packages/services are not automatically uninstalled, avoiding
+unexpected service changes. Unrelated network and VPN settings are preserved.
+GitHub release retention now begins at v2.2.23.

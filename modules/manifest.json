@@ -74,21 +74,6 @@
       "core": false
     },
     {
-      "id": "suricata",
-      "version": "1",
-      "packages": [
-        "suricata",
-        "suricata-openrc",
-        "python3"
-      ],
-      "scripts": {
-        "controller": "suricata/module.sh",
-        "install": "suricata/install.sh",
-        "remove": "suricata/uninstall.sh"
-      },
-      "core": false
-    },
-    {
       "id": "geoip",
       "version": "1",
       "packages": [
@@ -103,22 +88,6 @@
       "core": false
     },
     {
-      "id": "crowdsec",
-      "version": "1",
-      "packages": [
-        "curl",
-        "ca-certificates",
-        "ipset"
-      ],
-      "scripts": {
-        "controller": "crowdsec/module.sh",
-        "install": "crowdsec/install.sh",
-        "remove": "crowdsec/uninstall.sh"
-      },
-      "core": false,
-      "installSource": "CrowdSec 1.8.2 static release (SHA256 verified)"
-    },
-    {
       "id": "wireguard",
       "version": "1",
       "packages": [
@@ -129,6 +98,20 @@
         "controller": "wireguard/module.sh",
         "install": "wireguard/install.sh",
         "remove": "wireguard/uninstall.sh"
+      },
+      "core": false
+    },
+    {
+      "id": "tailscale",
+      "version": "1",
+      "packages": [
+        "tailscale",
+        "tailscale-openrc"
+      ],
+      "scripts": {
+        "controller": "tailscale/module.sh",
+        "install": "tailscale/install.sh",
+        "remove": "tailscale/uninstall.sh"
       },
       "core": false
     },

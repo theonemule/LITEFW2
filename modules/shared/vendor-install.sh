@@ -23,23 +23,6 @@ case "$mod" in
    install -m 0755 "$tmp/archive" /usr/local/bin/cloudflared
    /usr/local/bin/cloudflared --version
    ;;
- crowdsec)
-   [ "$(uname -m)" = x86_64 ] || { echo "CrowdSec supported on x86_64 only" >&2; exit 1; }
-   apk add --no-cache ipset
-   fetch "https://github.com/crowdsecurity/crowdsec/releases/download/v1.8.2/crowdsec-release.tgz" \
-     6e0b2add0ff3231dca3db7146834d7fea028215b915e2da39ebe30fc9f11436f
-   tar xzf "$tmp/archive" -C "$tmp" \
-     crowdsec-v1.8.2/cmd/crowdsec/crowdsec crowdsec-v1.8.2/cmd/crowdsec-cli/cscli crowdsec-v1.8.2/config
-   install -m 0755 "$tmp/crowdsec-v1.8.2/cmd/crowdsec/crowdsec" /usr/local/bin/crowdsec
-   install -m 0755 "$tmp/crowdsec-v1.8.2/cmd/crowdsec-cli/cscli" /usr/local/bin/cscli
-   mkdir -p /etc/crowdsec /var/lib/crowdsec/data /var/log/crowdsec
-   if [ ! -r /etc/crowdsec/config.yaml ]; then
-     cp -R "$tmp/crowdsec-v1.8.2/config/." /etc/crowdsec/
-     sed -i 's/daemonize: true/daemonize: false/' /etc/crowdsec/config.yaml
-     chmod 0600 /etc/crowdsec/*credentials*.yaml 2>/dev/null || true
-   fi
-   /usr/local/bin/cscli version
-   ;;
  captive)
    [ "$(uname -m)" = x86_64 ] || { echo "openNDS source build supported on x86_64 only" >&2; exit 1; }
    apk add --no-cache build-base linux-headers libmicrohttpd-dev libmicrohttpd bash iptables iproute2

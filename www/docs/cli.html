@@ -63,6 +63,12 @@ litefw login http://10.0.1.199 --api-key --allow-http
 <p>or revoke the key from the appliance when finished.</p>
 <h2>Examples</h2>
 <pre>
+litefw get /modules/tailscale
+
+litefw module install tailscale
+
+litefw post /modules/tailscale/configure &#x27;{&quot;hostname&quot;:&quot;litefw-edge&quot;,&quot;acceptRoutes&quot;:false,&quot;advertiseRoutes&quot;:[]}&#x27;
+
 litefw get /modules/wireguard
 
 litefw module install geoip
@@ -83,4 +89,4 @@ litefw post /firewall/rules/add @rule.json
 <p>Key management endpoints require Basic credentials, even when an API key has</p>
 <p>Administrator permissions. Read-only keys cannot perform POST operations.</p>
 <p>See <a href="api.html">API reference</a> for all operations and the machine-readable</p>
-<p><a href="openapi.json">OpenAPI specification</a> for client generation.</p></main><footer>LiteFW 2.2.23 · Documentation is included with the appliance</footer></body></html>
+<p><a href="openapi.json">OpenAPI specification</a> for client generation.</p></main><footer>LiteFW 2.2.24 · Documentation is included with the appliance</footer></body></html>

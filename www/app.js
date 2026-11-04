@@ -136,7 +136,7 @@ function opPath(name, body) {
   if (family === 'dns') return '/api/dns/set';
   if (family === 'module') return '/api/modules/' + encodeURIComponent(body.id) + '/' + action;
   if (['bind', 'openvpn', 'ddns', 'dnsmasq', 'ipsec'].includes(family)) return '/api/modules/' + family + '/' + action;
-  if (['suricata','geoip','crowdsec','wireguard','cloudflared','multiwan','mdns','captive','frr'].includes(family))
+  if (['geoip','wireguard','tailscale','cloudflared','multiwan','mdns','captive','frr'].includes(family))
     return '/api/modules/' + family + '/' + action;
   if (family === 'telemetry') return '/api/system/telemetry';
   if (family === 'upgrade') return '/api/system/updates/' + action;

@@ -35,15 +35,17 @@
 <li>Install optional modules only when needed. Installation does not start them.</li>
 </ol>
 <h2>Modules</h2>
-<p>Suricata provides IDS/IPS, an inspection interface, HTTPS rule sources,</p>
-<p>uploaded .rules files, rule-source enable/disable and individual SID controls.</p>
-<p>Start in IDS mode; IPS can alter forwarded traffic.</p>
-<p>GeoIP provides searchable country checkboxes. Save a selection, download</p>
-<p>the IP feeds, then start blocking explicitly. CrowdSec synchronizes local</p>
-<p>decisions to LiteFW-managed IP-set rules.</p>
+<p>LiteFW focuses on network connectivity rather than packet inspection.</p>
+<p>GeoIP country blocking remains optional, independently configured and disabled</p>
+<p>until explicitly started.</p>
 <p>WireGuard manages peers and creates downloadable client profiles for</p>
 <p>automatically generated client keys. Cloudflare Tunnel uses an outbound</p>
 <p>connector token that is never exposed by API status responses.</p>
+<p>Tailscale provides encrypted tailnet connectivity and optional advertised</p>
+<p>subnet routes. Installation never joins a tailnet; an explicit Connect action</p>
+<p>uses a one-time authentication key, which is never stored by LiteFW.</p>
+<p>DNS takeover and Tailscale-owned firewall rules stay disabled, so access</p>
+<p>permissions must be configured in LiteFW&#x27;s firewall.</p>
 <p>Multi-WAN provides prioritized failover, not load balancing. BGP/FRRouting</p>
 <p>supports configured peers and explicit prefixes. Captive Portal should be</p>
 <p>limited to guest LAN interfaces; mDNS reflector to chosen LAN interfaces.</p>
@@ -68,10 +70,10 @@
 <p>SHA-256 manifests before applying the runtime upgrade. Alpine package updates</p>
 <p>have separate Check and Upgrade buttons. An in-place upgrade preserves</p>
 <p>configuration and creates backups. Keep console/Proxmox access available</p>
-<p>for firewall, WAN, BGP and IPS work.</p>
+<p>for firewall, WAN, BGP and subnet routing work.</p>
 <h2>Further references</h2>
 <ul>
 <li><a href="api.html">API reference</a></li>
 <li><a href="cli.html">CLI manual</a></li>
 <li><a href="openapi.json">OpenAPI 3.1 specification</a></li>
-</ul></main><footer>LiteFW 2.2.23 · Documentation is included with the appliance</footer></body></html>
+</ul></main><footer>LiteFW 2.2.24 · Documentation is included with the appliance</footer></body></html>

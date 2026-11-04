@@ -29,13 +29,14 @@ jobs:
           set -euo pipefail
           test -x tools/package-runtime-upgrade.sh
           ./tests/module-contract-test.sh
+          ./tests/release-retention.sh
           ./tests/addons-contract-test.sh
           ./tests/api-keys-integration.sh
           python3 tools/render-api-docs.py --check
           sh -n bin/litefw
           ./tests/modules-ux-integration.sh
           ./tests/vendor-install-alpine.sh
-          python3 -m py_compile modules/shared/suricata-rules.py modules/shared/wireguard-peers.py
+          python3 -m py_compile modules/shared/wireguard-peers.py
           ./tests/simulations.sh
           ./tests/module-install-verification.sh
           ./tests/alpine-package-update.sh
@@ -114,3 +115,12 @@ jobs:
               --notes "In-place LiteFW runtime upgrade. The System > Software updates UI downloads and verifies this archive before applying it. Existing network, DNS, DHCP and firewall configuration is preserved."
           fi
           gh release view "$tag" --json name,tagName,assets
+
+      - name: Retain only releases v2.2.23 and newer
+        if: github.ref == 'refs/heads/main'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash tools/prune-old-releases.sh

@@ -13,9 +13,7 @@ DIR=${LFW_MODULE_CONFIG_DIR:-/etc/litefw-addons}
 CONF="$DIR/$MOD.json"
 modinfo(){
  case "$MOD" in
- suricata) NAME="Suricata IDS/IPS"; DESC="Network intrusion detection and optional inline inspection"; CAT=security; PKGS="suricata suricata-openrc python3"; BIN=suricata; SERVICE=litefw-suricata;;
  geoip) NAME="GeoIP Blocking"; DESC="Country IPv4 network blocklists backed by ipset"; CAT=security; PKGS="ipset curl"; BIN=ipset; SERVICE=litefw-geoip;;
- crowdsec) NAME="CrowdSec"; DESC="CrowdSec threat detection with local IPv4 decision-to-ipset remediation"; CAT=security; PKGS="curl ca-certificates ipset"; BIN=cscli; SERVICE=crowdsec;;
  wireguard) NAME="WireGuard"; DESC="Managed wg-quick tunnels with key/peer configuration"; CAT=vpn; PKGS="wireguard-tools python3"; BIN=wg; SERVICE=litefw-wireguard;;
  cloudflared) NAME="Cloudflare Tunnel"; DESC="Token-managed outbound Cloudflare tunnel"; CAT=connectivity; PKGS="curl ca-certificates"; BIN=cloudflared; SERVICE=litefw-cloudflared;;
  multiwan) NAME="Multi-WAN Failover"; DESC="Priority-based multi-uplink default route and gateway health checks"; CAT=network; PKGS="iproute2"; BIN=ip; SERVICE=litefw-multiwan;;
@@ -30,12 +28,12 @@ installed(){
  if [ "$MOD" = multiwan ]; then [ -x /usr/local/sbin/litefw-multiwan-check ]; return; fi
  # lfwctl intentionally restricts PATH; verified vendor binaries live in
  # /usr/local/bin and must be found explicitly without broadening the PATH.
- if [ "$MOD" = cloudflared ] || [ "$MOD" = crowdsec ] || [ "$MOD" = captive ]; then
+ if [ "$MOD" = cloudflared ] || [ "$MOD" = captive ]; then
    [ -x "/usr/local/bin/$BIN" ] || return 1
  else
    command -v "$BIN" >/dev/null 2>&1 || return 1
  fi
- case "$MOD" in suricata|wireguard) command -v python3 >/dev/null 2>&1 || return 1;; esac
+ case "$MOD" in wireguard) command -v python3 >/dev/null 2>&1 || return 1;; esac
  if [ -n "$SERVICE" ]; then
    [ -e "/etc/init.d/$SERVICE" ] || return 1
  fi
@@ -62,26 +60,17 @@ snapshot(){
    safe=$(printf '%s' "$safe" | jq --argjson peers "$peer_state" '. + {peers:$peers.peers,publicKey:($peers.publicKey//"")}')
    ;;
  geoip) count=$(ipset list litefw_geo4 2>/dev/null | awk '/^Number of entries:/{print $4}'); safe=$(printf '%s' "$safe" | jq --argjson count "${count:-0}" '.+{loadedNetworks:$count}');;
- suricata) rule_state=$(python3 "$SELF/shared/suricata-rules.py" list 2>/dev/null || echo '{"sources":[],"rules":[],"activeRules":0,"totalRules":0}');;
  frr) peers=$(vtysh -c 'show bgp ipv4 unicast summary json' 2>/dev/null || echo '{}'); safe=$(printf '%s' "$safe" | jq --argjson p "$peers" '.+{sessions:$p}');;
  esac
- if [ "$MOD" = suricata ]; then
-   jq -n --argjson running "$run" --argjson settings "$safe" --argjson extra "$rule_state"      '{running:$running,configured:($settings|has("interface")),settings:$settings} + $extra'
- else
-   jq -n --argjson running "$run" --argjson settings "$safe" '{running:$running,configured:($settings|has("enabled") or has("interface") or has("interfaces") or has("asn") or .credentialConfigured),settings:$settings}'
- fi
+ jq -n --argjson running "$run" --argjson settings "$safe" '{running:$running,configured:($settings|has("enabled") or has("interface") or has("interfaces") or has("asn") or .credentialConfigured),settings:$settings}'
 }
 # Accept bounded JSON, checked against module-specific validation before mutating native config.
 validate(){
  jq -e 'type=="object"' "$1" >/dev/null || die 'Configuration must be an object'
  case "$MOD" in
- suricata)
- jq -e '(.interface|type=="string" and test("^[a-zA-Z0-9_.-]{1,15}$")) and (.mode=="ids" or .mode=="ips")' "$1" >/dev/null || die 'Specify valid interface and ids/ips mode'
- ;;
  geoip)
  jq -e '(.countries|type=="array" and length>0 and length<=100 and all(.[];type=="string" and test("^[a-z]{2}$"))) and ((.enabled//false)|type=="boolean")' "$1" >/dev/null || die 'Choose 1-100 two-letter country codes'
  ;;
- crowdsec) jq -e '((.enabled//false)|type=="boolean")' "$1" >/dev/null || die 'Invalid CrowdSec settings';;
  wireguard)
  jq -e '(.interface|type=="string" and test("^wg[0-9]{1,3}$")) and (.address|type=="string" and test("^[0-9./, ]+$")) and (.listenPort|type=="number" and .>=1 and .<=65535) and ((.peers//[])|type=="array" and length<=32 and all(.[]; (.publicKey|type=="string" and test("^[A-Za-z0-9+/]{43}=$")) and (.allowedIPs|type=="string" and test("^[0-9./:, a-fA-F]+$")) ))' "$1" >/dev/null || die 'Invalid WireGuard interface, address, port or peers'
  ;;
@@ -105,15 +94,6 @@ validate(){
 # Create native service configuration only after validation; replace atomically.
 render(){
  case "$MOD" in
- suricata)
-   iface=$(jq -r '.interface' "$1"); mode=$(jq -r '.mode' "$1")
-   [ -e "/sys/class/net/$iface" ] || die 'Interface not present'
-   # Use local OpenRC service; nothing is enabled on installation.
-   cat > /etc/conf.d/litefw-suricata <<EOF
-SURICATA_IFACE="$iface"
-SURICATA_MODE="$mode"
-EOF
-   ;;
  wireguard)
    iface=$(jq -r '.interface' "$1"); address=$(jq -r '.address' "$1"); port=$(jq -r '.listenPort' "$1")
    priv=$(jq -r '.privateKey // empty' "$1")
@@ -248,18 +228,13 @@ install_mod(){
  require_root
  [ "$MOD" != multiwan ] || { apk add --no-cache iproute2; mkdir -p /usr/local/sbin; install -m 0755 "$SELF/shared/multiwan-check.sh" /usr/local/sbin/litefw-multiwan-check; return; }
  case "$MOD" in
-   cloudflared|crowdsec|captive)
+   cloudflared|captive)
      "$SELF/shared/vendor-install.sh" "$MOD" || die "Verified vendor installer for $MOD failed";;
    *)
      apk add --no-cache $PKGS || die "Alpine packages unavailable: $PKGS";;
  esac
  case "$MOD" in
- suricata|cloudflared|geoip|wireguard|captive) install -m 0755 "$SELF/shared/init-$MOD" "/etc/init.d/$SERVICE";;
- crowdsec)
-   install -m 0755 "$SELF/shared/init-crowdsec" /etc/init.d/crowdsec;
-   mkdir -p /usr/local/sbin
-   install -m 0755 "$SELF/shared/init-crowdsec-bouncer" /etc/init.d/litefw-crowdsec-bouncer
-   install -m 0755 "$SELF/shared/crowdsec-sync.sh" /usr/local/sbin/litefw-crowdsec-sync;;
+ cloudflared|geoip|wireguard|captive) install -m 0755 "$SELF/shared/init-$MOD" "/etc/init.d/$SERVICE";;
  esac
  installed || die "Native executable or OpenRC service missing after installation: $MOD"
 }
@@ -277,16 +252,7 @@ remove_mod(){
      fi
    fi;;
  geoip) ipset destroy litefw_geo4 >/dev/null 2>&1 || true; rm -f /etc/init.d/litefw-geoip;;
- crowdsec)
-   rc-update del litefw-crowdsec-bouncer boot >/dev/null 2>&1 || true
-   if [ -r /etc/crontabs/root ]; then
-     sed '/# litefw-crowdsec$/d' /etc/crontabs/root >/etc/crontabs/root.lfw.tmp &&
-       mv /etc/crontabs/root.lfw.tmp /etc/crontabs/root
-   fi
-   ipset destroy litefw_cs4 >/dev/null 2>&1 || true
-   rm -f /etc/init.d/litefw-crowdsec-bouncer /usr/local/sbin/litefw-crowdsec-sync /etc/init.d/crowdsec /usr/local/bin/crowdsec /usr/local/bin/cscli;;
  cloudflared) rm -f /etc/init.d/litefw-cloudflared /usr/local/bin/cloudflared /etc/cloudflared/litefw-token;;
- suricata) rm -f /etc/init.d/litefw-suricata /etc/conf.d/litefw-suricata;;
  multiwan)
    if [ -r /etc/crontabs/root ]; then
      sed '/# litefw-multiwan$/d' /etc/crontabs/root >/etc/crontabs/root.lfw.tmp &&
@@ -312,8 +278,8 @@ remove_mod(){
  # Shared OS tools must never be uninstalled by removing one module.
  # Otherwise DNS updates or another firewall module could lose curl/ipset.
  case "$MOD" in
-   multiwan|geoip|cloudflared|crowdsec|captive) :;;
-   suricata) apk del suricata suricata-openrc >/dev/null 2>&1 || true;;
+   multiwan|geoip|cloudflared|captive) :;;
+
    wireguard) apk del wireguard-tools >/dev/null 2>&1 || true;;
    *) apk del $PKGS >/dev/null 2>&1 || true;;
  esac
@@ -334,68 +300,6 @@ service_action(){
      rc-update add litefw-wireguard default >/dev/null 2>&1 || true
      rc-service litefw-wireguard "$action" || die 'Unable to activate WireGuard interface'
    fi;;
- crowdsec)
-   if [ "$action" = stop ]; then
-     rc-service crowdsec stop || die 'CrowdSec stop failed'
-     rc-update del crowdsec default >/dev/null 2>&1 || true
-     rc-update del litefw-crowdsec-bouncer boot >/dev/null 2>&1 || true
-     jq '.enabled=false' "$CONF" >"$CONF.tmp"
-     if [ -r /etc/crontabs/root ]; then
-       sed '/# litefw-crowdsec$/d' /etc/crontabs/root >/etc/crontabs/root.lfw.tmp &&
-         mv /etc/crontabs/root.lfw.tmp /etc/crontabs/root
-     fi
-   else
-     rc-update add crowdsec default >/dev/null 2>&1 || true
-     rc-service crowdsec "$action" || die 'CrowdSec security engine failed to start'
-     rc-service litefw-crowdsec-bouncer start || die 'CrowdSec IP set failed to initialize'
-     rc-update add litefw-crowdsec-bouncer boot >/dev/null 2>&1 || true
-     jq '.enabled=true' "$CONF" >"$CONF.tmp"; chmod 0600 "$CONF.tmp"; mv "$CONF.tmp" "$CONF"
-     mkdir -p /etc/crontabs
-     if [ -r /etc/crontabs/root ]; then
-       sed '/# litefw-crowdsec$/d' /etc/crontabs/root >/etc/crontabs/root.lfw.tmp
-     else : >/etc/crontabs/root.lfw.tmp; fi
-     printf '* * * * * /usr/local/sbin/litefw-crowdsec-sync >/dev/null 2>&1 # litefw-crowdsec\n' >>/etc/crontabs/root.lfw.tmp
-     mv /etc/crontabs/root.lfw.tmp /etc/crontabs/root
-     rc-service crond restart >/dev/null 2>&1 || true
-     /usr/local/sbin/litefw-crowdsec-sync || die 'CrowdSec initial decision sync failed'
-   fi
-   if [ -f "$CONF.tmp" ]; then chmod 0600 "$CONF.tmp"; mv "$CONF.tmp" "$CONF"; fi;;
- geoip)
-   if [ "$action" = stop ]; then
-     jq '.enabled=false' "$CONF" >"$CONF.tmp"
-     rc-update del litefw-geoip boot >/dev/null 2>&1 || true
-   else
-     [ -s "$DIR/geoip.ipset" ] || die 'Refresh country feeds before enabling GeoIP blocking'
-     rc-service litefw-geoip start || die 'Failed to restore GeoIP IP set'
-     rc-update add litefw-geoip boot >/dev/null 2>&1 || true
-     jq '.enabled=true' "$CONF" >"$CONF.tmp"
-   fi
-   chmod 0600 "$CONF.tmp"; mv "$CONF.tmp" "$CONF";;
- multiwan)
-   if [ "$action" = stop ]; then
-     jq '.enabled=false' "$CONF" >"$CONF.tmp"; chmod 0600 "$CONF.tmp"; mv "$CONF.tmp" "$CONF"
-     if [ -s /run/litefwm/multiwan-original-route ]; then
-       ip -4 route replace $(cat /run/litefwm/multiwan-original-route) ||
-         die 'Could not restore the previous default route'
-       rm -f /run/litefwm/multiwan-original-route
-     fi
-     if [ -r /etc/crontabs/root ]; then
-       sed '/# litefw-multiwan$/d' /etc/crontabs/root >/etc/crontabs/root.lfw.tmp &&
-         mv /etc/crontabs/root.lfw.tmp /etc/crontabs/root
-     fi
-   else
-     jq '.enabled=true' "$CONF" >"$CONF.tmp"; chmod 0600 "$CONF.tmp"; mv "$CONF.tmp" "$CONF"
-     if ! /usr/local/sbin/litefw-multiwan-check; then
-       jq '.enabled=false' "$CONF" >"$CONF.tmp"; chmod 0600 "$CONF.tmp"; mv "$CONF.tmp" "$CONF"
-       die 'No healthy uplink, original route preserved'
-     fi
-     mkdir -p /etc/crontabs
-     if [ -f /etc/crontabs/root ]; then sed '/# litefw-multiwan$/d' /etc/crontabs/root > /etc/crontabs/root.lfw.tmp
-     else : > /etc/crontabs/root.lfw.tmp; fi
-     printf '* * * * * /usr/local/sbin/litefw-multiwan-check >/dev/null 2>&1 # litefw-multiwan\n' >>/etc/crontabs/root.lfw.tmp
-     mv /etc/crontabs/root.lfw.tmp /etc/crontabs/root
-     rc-service crond restart >/dev/null 2>&1 || true
-   fi;;
  *)
    if [ "$action" = stop ]; then rc-service "$SERVICE" stop; rc-update del "$SERVICE" default >/dev/null 2>&1 || true
    else rc-update add "$SERVICE" default >/dev/null 2>&1 || true; rc-service "$SERVICE" "$action"; fi;;
@@ -405,16 +309,10 @@ service_action(){
 firewall(){
  running || return 0
  case "$MOD" in
- crowdsec)
-   [ "$(jq -r '.enabled // false' "$CONF")" = true ] || return 0
-   ipset list litefw_cs4 >/dev/null 2>&1 || return 0
-   echo '-A LFW_MOD -m set --match-set litefw_cs4 src -m comment --comment lfw:module:crowdsec -j DROP'
-   echo '-A LFW_FWD -m set --match-set litefw_cs4 src -m comment --comment lfw:module:crowdsec -j DROP';;
  geoip) echo '-A LFW_MOD -m set --match-set litefw_geo4 src -m comment --comment lfw:module:geoip -j DROP'
         echo '-A LFW_FWD -m set --match-set litefw_geo4 src -m comment --comment lfw:module:geoip -j DROP';;
  wireguard)
   port=$(jq -r '.listenPort' "$CONF"); echo "-A LFW_MOD -p udp --dport $port -m comment --comment lfw:module:wireguard -j ACCEPT";;
- suricata) if [ "$(jq -r '.mode' "$CONF")" = ips ]; then echo '-A LFW_FWD -j NFQUEUE --queue-num 0 --queue-bypass'; fi;;
  captive) echo '-A LFW_MOD -p tcp --dport 2050 -m comment --comment lfw:module:captive -j ACCEPT';;
  frr) jq -r '.neighbors[].address' "$CONF" | while read -r peer; do echo "-A LFW_MOD -s $peer -p tcp --dport 179 -m comment --comment lfw:module:frr -j ACCEPT"; done;;
  mdns) jq -r '.interfaces[]' "$CONF" | while read -r iface; do echo "-A LFW_MOD -i $iface -d 224.0.0.251 -p udp --dport 5353 -m comment --comment lfw:module:mdns -j ACCEPT"; done;;
@@ -451,18 +349,9 @@ case "${1:-}" in
  configure) configure "${2:?JSON-file}";;
  service) service_action "${2:-}";;
  refresh) refresh_geoip;;
- decisions-sync)
-   [ "$MOD" = crowdsec ] || die 'Unsupported decision action'
-   /usr/local/sbin/litefw-crowdsec-sync;;
  peerset|peerenable|peerremove|clientprofile)
    [ "$MOD" = wireguard ] || die 'Unsupported action'
    python3 "$SELF/shared/wireguard-peers.py" "$1" "${2:?JSON body}";;
-  sourceset|sourceenable|sourceremove|sourcerefresh|rulesupload|ruleenable|rulesexport|rulesupdate)
-   [ "$MOD" = suricata ] || die 'Unsupported action'
-   python3 "$SELF/shared/suricata-rules.py" "$1" "${2:?JSON body}";;
- rules-update)
-   [ "$MOD" = suricata ] || die 'Unsupported action'
-   python3 "$SELF/shared/suricata-rules.py" rulesupdate "${2:?JSON body}";;
  validate) validate "${2:?JSON-file}";;
  *) die "Unknown $MOD action: ${1:-}";;
 esac

@@ -91,106 +91,6 @@ function geoipPanel() {
         save)))
   ];
 }
-function suricataSettingsForm() {
-  const x=uxSettings('suricata'),ifaces=(S.interfaces||[]).filter(i=>i.kind!=='loopback');
-  form('Suricata capture and inspection',[
-    {k:'interface',label:'Inspection interface',type:'select',value:x.interface||'',
-      options:ifaces.map(i=>[i.name,i.name+' — '+(i.label||i.role||'interface')])},
-    {k:'mode',label:'Operating mode',type:'select',value:x.mode||'ids',
-      options:[['ids','IDS: alert only'],['ips','IPS: inline rule enforcement']]},
-  ],v=>apply('suricata.configure',v,'Suricata configuration saved; restart to apply'),{
-    note:'IDS is the safer starting point. IPS inspects forwarded traffic through NFQUEUE and can drop packets matching enabled DROP rules. Saving does not automatically start or restart the engine.',
-    applyText:'Save inspection settings'
-  });
-}
-function suricataSourceForm(x) {
-  x=x||{};
-  form(x.id?'Edit rule source':'Add HTTPS rule source',[
-    {k:'id',label:'Short source ID',value:x.id||'',placeholder:'et-open',
-      help:'Lowercase letters, numbers, dashes and underscores; cannot include spaces.'},
-    {k:'name',label:'Display name',value:x.name||'',placeholder:'Emerging Threats Open'},
-    {k:'url',label:'HTTPS .rules URL',value:x.url||'',placeholder:'https://example.org/rules/threats.rules'},
-    {k:'enabled',label:'Enable source',type:'check',value:x.enabled!==false}
-  ],v=>apply('suricata.sourceset',v,'Source saved. Refresh it to retrieve signatures.'),{
-    note:'Only HTTPS plain-text Suricata rules are supported. Downloads are size-limited and must pass Suricata validation before activation.'
-  });
-}
-function suricataUploadForm(){
-  let picker;
-  form('Import custom Suricata rules',[
-    {k:'id',label:'Ruleset ID',placeholder:'local-signatures'},
-    {k:'name',label:'Display name',placeholder:'Local custom rules'}
-  ],async v=>{
-    const file=picker&&picker.files&&picker.files[0];
-    if(!file)throw new Error('Choose a .rules text file.');
-    if(file.size>1024*1024)throw new Error('Maximum file size is 1 MiB.');
-    return apply('suricata.rulesupload',{...v,content:await file.text()},
-      'Ruleset imported and validated; restart Suricata to apply');
-  },{note:'Custom signatures are validated by Suricata before replacing the active ruleset.',
-    decorate:body=>{
-      picker=h('input',{type:'file',accept:'.rules,text/plain',class:'form-control',id:'suricata-upload'});
-      body.append(h('div',{class:'mb-3'},
-        h('label',{class:'form-label small fw-semibold',for:'suricata-upload'},'Suricata .rules file'),picker));
-    }});
-}
-async function suricataExport(id){
-  try {
-    const j=await op('suricata.rulesexport',{id:id||''}),v=j.result||j;
-    uxDownload(v.filename||'suricata.rules',v.content||'');
-  }catch(e){uxError(e)}
-}
-function suricataPanel(){
-  if(!uxInstalled('suricata'))return uxNoInstall('suricata');
-  const st=moduleState('suricata'),settings=st.settings||{},
-    sources=st.sources||[],rules=st.rules||[];
-  const sourceRows=sources.map(x=>h('tr',{},
-    h('td',{},h('strong',{},x.name||x.id),h('div',{class:'small text-secondary mono'},x.id)),
-    h('td',{},badge(x.enabled?'Enabled':'Disabled',x.enabled?'text-bg-success':'text-bg-secondary')),
-    h('td',{class:'small mono'},x.kind==='upload'?'Uploaded file':(x.url||'—')),
-    h('td',{class:'text-end'},
-      btn(x.enabled?'Disable':'Enable',()=>apply('suricata.sourceenable',{id:x.id,enabled:!x.enabled},'Source state saved'),'btn-outline-secondary'),' ',
-      ...(x.kind==='url'?[btn('Refresh',()=>apply('suricata.sourcerefresh',{id:x.id},'Source updated'),'btn-outline-primary'),' ']:[]),
-      btn('Download',()=>suricataExport(x.id),'btn-outline-secondary'),' ',
-      ...(x.kind==='url'?[btn('Edit',()=>suricataSourceForm(x),'btn-outline-secondary'),' ']:[]),
-      btn('Remove',()=>confirmDo('Remove ruleset','Delete the '+x.name+' source and its signatures?',
-        ()=>apply('suricata.sourceremove',{id:x.id},'Ruleset removed'),'Remove'),'btn-outline-danger'))));
-  const search=h('input',{class:'form-control',type:'search',placeholder:'Search SIDs, signature messages or rulesets'});
-  const result=h('div',{},'');
-  const rowFor=r=>h('tr',{},
-    h('td',{class:'mono'},r.sid),
-    h('td',{},r.message||'Signature '+r.sid),
-    h('td',{class:'small'},r.source||'—'),
-    h('td',{},badge(r.action||'alert',r.action==='drop'?'text-bg-danger':'text-bg-secondary')),
-    h('td',{class:'text-end'},
-      btn(r.enabled===false?'Enable':'Disable',()=>apply('suricata.ruleenable',{sid:String(r.sid),enabled:r.enabled===false},
-        'Signature state updated. Restart to apply.'),r.enabled===false?'btn-outline-success':'btn-outline-secondary')));
-  function filter(){
-    const q=search.value.trim().toLowerCase();
-    const matches=rules.filter(r=>!q||String(r.sid).includes(q)||(r.message||'').toLowerCase().includes(q)||(r.source||'').toLowerCase().includes(q));
-    result.replaceChildren(table(['SID','Rule message','Source','Action','Control'],matches.slice(0,150).map(rowFor),
-      'No loaded signatures. Add a source or upload a ruleset.'));
-  }
-  search.addEventListener('input',filter);filter();
-  return [...uxTop('suricata',[
-      btn('Inspection settings',suricataSettingsForm,'btn-primary'),
-      btn('Update signatures',()=>apply('suricata.rulesupdate',{},'Signature updates requested'),'btn-outline-primary')
-    ]),
-    card('Inspection overview',null,uxBody(
-      h('div',{class:'row g-3'},
-        [['Interface',settings.interface||'Not configured'],['Mode',(settings.mode||'IDS').toUpperCase()],
-          ['Rule sources',sources.length],['Visible signatures',rules.length]].map(([k,v])=>
-          h('div',{class:'col-6 col-lg-3'},h('div',{class:'small text-secondary'},k),h('strong',{},v)))),
-      h('p',{class:'small text-secondary mt-3 mb-0'},'Changes to rules and sources are staged and validated. Restart Suricata explicitly to load a new ruleset.'))),
-    card('Rule sources',[
-      btn('Add HTTPS source',()=>suricataSourceForm(),'btn-primary'),
-      btn('Upload .rules',suricataUploadForm,'btn-outline-primary'),
-      btn('Download active',()=>suricataExport(''),'btn-outline-secondary')
-    ],table(['Ruleset','Status','Source','Actions'],sourceRows,'No rule sources configured.')),
-    card('Signature controls',[badge(rules.length+' visible','text-bg-light border text-dark')],
-      uxBody(uxHelp('Enable or disable an individual signature by SID. Search the imported rule sets; changes require an explicit engine restart.'),search),
-      result)
-  ];
-}
 function wireguardSettingsForm(){
   const x=uxSettings('wireguard'),ips=moduleState('wireguard').peers||x.peers||[];
   form('WireGuard server',[
@@ -330,8 +230,41 @@ function frrPanel(){
         h('td',{class:'text-end'},btn('Remove',()=>save({networks:nets.filter(t=>t!==n)}),'btn-outline-danger')))),
       'Nothing advertised by default.'))];
 }
+function tailscalePanel(){
+  if(!uxInstalled('tailscale'))return uxNoInstall('tailscale');
+  const st=moduleState('tailscale'),cfg=st.settings||{},status=st.backendState||'Stopped';
+  const configure=()=>form('Tailscale connectivity settings',[
+    {k:'hostname',label:'Tailnet device hostname (optional)',value:cfg.hostname||'',placeholder:'litefw-edge'},
+    {k:'acceptRoutes',label:'Accept advertised remote subnet routes',type:'check',value:!!cfg.acceptRoutes,
+      help:'Disabled by default. Accepting routes may affect routing to remote subnets.'},
+    {k:'advertiseRoutes',label:'Advertise local IPv4 subnets',type:'list',value:cfg.advertiseRoutes||[],
+      help:'Empty by default. Only advertise networks you intend to share; approve them in your Tailscale admin console.'}
+  ],v=>apply('tailscale.configure',v,'Tailscale settings saved. Connect explicitly to activate.'),{
+    note:'LiteFW retains control of WAN routing, DNS and firewall rules. Tailscale netfilter integration and DNS takeover stay disabled; configure firewall permissions separately.'});
+  const connect=()=>form('Connect to Tailscale',[
+    {k:'authKey',label:'Tailscale auth key',type:'password',placeholder:'tskey-auth-...',
+     help:'Paste a short-lived Tailscale authentication key. It is passed to Tailscale once, not stored in LiteFW configuration.'}
+  ],v=>op('tailscale.connect',v).then(async()=>{
+      toast('Tailscale connected','success');await load();
+    }),{note:'Connecting can advertise configured subnets and accept remote subnet routes. Review them before connecting. Obtain a key from the Tailscale admin console.'});
+  return [...uxTop('tailscale',[
+    btn('Configure routes',configure,'btn-primary'),
+    btn('Connect',connect,'btn-outline-primary'),
+    btn('Disconnect',()=>confirmDo('Disconnect tailnet','Disconnect Tailscale without uninstalling it?',
+      ()=>apply('tailscale.disconnect',{},'Tailscale disconnected'),'Disconnect'),'btn-outline-secondary')
+  ]),
+  card('Tailnet status',null,uxBody(
+    h('dl',{class:'row mb-0 small'},
+      h('dt',{class:'col-sm-4'},'State'),h('dd',{class:'col-sm-8'},status),
+      h('dt',{class:'col-sm-4'},'Tailnet'),h('dd',{class:'col-sm-8'},st.tailnet||'Not connected'),
+      h('dt',{class:'col-sm-4'},'Tailscale IPs'),h('dd',{class:'col-sm-8'},(st.addresses||[]).join(', ')||'None'),
+      h('dt',{class:'col-sm-4'},'Accept remote routes'),h('dd',{class:'col-sm-8'},cfg.acceptRoutes?'Yes':'No'),
+      h('dt',{class:'col-sm-4'},'Advertised subnets'),h('dd',{class:'col-sm-8'},(cfg.advertiseRoutes||[]).join(', ')||'None')),
+    uxHelp('Installing Tailscale does not start it or join a tailnet. You can also authenticate interactively using the tailscale CLI on the appliance console. DNS and firewall ownership remain with LiteFW.')
+  ))];
+}
+views['module-tailscale']=tailscalePanel;
 views['module-geoip']=geoipPanel;
-views['module-suricata']=suricataPanel;
 views['module-wireguard']=wireguardPanel;
 views['module-multiwan']=multiwanPanel;
 views['module-frr']=frrPanel;
@@ -345,7 +278,5 @@ views['module-captive']=()=>simpleAddonPage('captive',[
 views['module-cloudflared']=()=>simpleAddonPage('cloudflared',[
   {k:'token',label:'Cloudflare tunnel token',type:'password',value:'',help:'Paste the tunnel connector token from Cloudflare Zero Trust. Leave blank later to preserve the existing token.'}
 ],'Cloudflare Tunnel','Cloudflare Tunnel is outbound-only. Create the tunnel and public hostname mappings in Cloudflare Zero Trust, then paste the connector token.');
-views['module-crowdsec']=()=>simpleAddonPage('crowdsec',[
-  {k:'enabled',label:'Enable local CrowdSec ban remediation',type:'check',value:false}
-],'CrowdSec detection and remediation','CrowdSec needs an available supported engine and local API to synchronize security decisions. LiteFW owns the resulting firewall rules.');
+
 load();

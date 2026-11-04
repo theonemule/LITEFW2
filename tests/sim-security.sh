@@ -1,6 +1,6 @@
 #!/bin/sh
 # Native ipset/iptables tests with fake offline feed transport and API sources.
-# Executes inside the disposable Alpine container after the Suricata test.
+# Executes inside disposable Alpine after the generic packet-path fixture.
 set -eu
 cd /workspace
 mkdir -p /tmp/lfw-sec-conf /tmp/lfw-fixture-bin
@@ -63,54 +63,6 @@ fi
 ipset test litefw_geo4 192.0.2.2 >/dev/null
 mv /tmp/lfw-fixture-bin/curl.ok /tmp/lfw-fixture-bin/curl
 echo 'PASS failed GeoIP refresh preserves previous bans'
-
-echo 'CASE crowdsec/sync-decisions-to-kernel-block'
-cat >/tmp/lfw-fixture-bin/cscli <<'CSCLI'
-#!/bin/sh
-[ "${SIM_CROWDSEC_FAIL:-0}" != 1 ] || exit 28
-[ "$1" = decisions ] && [ "$2" = list ] || exit 1
-cat <<'DECISIONS'
-[
- {"type":"ban","scope":"Ip","value":"192.0.2.2"},
- {"type":"ban","scope":"Range","value":"10.77.0.0/16"},
- {"type":"ban","scope":"Ip","value":"NOT_AN_IP"},
- {"type":"captcha","scope":"Ip","value":"203.0.113.77"}
-]
-DECISIONS
-CSCLI
-chmod +x /tmp/lfw-fixture-bin/cscli
-printf '%s\n' '{"enabled":true}' >"$LFW_MODULE_CONFIG_DIR/crowdsec.json"
-/workspace/modules/shared/crowdsec-sync.sh >/tmp/lfw-cs-output.log
-ipset test litefw_cs4 192.0.2.2 >/dev/null
-ipset test litefw_cs4 10.77.5.6 >/dev/null
-if ipset test litefw_cs4 203.0.113.77 >/dev/null 2>&1; then
-  echo 'FAIL a non-ban decision entered the CrowdSec set' >&2; exit 1
-fi
-# Only the CrowdSec service-status response is mocked; the packet filter
-# and all ipset operations are the real Linux kernel interfaces.
-cat >/tmp/lfw-fixture-bin/rc-service <<'SVC'
-#!/bin/sh
-[ "$1" = crowdsec ] && [ "$2" = status ]
-SVC
-chmod +x /tmp/lfw-fixture-bin/rc-service
-cs_rules=$(/workspace/modules/crowdsec/module.sh firewall)
-printf '%s\n' "$cs_rules" | grep -Fq -- '-A LFW_FWD -m set --match-set litefw_cs4'
-printf '%s\n' "$cs_rules" | grep '^-A LFW_FWD ' | while IFS= read -r line; do
-  iptables $line
-done
-if ip netns exec lfw_ics ping -n -c 2 -W 2 198.51.100.2 >/dev/null 2>&1; then
-  echo 'FAIL CrowdSec ban did not stop simulated traffic' >&2; exit 1
-fi
-iptables -F LFW_FWD
-ip netns exec lfw_ics ping -n -c 2 -W 2 198.51.100.2 >/dev/null
-echo 'PASS CrowdSec active bans enforce real kernel filtering'
-
-echo 'CASE crowdsec/failed-LAPI-preserves-previous-blocks'
-if SIM_CROWDSEC_FAIL=1 /workspace/modules/shared/crowdsec-sync.sh >/dev/null 2>&1; then
-  echo 'FAIL simulated LAPI failure returned success' >&2; exit 1
-fi
-ipset test litefw_cs4 192.0.2.2 >/dev/null
-echo 'PASS CrowdSec LAPI outage preserves earlier kernel bans'
 
 echo 'CASE cloudflared/protected-token-not-exposed'
 printf '%s\n' '{"token":"test-only-very-long-cloudflared-token"}' >/tmp/lfw-cloudflare.json

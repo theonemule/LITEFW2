@@ -2,17 +2,11 @@
 // Optional LiteFW add-on pages. Loaded after app.js so each page shares the
 // existing resource loader, modal forms and authenticated operation layer.
 const ADDON_FIELDS = {
-  suricata: [
-    {k:'interface',label:'Capture interface',type:'select',choices:'interfaces'},
-    {k:'mode',label:'Inspection mode',type:'select',value:'ids',options:[['ids','IDS — detect only'],['ips','IPS — NFQUEUE inline (advanced)']]}
-  ],
   geoip: [
     {k:'countries',label:'Blocked countries (ISO-3166 two-letter codes)',type:'list',value:['ru','cn'],help:'CIDR feeds are retrieved only on explicit Refresh. Blocking applies to IPv4 sources.'},
     {k:'enabled',label:'Enable blocking after a successful list refresh',type:'check',value:false}
   ],
-  crowdsec: [
-    {k:'enabled',label:'Enable CrowdSec detection and LiteFW-managed IP blocking',type:'check',value:false}
-  ],
+  tailscale: [],
   wireguard: [
     {k:'interface',label:'WireGuard interface',value:'wg0'},
     {k:'address',label:'Tunnel address (CIDR)',value:'10.240.0.1/24'},
@@ -80,9 +74,7 @@ function addonForm(id) {
     return apply(id+'.configure',body,m.name+' settings saved');
   },{
     note: id==='multiwan'?'Save the candidate WAN gateways without activating them. Start explicitly to enable failover; verify out-of-band access first.':
-      id==='suricata'?'IDS captures traffic without enforcement. IPS uses an inline NFQUEUE; verify rules and fail-open behavior before enabling on production traffic.':
       id==='geoip'?'Refresh downloads IPdeny country CIDR feeds and loads the ipset before enabling rules. Country databases are approximate.':
-      id==='crowdsec'?'CrowdSec requires a compatible firewall bouncer for automatic blocking. Detection alone does not create firewall rules.':
       id==='captive'?'Captive portal applies only to an isolated guest network. Validate openNDS compatibility with LiteFW firewall reloads before production use.':
       id==='frr'?'BGP changes must be reviewed carefully. Incorrect advertisements can create significant routing outages.':
       'Saving does not start or expose a service; enable it explicitly when ready.',
@@ -107,13 +99,10 @@ function addonPanel(id){
       badge(working?'running':'stopped',working?'text-bg-success':'text-bg-secondary'),
       btn('Configure',()=>addonForm(id),'btn-primary'),
       ...(id==='geoip'?[btn('Refresh country lists',()=>apply('geoip.refresh',{},'GeoIP lists refreshed'),'btn-outline-primary')]:[]),
-      ...(id==='crowdsec'?[btn('Sync decisions',()=>apply('crowdsec.decisionssync',{},'CrowdSec IP bans refreshed'),'btn-outline-primary')]:[]),
-      ...(id==='suricata'?[btn('Update signatures',()=>apply('suricata.rulesupdate',{},'Suricata rule update completed'),'btn-outline-primary')]:[]),
       ...moduleServiceButtons(id+'.service',working,!!state.configured)
     ],h('div',{class:'card-body'},
       h('p',{class:'text-secondary small'},m.description),
       ...(details.length?details:[h('p',{class:'small'},'No configuration saved yet.')]),
-      ...(id==='crowdsec'?[h('p',{class:'small text-warning mt-2'},'LiteFW syncs CrowdSec IPv4 bans into its firewall-owned IP set. Community intelligence requires CrowdSec LAPI connectivity.')]:[]),
       ...(id==='multiwan'?[h('p',{class:'small text-warning mt-2'},'Starting changes routing only after gateway health checks; verify console access before activation.')]:[])
     ))
   ];

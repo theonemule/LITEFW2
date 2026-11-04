@@ -42,13 +42,14 @@ jobs:
           ./tests/bind-zone-management.sh
           ./tests/dns-provider-presets.sh
           ./tests/module-contract-test.sh
+          ./tests/release-retention.sh
           ./tests/addons-contract-test.sh
           ./tests/api-keys-integration.sh
           python3 tools/render-api-docs.py --check
           sh -n bin/litefw
           ./tests/modules-ux-integration.sh
           ./tests/vendor-install-alpine.sh
-          python3 -m py_compile modules/shared/suricata-rules.py modules/shared/wireguard-peers.py
+          python3 -m py_compile modules/shared/wireguard-peers.py
           ./tests/simulations.sh
           ./tests/module-install-verification.sh
           ./tests/alpine-package-update.sh

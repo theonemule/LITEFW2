@@ -52,37 +52,31 @@ module_json() {
   jq -n --argjson m "$_meta" --argjson i "$_ins" --argjson s "$_state" '$m + {installed:$i,state:$s}'
 }
 
+module_catalog_ids() {
+  jq -r '.modules[].id' "$LFW_MODULE_DIR/manifest.json"
+}
 modules_catalog_json() {
-  {
-    for _mf in "$LFW_MODULE_DIR"/*/module.sh; do
-      [ -x "$_mf" ] || continue
-      _meta=$("$_mf" meta 2>/dev/null) || continue
-      _id=$(printf '%s' "$_meta" | jq -r '.id')
-      _manifest=$(module_manifest_entry "$_id")
-      _meta=$(jq -n --argjson m "$_meta" --argjson entry "$_manifest" '$m + {core:$entry.core,packages:$entry.packages,version:$entry.version,installSource:($entry.installSource // null)}')
-      if "$_mf" installed >/dev/null 2>&1; then _ins=true; else _ins=false; fi
-      jq -n --argjson m "$_meta" --argjson i "$_ins" '$m + {installed:$i,state:{}}'
-    done
-  } | jq -s 'sort_by(.name)'
+  module_catalog_ids | while IFS= read -r _id; do
+    _mf=$(module_script "$_id")
+    _meta=$("$_mf" meta 2>/dev/null) || continue
+    _manifest=$(module_manifest_entry "$_id")
+    _meta=$(jq -n --argjson m "$_meta" --argjson entry "$_manifest"       '$m + {core:$entry.core,packages:$entry.packages,version:$entry.version,installSource:($entry.installSource // null)}')
+    if "$_mf" installed >/dev/null 2>&1; then _ins=true; else _ins=false; fi
+    jq -n --argjson m "$_meta" --argjson i "$_ins" '$m + {installed:$i,state:{}}'
+  done | jq -s 'sort_by(.name)'
 }
-
 modules_json() {
-  {
-    for _mf in "$LFW_MODULE_DIR"/*/module.sh; do
-      [ -x "$_mf" ] || continue
-      _id=$("$_mf" meta 2>/dev/null | jq -r '.id') || continue
-      module_json "$_id"
-    done
-  } | jq -s 'sort_by(.name)'
+  module_catalog_ids | while IFS= read -r _id; do module_json "$_id"; done |
+    jq -s 'sort_by(.name)'
 }
-
 module_firewall_rules() {
-  for _mf in "$LFW_MODULE_DIR"/*/module.sh; do
-    [ -x "$_mf" ] || continue
+  module_catalog_ids | while IFS= read -r _id; do
+    _mf=$(module_script "$_id")
     "$_mf" installed >/dev/null 2>&1 || continue
     "$_mf" firewall 2>/dev/null || true
   done
 }
+
 module_sync_firewall() { if command -v fw_sync >/dev/null 2>&1; then fw_sync; fi; }
 
 op_module_install() {
@@ -314,18 +308,6 @@ op_ddns_service() {
   log_op "ddns.service $_a"
 }
 
-op_suricata_configure() {
-  module_call suricata configure "$BODY" >"$RESULT" || die "suricata configuration failed"
-  module_sync_firewall
-  log_op "suricata.configure"
-}
-op_suricata_service() {
-  _a=$(jget action)
-  case "$_a" in start|stop|restart) :;; *) die "Invalid service action";; esac
-  module_call suricata service "$_a" >"$RESULT" || die "suricata service action failed"
-  module_sync_firewall
-  log_op "suricata.service $_a"
-}
 
 op_geoip_configure() {
   module_call geoip configure "$BODY" >"$RESULT" || die "geoip configuration failed"
@@ -340,19 +322,25 @@ op_geoip_service() {
   log_op "geoip.service $_a"
 }
 
-op_crowdsec_configure() {
-  module_call crowdsec configure "$BODY" >"$RESULT" || die "crowdsec configuration failed"
-  module_sync_firewall
-  log_op "crowdsec.configure"
-}
-op_crowdsec_service() {
-  _a=$(jget action)
-  case "$_a" in start|stop|restart) :;; *) die "Invalid service action";; esac
-  module_call crowdsec service "$_a" >"$RESULT" || die "crowdsec service action failed"
-  module_sync_firewall
-  log_op "crowdsec.service $_a"
-}
 
+op_tailscale_configure() {
+  module_call tailscale configure "$BODY" >"$RESULT" || die 'Tailscale configuration failed'
+  log_op 'tailscale.configure'
+}
+op_tailscale_service() {
+  _a=$(jget action)
+  case "$_a" in start|stop|restart) :;; *) die 'Invalid Tailscale daemon action';; esac
+  module_call tailscale service "$_a" >"$RESULT" || die 'Tailscale service action failed'
+  log_op "tailscale.service $_a"
+}
+op_tailscale_connect() {
+  module_call tailscale connect "$BODY" >"$RESULT" || die 'Tailscale connect failed'
+  log_op 'tailscale.connect'
+}
+op_tailscale_disconnect() {
+  module_call tailscale disconnect >"$RESULT" || die 'Tailscale disconnect failed'
+  log_op 'tailscale.disconnect'
+}
 op_wireguard_configure() {
   module_call wireguard configure "$BODY" >"$RESULT" || die "wireguard configuration failed"
   module_sync_firewall
@@ -449,17 +437,7 @@ module_firewall_snat_rules() {
     printf '%s\n' "-A LFW_SNAT -o $_iface -j MASQUERADE"
   done
 }
-op_suricata_rulesupdate() {
-  _out=$(module_call suricata rulesupdate "$BODY" 2>&1) || die "Suricata rule update: $_out"
-  printf '%s\n' "$_out" >"$RESULT"
-  log_op 'suricata.rulesupdate'
-}
 
-op_crowdsec_decisionssync() {
-  module_call crowdsec decisions-sync >"$RESULT" || die 'CrowdSec decision sync failed'
-  module_sync_firewall
-  log_op 'crowdsec.decisionssync'
-}
 
 op_wireguard_peerset() {
   _out=$(module_call wireguard peerset "$BODY" 2>&1) || die "WireGuard peerset: $_out"
@@ -483,46 +461,4 @@ op_wireguard_clientprofile() {
   _out=$(module_call wireguard clientprofile "$BODY" 2>&1) || die "WireGuard clientprofile: $_out"
   printf '%s\n' "$_out" >"$RESULT"
   log_op "wireguard.clientprofile"
-}
-
-op_suricata_sourceset() {
-  _out=$(module_call suricata sourceset "$BODY" 2>&1) || die "Suricata sourceset: $_out"
-  printf '%s\n' "$_out" >"$RESULT"
-  log_op "suricata.sourceset"
-}
-
-op_suricata_sourceenable() {
-  _out=$(module_call suricata sourceenable "$BODY" 2>&1) || die "Suricata sourceenable: $_out"
-  printf '%s\n' "$_out" >"$RESULT"
-  log_op "suricata.sourceenable"
-}
-
-op_suricata_sourceremove() {
-  _out=$(module_call suricata sourceremove "$BODY" 2>&1) || die "Suricata sourceremove: $_out"
-  printf '%s\n' "$_out" >"$RESULT"
-  log_op "suricata.sourceremove"
-}
-
-op_suricata_sourcerefresh() {
-  _out=$(module_call suricata sourcerefresh "$BODY" 2>&1) || die "Suricata sourcerefresh: $_out"
-  printf '%s\n' "$_out" >"$RESULT"
-  log_op "suricata.sourcerefresh"
-}
-
-op_suricata_rulesupload() {
-  _out=$(module_call suricata rulesupload "$BODY" 2>&1) || die "Suricata rulesupload: $_out"
-  printf '%s\n' "$_out" >"$RESULT"
-  log_op "suricata.rulesupload"
-}
-
-op_suricata_ruleenable() {
-  _out=$(module_call suricata ruleenable "$BODY" 2>&1) || die "Suricata ruleenable: $_out"
-  printf '%s\n' "$_out" >"$RESULT"
-  log_op "suricata.ruleenable"
-}
-
-op_suricata_rulesexport() {
-  _out=$(module_call suricata rulesexport "$BODY" 2>&1) || die "Suricata rulesexport: $_out"
-  printf '%s\n' "$_out" >"$RESULT"
-  log_op "suricata.rulesexport"
 }
