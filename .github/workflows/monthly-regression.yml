@@ -1,0 +1,166 @@
+name: Monthly LiteFW2 ISO and appliance regression
+
+on:
+  schedule:
+    - cron: '31 15 * * 5'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: litefw2-monthly-verification
+  cancel-in-progress: false
+
+jobs:
+  first-friday:
+    runs-on: ubuntu-24.04
+    outputs:
+      enabled: ${{ steps.guard.outputs.enabled }}
+    steps:
+      - name: Run only on the first Friday (or manual dispatch)
+        id: guard
+        shell: bash
+        run: |
+          if [[ "$GITHUB_EVENT_NAME" != schedule || $(date -u +%d) -le 7 ]]; then
+            echo enabled=true >> "$GITHUB_OUTPUT"
+          else
+            echo enabled=false >> "$GITHUB_OUTPUT"
+            echo "Skipping: not the first Friday of the month." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+  appliance:
+    needs: first-friday
+    if: needs.first-friday.outputs.enabled == 'true'
+    name: Alpine x86_64 ISO + full QEMU acceptance
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Unit, CLI, UI, upgrade, module and native packet regression
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -s VERSION
+          test -x tools/build-appliance-iso.sh
+          test -x tools/test-iso-local.sh
+          test -f iso/mkimg.litefwm.sh
+          test -f iso/genapkovl-litefwm.sh
+          test -x bin/litefw-web-bind
+          ./tests/web-lan-security.sh
+          ./tests/iso-overlay-permissions.sh
+          node --check www/app.js
+          node tests/firewall-ui-model-test.js
+          ./tests/temporary-root-ssh.sh
+          ./tests/inplace-upgrade-smoke.sh
+          ./tests/upgrade-check-test.sh
+          ./tests/dhcp-per-interface-options.sh
+          ./tests/bind-zone-management.sh
+          ./tests/dns-provider-presets.sh
+          ./tests/module-contract-test.sh
+          ./tests/release-retention.sh
+          ./tests/addons-contract-test.sh
+          ./tests/api-keys-integration.sh
+          ./tests/api-resource-test.sh
+          python3 tools/render-api-docs.py --check
+          sh -n bin/litefw
+          ./tests/modules-ux-integration.sh
+          ./tests/vendor-install-alpine.sh
+          python3 -m py_compile modules/shared/wireguard-peers.py
+          ./tests/simulations.sh
+          ./tests/module-install-verification.sh
+          ./tests/alpine-package-update.sh
+          ./tests/ddns-native-config.sh
+          ./tests/ddns-cloudflare-legacy.sh
+          ./tests/ddns-api-contract.sh
+          ./tests/firewall-staged-apply.sh
+          ./tests/firewall-recovery.sh
+          ./tests/iso-installer-integration.sh
+          # Actual nftables/netns packet-path tests in disposable Alpine containers.
+          bash tests/run-local-regressions.sh
+          while IFS= read -r -d '' script; do
+            if head -n 1 "$script" | grep -Eq '^#!.*(/|env )bash([[:space:]]|$)'; then
+              bash -n "$script"
+            else
+              sh -n "$script"
+            fi
+          done < <(find bin lib modules iso tools tests -type f -name '*.sh' -print0)
+          for script in bin/litefw-* iso/setup-alpine-litefwm; do sh -n "$script"; done
+          python3 -m compileall -q tests
+          if grep -RniE 'apt(-get)? (install|update)|debian|ubuntu' install.sh iso tools/build-appliance-iso.sh; then
+            echo 'Unsupported Debian/Ubuntu dependency in appliance build path' >&2
+            exit 1
+          fi
+
+      - name: Install ISO inspection and QEMU verification dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y xorriso qemu-system-x86 qemu-utils python3-pexpect
+
+      - name: Build standalone Alpine x86_64 firewall ISO
+        shell: bash
+        env:
+          ALPINE_VERSION: '3.24'
+          ARCH: x86_64
+          OUTDIR: ${{ github.workspace }}/dist
+        run: |
+          set -euo pipefail
+          ./tools/build-appliance-iso.sh
+          mapfile -t images < <(find dist -maxdepth 1 -type f -name '*litefwm*.iso')
+          [[ "${#images[@]}" -eq 1 ]]
+          mv "${images[0]}" "dist/litefw2-$(cat VERSION)-alpine3.24-x86_64.iso"
+          xorriso -indev dist/*.iso -report_el_torito plain
+          tar -czf "dist/litefw2-$(cat VERSION)-runtime.tar.gz" VERSION bin lib modules cgi www
+          install -m 0755 bin/litefw "dist/litefw-$(cat VERSION)-cli.sh"
+          (cd dist && sha256sum *.iso *.tar.gz *-cli.sh > SHA256SUMS)
+          (cd dist && sha256sum -c SHA256SUMS)
+
+      - name: Boot ISO, install to disk, then prove WAN/LAN, NAT, route and API behavior
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Same full three-stage test used by the normal appliance-iso workflow.
+          ./tools/test-iso-local.sh dist/*.iso both
+
+      - name: Upload ISO, runtime and integrity checksums
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: litefw2-monthly-appliance
+          path: |
+            dist/*.iso
+            dist/*.tar.gz
+            dist/*-cli.sh
+            dist/SHA256SUMS
+          if-no-files-found: warn
+          retention-days: 30
+          compression-level: 0
+
+      - name: Preserve QEMU and kernel regression diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: litefw2-monthly-diagnostics
+          path: |
+            qa-results/qemu/**
+            qa-results/local/**
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Describe monthly build policy
+        if: always()
+        shell: bash
+        run: |
+          {
+            echo '## LiteFW2 monthly CI'
+            echo 'All existing unit/contract/native nftables tests, a bootable'
+            echo 'Alpine ISO build, offline installation and QEMU WAN/LAN routing,'
+            echo 'NAT, firewall and authenticated API acceptance must pass.'
+            echo 'Artifacts are retained for 30 days; no tag, GitHub release,'
+            echo 'Proxmox staging or production update occurs on this schedule.'
+          } >> "$GITHUB_STEP_SUMMARY"
