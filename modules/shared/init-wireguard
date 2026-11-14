@@ -1,6 +1,6 @@
 #!/sbin/openrc-run
 description="LiteFW managed WireGuard VPN"
-depend() { need net; after iptables; }
+depend() { need net; after nftables; }
 wg_interface() {
   [ -r /etc/litefw-addons/wireguard.json ] || return 1
   jq -r '.interface // empty' /etc/litefw-addons/wireguard.json

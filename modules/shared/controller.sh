@@ -13,12 +13,12 @@ DIR=${LFW_MODULE_CONFIG_DIR:-/etc/litefw-addons}
 CONF="$DIR/$MOD.json"
 modinfo(){
  case "$MOD" in
- geoip) NAME="GeoIP Blocking"; DESC="Country IPv4 network blocklists backed by ipset"; CAT=security; PKGS="ipset curl"; BIN=ipset; SERVICE=litefw-geoip;;
+ geoip) NAME="GeoIP Blocking"; DESC="Country IPv4 network blocklists using nftables sets"; CAT=security; PKGS="nftables curl"; BIN=nft; SERVICE=litefw-geoip;;
  wireguard) NAME="WireGuard"; DESC="Managed wg-quick tunnels with key/peer configuration"; CAT=vpn; PKGS="wireguard-tools python3"; BIN=wg; SERVICE=litefw-wireguard;;
  cloudflared) NAME="Cloudflare Tunnel"; DESC="Token-managed outbound Cloudflare tunnel"; CAT=connectivity; PKGS="curl ca-certificates"; BIN=cloudflared; SERVICE=litefw-cloudflared;;
  multiwan) NAME="Multi-WAN Failover"; DESC="Priority-based multi-uplink default route and gateway health checks"; CAT=network; PKGS="iproute2"; BIN=ip; SERVICE=litefw-multiwan;;
  mdns) NAME="mDNS Repeater"; DESC="LAN-only Avahi DNS-SD reflector across selected segments"; CAT=network; PKGS="avahi avahi-openrc"; BIN=avahi-daemon; SERVICE=avahi-daemon;;
- captive) NAME="Captive Portal"; DESC="Guest splash portal with openNDS"; CAT=network; PKGS="curl ca-certificates libmicrohttpd bash iptables iproute2"; BIN=opennds; SERVICE=opennds;;
+ captive) NAME="Captive Portal"; DESC="Guest splash portal with openNDS"; CAT=network; PKGS="curl ca-certificates libmicrohttpd bash nftables iproute2"; BIN=opennds; SERVICE=opennds;;
  frr) NAME="BGP / FRRouting"; DESC="BGP sessions with explicit neighbors and advertised prefixes"; CAT=routing; PKGS="frr frr-openrc"; BIN=vtysh; SERVICE=frr;;
  *) die "Unknown optional module";;
  esac
@@ -41,7 +41,7 @@ installed(){
 running(){
  case "$MOD" in
  wireguard) [ -r "$CONF" ] || return 1; iface=$(jq -r '.interface // "wg0"' "$CONF"); wg show "$iface" >/dev/null 2>&1;;
- geoip) [ -r "$CONF" ] && [ "$(jq -r '.enabled // false' "$CONF")" = true ] && ipset list litefw_geo4 >/dev/null 2>&1;;
+ geoip) [ -r "$CONF" ] && [ "$(jq -r '.enabled // false' "$CONF")" = true ] && [ -s "$DIR/geoip.nft" ];;
  multiwan) [ -r "$CONF" ] && [ "$(jq -r '.enabled // false' "$CONF")" = true ];;
  *) [ -n "$SERVICE" ] && rc-service "$SERVICE" status >/dev/null 2>&1;;
  esac
@@ -59,7 +59,7 @@ snapshot(){
    peer_state=$(python3 "$SELF/shared/wireguard-peers.py" list 2>/dev/null || echo '{"peers":[]}')
    safe=$(printf '%s' "$safe" | jq --argjson peers "$peer_state" '. + {peers:$peers.peers,publicKey:($peers.publicKey//"")}')
    ;;
- geoip) count=$(ipset list litefw_geo4 2>/dev/null | awk '/^Number of entries:/{print $4}'); safe=$(printf '%s' "$safe" | jq --argjson count "${count:-0}" '.+{loadedNetworks:$count}');;
+ geoip) count=$(grep -Ec '^[[:space:]]+[0-9]+[.]' "$DIR/geoip.nft" 2>/dev/null || true); [ -n "$count" ] || count=0; safe=$(printf '%s' "$safe" | jq --argjson count "$count" '.+{loadedNetworks:$count}');;
  frr) peers=$(vtysh -c 'show bgp ipv4 unicast summary json' 2>/dev/null || echo '{}'); safe=$(printf '%s' "$safe" | jq --argjson p "$peers" '.+{sessions:$p}');;
  esac
  jq -n --argjson running "$run" --argjson settings "$safe" '{running:$running,configured:($settings|has("enabled") or has("interface") or has("interfaces") or has("asn") or .credentialConfigured),settings:$settings}'
@@ -251,7 +251,7 @@ remove_mod(){
        rm -f "/etc/wireguard/$wgif.conf"
      fi
    fi;;
- geoip) ipset destroy litefw_geo4 >/dev/null 2>&1 || true; rm -f /etc/init.d/litefw-geoip;;
+ geoip) rm -f "$DIR/geoip.nft" /etc/init.d/litefw-geoip;;
  cloudflared) rm -f /etc/init.d/litefw-cloudflared /usr/local/bin/cloudflared /etc/cloudflared/litefw-token;;
  multiwan)
    if [ -r /etc/crontabs/root ]; then
@@ -330,13 +330,20 @@ refresh_geoip(){
  awk '/^[0-9.]+\/[0-9]+$/{print $0}' "$tmp/blocks" | sort -u >"$tmp/clean"
  lines=$(wc -l <"$tmp/clean"); [ "$lines" -ge 10 ] && [ "$lines" -le 250000 ] || die 'GeoIP feed invalid or empty'
  while read -r prefix; do is_cidr "$prefix" || die "Invalid GeoIP CIDR $prefix"; done <"$tmp/clean"
- ipset create litefw_geo4 hash:net family inet maxelem 300000 -exist
- ipset create litefw_geo_tmp hash:net family inet maxelem 300000 -exist
- ipset flush litefw_geo_tmp
- sed 's/^/add litefw_geo_tmp /' "$tmp/clean" | ipset restore || die 'IP set import failed'
- ipset swap litefw_geo_tmp litefw_geo4
- ipset destroy litefw_geo_tmp
- ipset save litefw_geo4 >"$DIR/geoip.ipset"
+ # A native nftables interval set is declared inside the owned inet table.
+ # Keep the full feed as a set definition, not as a separate global ipset.
+ {
+   echo 'set litefw_geo4 {'
+   echo '  type ipv4_addr'
+   echo '  flags interval'
+   echo '  elements = {'
+   sed '$!s/$/,/' "$tmp/clean" | sed 's/^/    /'
+   echo '  }'
+   echo '}'
+ } >"$tmp/geoip.nft"
+ { echo 'table inet litefw_geoip_check {'; cat "$tmp/geoip.nft"; echo '}'; } >"$tmp/check.nft"
+ nft -c -f "$tmp/check.nft" || die 'Native nftables GeoIP set validation failed'
+ install -m 0600 "$tmp/geoip.nft" "$DIR/geoip.nft"
  jq -n --argjson count "$lines" '{loadedNetworks:$count}'
 }
 case "${1:-}" in

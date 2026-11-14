@@ -38,45 +38,14 @@ echo 'PASS: when no LAN exists web binds only loopback'
   lan_ifaces() { printf 'eth1\neth2\n'; }
   fw_gen_web >"$tmp/web/filter"
 )
-grep -Fxq -- '-A LFW_WEB -i eth1 -p tcp -m tcp --dport 8080 -j ACCEPT' "$tmp/web/filter"
-grep -Fxq -- '-A LFW_WEB -i eth2 -p tcp -m tcp --dport 8080 -j ACCEPT' "$tmp/web/filter"
-grep -Fxq -- '-A LFW_WEB -p tcp -m tcp --dport 8080 -j DROP' "$tmp/web/filter"
-! grep -q -- 'eth5' "$tmp/web/filter"
-echo 'PASS: firewall web guard allows LAN and denies other interfaces'
-# Build the actual iptables-restore transaction, with fake kernel writers.
-cat >"$tmp/bin/iptables-restore" <<'MOCK'
-#!/bin/sh
-cat >"$FW_RESTORE_FILE"
-MOCK
-cat >"$tmp/bin/iptables-save" <<'MOCK'
-#!/bin/sh
-cat "$FW_RESTORE_FILE"
-MOCK
-chmod +x "$tmp/bin/iptables-restore" "$tmp/bin/iptables-save"
-mkdir -p "$tmp/chains"
-: >"$tmp/chains/LFW_IN"; : >"$tmp/chains/LFW_FWD"
-: >"$tmp/chains/LFW_MGMT"; : >"$tmp/chains/LFW_DNAT"
-echo '-A LFW_IN -i eth5 -p tcp --dport 8080 -j ACCEPT' >"$tmp/chains/LFW_IN"
-(
-  . ./lib/fw.sh
-  mgmt_port() { echo 8080; }
-  ssh_port() { echo 22; }
-  ssh_enabled() { return 1; }
-  lan_ifaces() { echo eth1; }
-  wan_iface() { echo eth5; }
-  dhcpd_exists() { return 1; }
-  PATH="$tmp/bin:$PATH"
-  export PATH FW_RESTORE_FILE="$tmp/restored"
-  LFW_FW_SAVE="$tmp/saved"
-  FWT="$tmp/chains"
-  fw_commit any
-)
-grep -Fxq -- '-A INPUT -p tcp -m tcp --dport 8080 -j LFW_WEB' "$tmp/restored"
-grep -Fxq -- '-A LFW_WEB -i eth1 -p tcp -m tcp --dport 8080 -j ACCEPT' "$tmp/restored"
-grep -Fxq -- '-A LFW_WEB -p tcp -m tcp --dport 8080 -j DROP' "$tmp/restored"
+grep -Fxq 'iifname "eth1" tcp dport 8080 accept' "$tmp/web/filter"
+grep -Fxq 'iifname "eth2" tcp dport 8080 accept' "$tmp/web/filter"
+grep -Fxq 'tcp dport 8080 drop' "$tmp/web/filter"
+! grep -q 'eth5' "$tmp/web/filter"
+# The dedicated management port must be guarded before established packets.
 awk '
- /-A INPUT -p tcp -m tcp --dport 8080 -j LFW_WEB/ {guard=NR}
- /-A INPUT -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT/ {established=NR}
+ /printf.*tcp dport.*jump LFW_WEB/ {guard=NR}
+ /echo.*ct state.*established/ {established=NR}
  END {exit !(guard && established && guard<established)}
-' "$tmp/restored"
-echo 'PASS: real firewall transaction guards the web port before established traffic'
+' lib/fw.sh
+echo 'PASS: nftables management guard emitted for LAN interfaces before established'

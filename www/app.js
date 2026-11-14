@@ -1227,70 +1227,101 @@ async function applyFwDraft() {
   }
 }
 // ---------- firewall
-function editRule(r, chain) {
-  const isNew = !r; r = r || { chain, action: 'accept', in: '', out: '', src: '', dst: '', proto: 'any', ports: '', description: '' };
-  const fields = [
-    { k: 'chain', label: 'Traffic', type: 'select', value: r.chain, options: [['forward', 'Through the firewall (between segments / to the internet)'], ['input', 'To the firewall itself']] },
-    { k: 'action', label: 'Action', type: 'select', value: r.action, options: [['accept', 'Allow'], ['drop', 'Block (drop silently)'], ['reject', 'Block (reject)']] },
-    { k: 'in', label: 'From segment / interface', type: 'select', value: r.in, options: ifOpts('any segment') },
-    { k: 'src', label: 'Source address', value: r.src, placeholder: 'any — or 192.168.10.20 or 192.168.10.0/24' },
-    { k: 'out', label: 'To segment / interface', type: 'select', value: r.out, options: ifOpts('any segment'), show: v => v.chain === 'forward', help: 'Choose the WAN segment for internet access.' },
-    { k: 'dst', label: 'Destination address', value: r.dst, placeholder: 'any — or a host or CIDR' },
-    { k: 'proto', label: 'Protocol', type: 'select', value: r.proto, options: [['any', 'any'], ['tcp', 'TCP'], ['udp', 'UDP'], ['icmp', 'ICMP']] },
-    { k: 'ports', label: 'Destination ports', value: r.ports, placeholder: '443 or 8000-8100 or 80,443', show: v => v.proto === 'tcp' || v.proto === 'udp' },
-    { k: 'description', label: 'Description', value: r.description }
+// A rule is defined by where it starts, where it goes, and what it does.
+// INPUT/FORWARD/OUTPUT and nftables expressions are backend concerns.
+const endpointScopeOpts = () => [
+  ['any', 'Anywhere / any interface'],
+  ['host', 'This firewall'],
+  ...(wan() ? [['wan', 'WAN (internet side)']] : []),
+  ...routeIfaces().filter(i => i.role !== 'wan').map(i =>
+    ['iface:' + i.name, (i.label || i.name) + ' (' + i.name + ')'])
+];
+const endpointChoice = e => (e && e.scope === 'interface') ? 'iface:' + e.interface : ((e && e.scope) || 'any');
+function endpointOfChoice(choice, address, ports) {
+  const iface = (choice || '').startsWith('iface:') ? choice.slice(6) : '';
+  return { scope: iface ? 'interface' : (choice || 'any'),
+    interface: iface, address: address || '', ports: ports || '' };
+}
+function selectedEndpoints(r) {
+  if (r.source && r.destination) return { source: r.source, destination: r.destination };
+  const source = { scope: r.chain === 'output' ? 'host' : isWan(r.in) ? 'wan' : r.in ? 'interface' : 'any',
+    interface: r.in && !isWan(r.in) ? r.in : '', address: r.src || '', ports: r.srcPorts || '' };
+  const destination = { scope: r.chain === 'input' ? 'host' : isWan(r.out) ? 'wan' : r.out ? 'interface' : 'any',
+    interface: r.out && !isWan(r.out) ? r.out : '', address: r.dst || '', ports: r.ports || '' };
+  return { source, destination };
+}
+const inferredChain = (source, destination) =>
+  destination.scope === 'host' ? 'input' : source.scope === 'host' ? 'output' : 'forward';
+function checkEndpoints(source, destination, proto) {
+  if (source.scope === 'host' && destination.scope === 'host')
+    throw Error('Traffic from this firewall to itself uses loopback and does not need a policy rule.');
+  if ((proto === 'any' || proto === 'icmp') && (source.ports || destination.ports))
+    throw Error('Choose TCP or UDP to restrict source or destination ports.');
+}
+function ruleEditorFields(r, guided) {
+  const e = selectedEndpoints(r || {});
+  const opts = endpointScopeOpts();
+  return [
+    { k:'action', label:'What should happen?', type:'select', value:r && r.action || 'accept',
+      options:[['accept','Allow traffic'],['drop','Block silently'],['reject','Reject traffic']] },
+    { k:'fromScope', label:'Source — where does traffic come from?', type:'select',
+      value:endpointChoice(e.source), options:opts },
+    { k:'src', label:'Source IPv4 address, network or range (optional)', value:e.source.address || '',
+      placeholder:'Any, 192.168.1.10, 192.168.1.0/24, or 192.168.1.10-192.168.1.40',
+      help:'Leave empty for all addresses on the chosen source. Comma-separated addresses and networks also work.' },
+    { k:'toScope', label:'Destination — where is traffic going?', type:'select',
+      value:endpointChoice(e.destination), options:opts },
+    { k:'dst', label:'Destination IPv4 address, network or range (optional)', value:e.destination.address || '',
+      placeholder:'Any, 10.20.0.0/16, or 10.20.0.10-10.20.0.25',
+      help:'Leave empty to include the whole destination.' },
+    { k:'proto', label:'Protocol', type:'select', value:r && r.proto || 'any',
+      options:[['any','All traffic'],['tcp','TCP'],['udp','UDP'],['icmp','ICMP (ping)']] },
+    { k:'srcPorts', label:'Source port(s) (optional)', value:e.source.ports || '', placeholder:'Any, 1024-65535, or 80,443',
+      show:v => v.proto === 'tcp' || v.proto === 'udp',
+      help:'Most rules can leave this blank. This matches the sender’s port, not the service port.' },
+    { k:'ports', label:'Destination port(s) (optional)', value:e.destination.ports || '', placeholder:'443, 8000-8100, or 53,853',
+      show:v => v.proto === 'tcp' || v.proto === 'udp' },
+    { k:'description', label:'What is this rule for? (optional)', value:r && r.description || '',
+      placeholder:'e.g. Allow office PCs to reach backup server' },
+    ...(!r ? [{ k:'position', label:'Priority', type:'select', value:'bottom',
+      options:[['bottom','After existing rules'],['top','Before existing rules (highest priority)']],
+      help:'The first matching rule in the applicable packet path wins.' }] : [])
   ];
-  if (isNew) fields.push({ k: 'position', label: 'Position', type: 'select', value: '', options: [['', 'Bottom of the list'], ['0', 'Top of the list']] });
-  form(isNew ? 'New firewall rule' : 'Edit firewall rule', fields, v => {
-    if (v.chain === 'input') delete v.out;
-    if (isNew) {
-      const item = Object.assign({id:'', origin:-1, changed:true, managed:true}, v);
-      const pos = item.position; delete item.position;
-      if (pos === '0') {
-        const first = fwDraft.rules.findIndex(x => x.chain === item.chain);
-        if (first >= 0) fwDraft.rules.splice(first, 0, item);
-        else fwDraft.rules.push(item);
-      } else fwDraft.rules.push(item);
-    } else Object.assign(r, v, {changed:true});
+}
+function ruleFromValues(v) {
+  const source = endpointOfChoice(v.fromScope, v.src, v.srcPorts);
+  const destination = endpointOfChoice(v.toScope, v.dst, v.ports);
+  checkEndpoints(source, destination, v.proto);
+  return { source, destination, chain: inferredChain(source, destination),
+    action:v.action, proto:v.proto, description:v.description || '' };
+}
+function editRule(r) {
+  const fresh = !r;
+  form(fresh ? 'New traffic rule' : 'Edit traffic rule', ruleEditorFields(r), v => {
+    const rule = ruleFromValues(v);
+    if (fresh) {
+      const item = Object.assign({id:'', origin:-1, changed:true, managed:true}, rule);
+      if (v.position === 'top') fwDraft.rules.unshift(item);
+      else fwDraft.rules.push(item);
+    } else Object.assign(r, rule, {changed:true});
     markFwDraft();
     return Promise.resolve();
-  }, { note: 'Rules are evaluated top to bottom; the first match wins. Anything not allowed is dropped. Replies to allowed traffic are allowed automatically.' });
-}
-function ruleTable(chain) {
-  const rs = fwDraft.rules.filter(r => r.chain === chain);
-  const acts = { accept: 'text-bg-success', drop: 'text-bg-danger', reject: 'text-bg-warning' };
-  const ep = (i, a) => [h('div', {}, disp(i)), a && h('div', { class: 'mono small' }, a)];
-  return table(['#', 'Action', 'From', chain === 'forward' ? 'To' : 'Destination', 'Service', 'Description', ''],
-    rs.map((r, n) => h('tr', {},
-      h('td', { class: 'text-secondary' }, n + 1), h('td', {}, badge(r.action === 'accept' ? 'allow' : r.action, acts[r.action])),
-      h('td', {}, ep(r.in, r.src)), h('td', {}, chain === 'forward' ? ep(r.out, r.dst) : (r.dst || 'this firewall')),
-      h('td', { class: 'mono small' }, r.proto === 'any' ? 'any' : r.proto + (r.ports ? ' ' + r.ports : '')),
-      h('td', {}, r.managed ? dash(r.description) :
-        h('span', { class: 'small' }, dash(r.description || 'Imported rule'), h('div', { class: 'text-secondary' }, plainRule(r)),
-          h('details', { class: 'mt-1' }, h('summary', { class: 'small text-secondary' }, 'Technical details'), h('code', { class: 'mono' }, r.raw)))),
-      h('td', { class: 'text-end text-nowrap' }, ruleActions(r, rs, n, true)))),
-    chain === 'forward' ? 'No rules: all traffic between segments and to the internet is blocked.' : 'No rules.');
+  }, {note:'Choose the source and destination first. Leave the IP fields empty to match the whole interface or network. Changes are drafts until you Apply and confirm them.'});
 }
 const builtins = () => {
-  const w = wan(), s = S.system;
-  const lans = l3().filter(i => i.role === 'lan').map(i => disp(i.name)).join(', ') || 'none';
-  const implicit = [
-    ['allow', 'Replies to allowed connections (established / related)'],
-    ['allow', `Web UI tcp/${s.management.port} on LAN interfaces only` + (s.ssh.enabled ? `; SSH tcp/${s.ssh.port} from ` + (s.management.access[0] === 'any' ? 'any interface' : s.management.access.join(', ')) : '')],
-    ['allow', `DNS, DHCP and ping to this firewall from LAN segments (${lans})`],
-    ['allow', 'Port forwards (see Port forwards)'],
-    ['nat', w ? `Outbound NAT (masquerade) on the WAN ${disp(w.name)}` : 'Outbound NAT: no WAN segment defined'],
-    ['drop', `Everything else (policy INPUT ${S.firewall.policies.INPUT || '?'}, FORWARD ${S.firewall.policies.FORWARD || '?'})`]
+  const w = wan(), sys = S.system || {};
+  const management = sys.management || {port:80,access:['any']};
+  const ssh = sys.ssh || {enabled:false};
+  return [
+    ['allow','Replies to already established connections'],
+    ['allow','Web management on LAN interfaces only (TCP ' + management.port + ')'],
+    ['allow','SSH management ' + (ssh.enabled ? 'when enabled by System settings' : '(disabled)')],
+    ['allow','Basic DNS, DHCP and ping to the firewall from LAN segments unless a traffic rule blocks it'],
+    ['allow','Published services permitted unless a traffic rule blocks their forwarding'],
+    ['nat',w ? 'Outbound address translation (NAT) through WAN: ' + disp(w.name) : 'No WAN interface configured'],
+    ['drop','Other incoming and routed traffic denied by default; outbound traffic from the firewall itself allowed by default']
   ];
-  return implicit;
 };
-const advancedFirewall = () => [
-  card('Forwarding rules (filter FORWARD) — between segments and to the internet', [btn('Add rule', () => editRule(null, 'forward'), 'btn-primary')], ruleTable('forward')),
-  card('Input rules (filter INPUT) — traffic to this firewall', [btn('Add rule', () => editRule(null, 'input'), 'btn-primary')], ruleTable('input')),
-  forwardsTable(),
-  card('Built-in behaviour', [btn('Management access', () => location.hash = '#system')], table(['', 'Rule'],
-    builtins().map(([a, t]) => h('tr', { class: 'implicit' }, h('td', {}, badge(a, a === 'drop' ? 'text-bg-danger' : a === 'nat' ? 'text-bg-info' : 'text-bg-success')), h('td', {}, t)))))
-];
 
 // ---------- port forwards
 function editForward(f) {
@@ -1302,7 +1333,7 @@ function editForward(f) {
     { k: 'port', label: 'External port', value: f.port, placeholder: '443 or 10000-10100' },
     { k: 'to', label: 'Internal host', value: f.to, placeholder: '192.168.10.20' },
     { k: 'toPort', label: 'Internal port', value: f.toPort, placeholder: 'same as external' },
-    { k: 'src', label: 'Allowed sources', value: f.src, placeholder: 'anyone — or an IP / CIDR' },
+    { k: 'src', label: 'Allowed sources', value: f.src, placeholder: 'Anyone, an IP, subnet or IP range' },
     { k: 'description', label: 'Description', value: f.description }
   ], v => {
     if (isNew) fwDraft.forwards.push(Object.assign({id:'', origin:-1, managed:true, changed:true}, v));
@@ -1312,18 +1343,7 @@ function editForward(f) {
   },
   { note: 'Forwarded traffic is allowed through the firewall automatically; no extra rule is needed.' });
 }
-const forwardsTable = () => card('Port forwards (destination NAT, nat PREROUTING)', [btn('Add port forward', () => editForward(null), 'btn-primary')],
-  table(['Interface', 'Protocol', 'External port', 'Internal host', 'Sources', 'Description', ''],
-    fwDraft.forwards.map(f => h('tr', {},
-      h('td', {}, disp(f.in)), h('td', {}, f.proto === 'both' ? 'tcp+udp' : f.proto), h('td', { class: 'mono' }, f.port),
-      h('td', { class: 'mono' }, f.to + (f.toPort ? ':' + f.toPort : '')), h('td', { class: 'mono small' }, f.src || 'anyone'),
-      h('td', {}, f.managed ? dash(f.description) : h('span', { class: 'mono small text-secondary' }, f.raw)),
-      h('td', { class: 'text-end text-nowrap' }, f.managed && [btn('Edit', () => editForward(f)), ' ',
-        btn('Delete', () => confirmDo('Delete port forward', `Delete the forward of port ${f.port}?`, () => { fwDraft.forwards.splice(fwDraft.forwards.indexOf(f), 1); markFwDraft(); }, 'Delete'), 'btn-outline-danger')]))),
-    'No port forwards.'));
-
 // ---------- firewall: plain-language view + guided rule wizard
-let fwAdvanced = false;
 const isWan = n => { const w = wan(); return !!w && !!n && n === w.name; };
 const segLabel = n => { const i = I(n); return i && i.label ? i.label : n; };
 function devices() {
@@ -1335,34 +1355,46 @@ function devices() {
 const hostText = a => { if (!a) return ''; const d = devices().find(x => x.ip === a); return d && d.name ? `${d.name} (${a})` : a; };
 const svcText = (proto, ports) => !proto || proto === 'any' ? 'all traffic' : proto === 'icmp' ? 'ping' : `${proto.toUpperCase()} ${ports || 'all ports'}`;
 const where = (iface, addr, anyText) => {
-  if (isWan(iface)) return addr ? `${hostText(addr)} on the internet` : 'the internet';
+  if (isWan(iface)) return addr ? hostText(addr) + ' on WAN' : 'WAN';
   const seg = iface ? segLabel(iface) : '';
   if (addr) return seg ? `${hostText(addr)} in ${seg}` : hostText(addr);
   return seg || anyText;
 };
+function endpointText(e, fallback) {
+  if (!e) return fallback;
+  let place = e.scope === 'host' ? 'this firewall'
+    : e.scope === 'wan' ? 'WAN'
+    : e.scope === 'interface' ? segLabel(e.interface) + ' (' + e.interface + ')'
+    : fallback;
+  if (e.address) place += ' · ' + hostText(e.address);
+  return place;
+}
 function ruleSentence(r) {
-  const verb = r.action === 'accept' ? 'Allow' : 'Block';
-  const from = where(r.in, r.src, 'any segment');
-  const to = r.chain === 'input' ? 'this firewall' : where(r.out, r.dst, 'anywhere');
-  return `${verb} ${from} → ${to} · ${svcText(r.proto, r.ports)}`;
+  const e = selectedEndpoints(r);
+  const verb = r.action === 'accept' ? 'Allow' : r.action === 'reject' ? 'Reject' : 'Block';
+  const from = endpointText(e.source, 'any source');
+  const to = endpointText(e.destination, 'any destination');
+  const srcPorts = e.source.ports ? ' · source port ' + e.source.ports : '';
+  return verb + ' ' + from + ' → ' + to + ' · ' + svcText(r.proto, e.destination.ports) + srcPorts;
 }
 function forwardSentence(f) {
   const proto = f.proto === 'both' ? 'TCP+UDP' : f.proto.toUpperCase();
   const src = f.src ? ` (only from ${f.src})` : '';
-  const via = isWan(f.in) ? 'Internet' : `Traffic arriving on ${segLabel(f.in)}`;
+  const via = isWan(f.in) ? 'WAN' : `Traffic arriving on ${segLabel(f.in)}`;
   return `${via} → ${proto} ${f.port} on this firewall is forwarded to ${hostText(f.to)}${f.toPort ? ' port ' + f.toPort : ''}${src}`;
 }
 const actBadge = a => badge(a === 'accept' ? 'allow' : 'block', a === 'accept' ? 'text-bg-success' : 'text-bg-danger');
-// Show imported rules as readable policy, without converting their original match semantics.
+// Imported/advanced native rules are preserved in full on the firewall, but
+// displayed read-only without exposing command syntax to ordinary operators.
 function isInvertedSourceRule(r) {
-  return !!r.raw && /(?:^|\s)!\s+-s\s/.test(r.raw);
+  return !!r.raw && /(?:ip saddr !=|! -s )/.test(r.raw);
 }
 function plainRule(r) {
-  if (isInvertedSourceRule(r)) {
-    return 'Block unexpected source addresses on ' + disp(r.in) +
-      ': sources outside ' + (r.src || 'the expected subnet') +
-      (r.dst ? ' claiming traffic to ' + r.dst : '') + ' · anti-spoofing';
+  if (!r.managed && isInvertedSourceRule(r)) {
+    return 'Block sources outside the expected network on ' + disp(r.in || 'an interface') +
+      (r.src ? ' (expected ' + r.src + ')' : '') + ' · anti-spoofing';
   }
+  if (!r.managed) return r.description || 'Imported custom traffic rule (read-only)';
   return ruleSentence(r);
 }
 function moveRule(r, list, index, step) {
@@ -1375,7 +1407,7 @@ function moveRule(r, list, index, step) {
   };
   if (isInvertedSourceRule(r) || isInvertedSourceRule(next))
     return confirmDo('Move an anti-spoofing rule?',
-      'A rule moved past an anti-spoofing rule may expose networks. Continue?',
+      'Moving past an anti-spoofing rule may expose a network. Continue?',
       move, 'Move rule');
   move();
 }
@@ -1393,48 +1425,51 @@ const descOf = s => s.replace(/[^A-Za-z0-9 _.,:/()+#@-]/g, '').replace(/\s+/g, '
 function ruleItems(rules, emptyText) {
   if (!rules.length) return h('div', { class: 'card-body text-secondary small' }, emptyText);
   return h('ol', { class: 'rule-list' }, rules.map((r, n) => h('li', {},
-    h('span', { class: 'num' }, n + 1), r.managed ? actBadge(r.action) : badge('imported'),
+    h('span', { class: 'num' }, n + 1),
+    r.managed ? actBadge(r.action) : badge('imported / read-only'),
     h('span', { class: 'what' }, plainRule(r),
       r.description && h('small', {}, r.description),
-      !r.managed && h('details', { class: 'small text-secondary' },
-        h('summary', {}, 'Technical details (read-only)'), h('code', { class: 'mono' }, r.raw))),
+      !r.managed && h('small', {}, 'Preserved from the running firewall. Edit using the originating tool.')),
     h('span', { class: 'acts' }, ruleActions(r, rules, n)))));
 }
 
 views.firewall = () => {
-  const fwd = fwDraft.rules.filter(r => r.chain === 'forward'), inp = fwDraft.rules.filter(r => r.chain === 'input');
   const head = h('div', { class: 'd-flex flex-wrap gap-2 align-items-center mb-3' },
-    btn('+ New rule…', () => wizard(), 'btn-primary'),
+    btn('+ New rule…', () => wizard('custom'), 'btn-primary'),
+    btn('Guided examples…', () => wizard(), 'btn-outline-primary'),
     btn('Apply changes', applyFwDraft, fwDirty ? 'btn-success' : 'btn-outline-success disabled'),
     btn('Discard edits', async () => { fwDirty = false; await load(); }, 'btn-outline-secondary'),
-    h('span', { class: 'small text-secondary' }, 'Edit, add or move rules locally. Nothing changes on the firewall until Apply changes.'),
-    h('div', { class: 'form-check form-switch ms-auto' },
-      h('input', { class: 'form-check-input', type: 'checkbox', id: 'advToggle', checked: fwAdvanced, onchange: e => { fwAdvanced = e.target.checked; render(); } }),
-      h('label', { class: 'form-check-label small', for: 'advToggle' }, 'Advanced (manual rules)')));
+    h('span', { class: 'small text-secondary' },
+      'All traffic policy rules are edited in one list. Nothing changes until you Apply and confirm.'));
   const notice = h('div', { class: fwDirty ? 'alert alert-warning' : 'alert alert-light border' },
     fwDirty ? 'UNSAVED DRAFT — the firewall is still running its previous rules.' :
-      'Read from the live firewall. Stage changes here and use Apply changes once; old rules automatically return if not confirmed in 120 seconds.');
-  if (fwAdvanced) return [head, notice, advancedFirewall()];
+    'Rules reflect the live nftables policy. Changes automatically roll back if not confirmed within 120 seconds.');
   const explain = h('div', { class: 'alert alert-light border explain py-2' },
-    h('b', {}, 'Everything is blocked unless allowed. '),
-    h('b', {}, 'Traffic rules'), ' say what devices inside may reach (the internet, other segments). ',
-    h('b', {}, 'Port forwards'), ' open a door from the internet to one device inside. ',
-    h('b', {}, 'Firewall access'), ' covers traffic to the firewall itself. Replies to allowed traffic always come back.');
-  const b = builtins();
+    h('b', {}, 'Source → destination → action. '),
+    'Choose WAN, a network segment/interface, an IP/network/range, or this firewall itself. ',
+    'Rules are evaluated top to bottom within the relevant traffic path; the first matching rule wins. ',
+    'Established replies and LAN-only web management remain protected by built-in rules.');
   return [head, notice, explain,
-    card('Traffic rules — what may go where', h('span', { class: 'small text-secondary fw-normal' }, 'checked top to bottom, first match wins'),
-      ruleItems(fwd, 'Nothing is allowed yet: devices cannot reach the internet or each other. Use “New rule…” → “Let devices reach the internet”.')),
-    card('Port forwards — services published to the internet', null, fwDraft.forwards.length
-      ? h('ol', { class: 'rule-list' }, fwDraft.forwards.map((f, n) => h('li', {}, h('span', { class: 'num' }, n + 1), badge('forward', 'text-bg-info'),
-          h('span', { class: 'what' }, forwardSentence(f), f.managed && f.description && h('small', {}, f.description)),
-          h('span', { class: 'acts' }, f.managed && [btn('Edit', () => editForward(f)),
-            btn('Delete', () => confirmDo('Delete port forward', `Delete: ${forwardSentence(f)}?`, () => { fwDraft.forwards.splice(fwDraft.forwards.indexOf(f), 1); markFwDraft(); }, 'Delete'), 'btn-outline-danger')]))))
-      : h('div', { class: 'card-body text-secondary small' }, 'Nothing is reachable from the internet. Use “New rule…” → “Publish a service to the internet”.')),
-    card('Access to this firewall', [btn('Management settings', () => location.hash = '#system')], [
-      ruleItems(inp, 'No extra access rules.'),
-      h('ul', { class: 'rule-list border-top' }, b.map(([a, t]) => h('li', { class: 'builtin' }, h('span', { class: 'num' }, ''),
-        badge(a === 'drop' ? 'block' : a === 'nat' ? 'NAT' : 'allow', a === 'drop' ? 'text-bg-secondary' : a === 'nat' ? 'text-bg-info' : 'text-bg-light border'),
-        h('span', { class: 'what' }, t, h('small', {}, 'built in'))))) ])
+    card('Traffic rules — one ordered policy', h('span', { class:'small text-secondary fw-normal' },
+        'Hosts, WAN, and network segments together'),
+      ruleItems(fwDraft.rules,
+        'No custom rules. Use New rule to choose a source, destination and service.')),
+    card('Published services — destination NAT', [btn('Publish a service', () => wizard('publish'), 'btn-outline-primary')],
+      fwDraft.forwards.length
+        ? h('ol', { class:'rule-list' }, fwDraft.forwards.map((f, n) => h('li', {},
+            h('span', { class:'num' }, n + 1), badge('publish', 'text-bg-info'),
+            h('span', { class:'what' }, forwardSentence(f),
+              f.description && h('small', {}, f.description)),
+            h('span', { class:'acts' }, f.managed && [
+              btn('Edit', () => editForward(f)),
+              btn('Delete', () => confirmDo('Delete published service', 'Remove this port forward?',
+                () => { fwDraft.forwards.splice(fwDraft.forwards.indexOf(f), 1); markFwDraft(); }, 'Delete'), 'btn-outline-danger')
+            ]))))
+        : h('div', { class:'card-body text-secondary small' },
+            'No services are published through NAT. Publish a service to let external clients reach an internal device.')),
+    card('Automatic protections and services', [btn('Management settings', () => location.hash = '#system')],
+      h('ul', { class:'rule-list' }, builtins().map(([action, meaning]) => h('li', { class:'builtin' },
+        h('span', { class:'num' }, ''), badge(action, 'text-bg-light border'), h('span', { class:'what' }, meaning)))))
   ];
 };
 
@@ -1483,6 +1518,14 @@ const pre = {
 };
 
 const INTENTS = [
+  { id:'custom', ico:'↔', title:'Define a rule by source and destination',
+    desc:'Allow, block or reject traffic between WAN, any segment, a network range, or this firewall.',
+    fields:() => ruleEditorFields(null),
+    plan:v => {
+      const body = ruleFromValues(v);
+      return {items:[ruleItem(body, v.position === 'top' ? 0 : undefined)],
+        notes:['This rule joins the same ordered list as host and network rules. Leave an address or port blank to match any.']};
+    } },
   { id: 'internet', ico: '🌐', title: 'Let devices reach the internet',
     desc: 'A whole segment, or one device, may go out to the internet — everything or only some services.',
     pre: () => pre.lan() || pre.wan(),
@@ -1516,7 +1559,7 @@ const INTENTS = [
     fields: () => [{ k: 'from', label: 'Whose traffic?', type: 'select', options: [['', 'Any segment']].concat(lanOpts()) },
       ...targetFields('s', 'Which devices?', 'Every device'),
       { k: 'to', label: 'Going where?', type: 'select', value: wan() ? 'internet' : 'anywhere',
-        options: (wan() ? [['internet', 'The internet']] : []).concat(lanOpts().map(([n, l]) => ['seg:' + n, 'Segment ' + l]), [['addr', 'A specific IP address or subnet'], ['anywhere', 'Anywhere']]) },
+        options: (wan() ? [['internet', 'WAN']] : []).concat(lanOpts().map(([n, l]) => ['seg:' + n, 'Segment ' + l]), [['addr', 'A specific IP address or subnet'], ['anywhere', 'Anywhere']]) },
       { k: 'taddr', label: 'Destination IP or subnet', placeholder: '8.8.8.8  or  10.20.0.0/16', show: v => v.to === 'addr' },
       ...svcFields(),
       { k: 'how', label: 'How to block', type: 'select', value: 'reject', options: [['reject', 'Reject (the device gets an immediate “refused”)'], ['drop', 'Drop silently']] }],
@@ -1585,7 +1628,7 @@ function wizard(startId) {
     setBody(steps(0),
       INTENTS.map(it => h('button', { type: 'button', class: 'intent', 'data-intent': it.id, onclick: () => { intent = it; vals = null; details(); } },
         h('span', { class: 'ico' }, it.ico), h('span', {}, h('b', {}, it.title), h('span', { class: 'd' }, it.desc)))),
-      h('div', { class: 'small text-secondary mt-2' }, 'Need something else? Switch the Firewall page to Advanced to write rules by hand.'));
+      h('div', { class: 'small text-secondary mt-2' }, 'Each guided option creates a normal source-to-destination rule, shown in the same ordered list.'));
   };
   const details = () => {
     dlgChrome('New rule — ' + intent.title, 'Next');
@@ -1605,7 +1648,7 @@ function wizard(startId) {
     back.classList.remove('d-none'); back.onclick = details;
     setBody(steps(2),
       h('p', { class: 'mb-2' }, 'These changes will be added to a draft. Nothing is applied until you press Apply changes:'),
-      h('ol', { class: 'review' }, p.items.map(it => h('li', {}, it.text, h('div', {}, h('code', {}, `${it.op} ${JSON.stringify(it.body)}`))))),
+      h('ol', { class: 'review' }, p.items.map(it => h('li', {}, it.text))),
       p.notes.map(n => h('div', { class: 'alert alert-info py-2 small mb-2' }, n)));
     dlgApply = async () => {
       let count = 0;
@@ -1613,11 +1656,8 @@ function wizard(startId) {
         if (it.op === 'rule.add') {
           const item = Object.assign({id:'', origin:-1, changed:true, managed:true}, it.body);
           const pos = item.position; delete item.position;
-          if (pos === 0) {
-            const first = fwDraft.rules.findIndex(x => x.chain === item.chain);
-            if (first >= 0) fwDraft.rules.splice(first, 0, item);
-            else fwDraft.rules.push(item);
-          } else fwDraft.rules.push(item);
+          if (pos === 0) fwDraft.rules.unshift(item);
+          else fwDraft.rules.push(item);
           count++;
         } else if (it.op === 'forward.add') {
           fwDraft.forwards.push(Object.assign({id:'', origin:-1, changed:true, managed:true}, it.body));

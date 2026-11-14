@@ -28,8 +28,27 @@ done
 case "$PORT" in ''|*[!0-9]*) echo "invalid port" >&2; exit 2;; esac
 printf '%s' "$ADMIN" | grep -Eq '^[A-Za-z0-9_.-]{1,32}$' || { echo "invalid admin user" >&2; exit 2; }
 
+# Fail BEFORE installing packages or retiring older binaries. A live firewall
+# cannot be replaced safely without an explicitly audited rule translation.
+if command -v iptables >/dev/null 2>&1 &&
+   iptables -S INPUT 2>/dev/null | grep -q -- '-j LFW_MGMT'; then
+  echo 'Refusing automatic migration of an active LiteFW2 iptables firewall.' >&2
+  echo 'Existing firewall and boot rules are unchanged.' >&2
+  exit 1
+fi
+if command -v iptables-save >/dev/null 2>&1 &&
+   iptables-save 2>/dev/null | grep -Eq '^(-A |:INPUT (DROP|REJECT)|:FORWARD (DROP|REJECT))'; then
+  echo 'Refusing nftables installation over non-empty iptables rules.' >&2
+  exit 1
+fi
+if command -v nft >/dev/null 2>&1 &&
+   nft list table inet litefwm >/dev/null 2>&1; then
+  echo 'Refusing automatic takeover of a legacy LiteFWM nftables table.' >&2
+  exit 1
+fi
+
 echo "==> packages"
-apk add --no-cache ifupdown-ng iproute2 iptables dnsmasq jq lighttpd lighttpd-mod_auth \
+apk add --no-cache ifupdown-ng iproute2 nftables nftables-openrc dnsmasq jq lighttpd lighttpd-mod_auth \
   apache2-utils sudo busybox-openrc >/dev/null
 
 echo "==> retiring older LiteFWM control planes (if present)"
@@ -45,15 +64,6 @@ if [ -e /etc/init.d/litefwm ] || [ -e /usr/local/sbin/fwmctl ] || [ -d /opt/lite
   rm -rf /opt/litefwm /var/lib/litefwm /etc/litefwm/modules /usr/share/litefwm/litefwm-lighttpd.conf
   echo "    removed older LiteFWM binaries and private state"
 fi
-# If the previous LiteFWM nftables table exists, remove only that owned table and
-# retire its boot service. v2 owns the appliance firewall with iptables.
-if command -v nft >/dev/null 2>&1 && nft list table inet litefwm >/dev/null 2>&1; then
-  nft delete table inet litefwm >/dev/null 2>&1 || true
-  rc-update del nftables default >/dev/null 2>&1 || true
-  rc-service nftables stop >/dev/null 2>&1 || true
-  echo "    retired the old LiteFWM nftables table"
-fi
-
 # The installer may run entirely from the ISO with only a commented CD-ROM
 # repository. Keep that offline install intact, but configure trusted online
 # repositories for subsequent module installs and Alpine system package updates.
@@ -69,7 +79,7 @@ fi
 
 echo "==> files"
 install -d -m 0755 /usr/lib/litefwm /usr/lib/litefwm/cgi /usr/lib/litefwm/modules /usr/share/litefwm/www /etc/litefwm \
-  /etc/dnsmasq.d /etc/dnsmasq.hosts.d /etc/iptables /var/lib/misc
+  /etc/dnsmasq.d /etc/dnsmasq.hosts.d /var/lib/misc
 install -m 0755 "$BASE/bin/lfwctl" /usr/sbin/lfwctl
 install -m 0755 "$BASE/bin/litefw" /usr/bin/litefw
 install -m 0755 "$BASE/bin/lfw-setup" /usr/sbin/lfw-setup
@@ -97,6 +107,9 @@ if [ -f /etc/lighttpd/litefwm.conf ]; then
 fi
 sed "s/^server\.port = .*/server.port = $PORT/" "$BASE/etc/litefwm-lighttpd.conf" >/etc/lighttpd/litefwm.conf
 mkdir -p /var/log/lighttpd && chown lighttpd:lighttpd /var/log/lighttpd
+[ -f /var/log/lighttpd/error.log ] || : > /var/log/lighttpd/error.log
+chown lighttpd:lighttpd /var/log/lighttpd/error.log
+chmod 0640 /var/log/lighttpd/error.log
 if [ ! -s /etc/litefwm/htpasswd ]; then
   PASS=$(head -c 32 /dev/urandom | base64 | tr -dc 'A-Za-z0-9' | head -c 16)
   printf '%s\n' "$PASS" | htpasswd -ic /etc/litefwm/htpasswd "$ADMIN" >/dev/null 2>&1
@@ -159,13 +172,13 @@ dns_listen_sync
 net_persist
 echo "==> firewall"
 fw_snapshot
-if iptables -S INPUT 2>/dev/null | grep -q -- '-j LFW_MGMT'; then fw_commit; else fw_commit any; fi
+if nft list chain inet litefw LFW_MGMT >/dev/null 2>&1; then fw_commit; else fw_commit any; fi
 
 echo "==> services"
 rc-update add networking boot >/dev/null 2>&1 || true
-for s in iptables sysctl syslog; do rc-update add "$s" boot >/dev/null 2>&1 || true; done
+for s in nftables sysctl syslog; do rc-update add "$s" boot >/dev/null 2>&1 || true; done
+rc-update del iptables boot >/dev/null 2>&1 || true
 for s in dnsmasq lighttpd; do rc-update add "$s" default >/dev/null 2>&1 || true; done
-sed -i 's/^IPFORWARD=.*/IPFORWARD="yes"/' /etc/conf.d/iptables 2>/dev/null || true
 if [ "$START" = yes ]; then
   rc-service dnsmasq restart >/dev/null 2>&1 || rc-service dnsmasq start
   rc-service lighttpd restart >/dev/null 2>&1 || rc-service lighttpd start

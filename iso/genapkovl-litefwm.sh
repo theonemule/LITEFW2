@@ -15,7 +15,7 @@ rc_add() {
 
 install -d "$tmp/usr/bin"
 install -m 0755 "$src/bin/litefw" "$tmp/usr/bin/litefw"
-install -d   "$tmp/usr/sbin" "$tmp/usr/lib/litefwm" "$tmp/usr/lib/litefwm/cgi"   "$tmp/usr/lib/litefwm/modules" "$tmp/usr/share/litefwm/www"   "$tmp/usr/local/sbin" "$tmp/etc/apk/protected_paths.d" "$tmp/etc/litefwm"   "$tmp/etc/network" "$tmp/etc/dnsmasq.d" "$tmp/etc/dnsmasq.hosts.d"   "$tmp/etc/iptables" "$tmp/etc/lighttpd" "$tmp/etc/sudoers.d"   "$tmp/etc/sysctl.d" "$tmp/etc/init.d" "$tmp/etc/conf.d"   "$tmp/var/lib/misc" "$tmp/var/log/lighttpd" "$tmp/root"
+install -d   "$tmp/usr/sbin" "$tmp/usr/lib/litefwm" "$tmp/usr/lib/litefwm/cgi"   "$tmp/usr/lib/litefwm/modules" "$tmp/usr/share/litefwm/www"   "$tmp/usr/local/sbin" "$tmp/etc/apk/protected_paths.d" "$tmp/etc/litefwm"   "$tmp/etc/network" "$tmp/etc/dnsmasq.d" "$tmp/etc/dnsmasq.hosts.d"   "$tmp/etc" "$tmp/etc/lighttpd" "$tmp/etc/sudoers.d"   "$tmp/etc/sysctl.d" "$tmp/etc/init.d" "$tmp/etc/conf.d"   "$tmp/var/lib/misc" "$tmp/var/log/lighttpd" "$tmp/root"
 
 # LiteFWM CLI and runtime library.
 install -m 0755 "$src/bin/lfwctl" "$tmp/usr/sbin/lfwctl"
@@ -75,25 +75,16 @@ cat >"$tmp/etc/sysctl.d/90-litefwm.conf" <<'SYSCTL'
 net.ipv4.ip_forward = 1
 SYSCTL
 
-cat >"$tmp/etc/conf.d/iptables" <<'IPTABLES'
-# LiteFWM appliance firewall persistence.
-IPTABLES_SAVE="/etc/iptables/rules-save"
-SAVE_RESTORE_OPTIONS="-c"
-SAVE_ON_STOP="yes"
-IPFORWARD="yes"
-IPTABLES
-cat >"$tmp/etc/iptables/rules-save" <<'RULES'
-*filter
-:INPUT ACCEPT [0:0]
-:FORWARD ACCEPT [0:0]
-:OUTPUT ACCEPT [0:0]
-COMMIT
-*nat
-:PREROUTING ACCEPT [0:0]
-:INPUT ACCEPT [0:0]
-:OUTPUT ACCEPT [0:0]
-:POSTROUTING ACCEPT [0:0]
-COMMIT
+# The ISO starts with a permissive boot policy before interface roles are
+# configured. The installed firewall generates its own deny-by-default policy.
+# nftables loads this file natively without invoking any iptables wrapper.
+cat >"$tmp/etc/nftables.nft" <<'RULES'
+destroy table inet litefw
+table inet litefw {
+  chain INPUT { type filter hook input priority filter; policy accept; }
+  chain FORWARD { type filter hook forward priority filter; policy accept; }
+  chain OUTPUT { type filter hook output priority filter; policy accept; }
+}
 RULES
 
 # Initialize runtime; never generate credentials or write a plaintext password.
@@ -150,7 +141,17 @@ start() {
     eend 1
     return 1
   fi
-  chown lighttpd:lighttpd /var/log/lighttpd 2>/dev/null || true
+  # On a fresh Alpine live boot lighttpd may open its error log *after*
+  # dropping privileges. Ensure both the directory and existing/new log file
+  # are writable by that user. Failure must be visible, not silently ignored.
+  chown lighttpd:lighttpd /var/log/lighttpd || {
+    eerror "Cannot prepare lighttpd log directory"
+    eend 1
+    return 1
+  }
+  [ -f /var/log/lighttpd/error.log ] || : > /var/log/lighttpd/error.log
+  chown lighttpd:lighttpd /var/log/lighttpd/error.log
+  chmod 0640 /var/log/lighttpd/error.log
   if [ ! -s /etc/litefwm/htpasswd ]; then
     einfo "Web UI is not configured yet. Open the LiteFW console to configure it."
     eend 0
@@ -200,7 +201,8 @@ alpine-base
 alpine-conf
 ifupdown-ng
 iproute2
-iptables
+nftables
+nftables-openrc
 dnsmasq
 jq
 util-linux
@@ -229,14 +231,13 @@ WORLD
     "$tmp/etc/sudoers.d/litefwm" \
     "$tmp/etc/sysctl.d/90-litefwm.conf" \
     "$tmp/etc/conf.d/dnsmasq" \
-    "$tmp/etc/conf.d/iptables" \
     "$tmp/etc/lighttpd/lighttpd.conf" \
     "$tmp/etc/lighttpd/litefwm.conf" \
     "$tmp/etc/lighttpd/litefwm-bind.conf" \
     "$tmp/etc/dnsmasq.conf" \
     "$tmp/etc/dnsmasq.d/00-litefwm.conf" \
     "$tmp/etc/dnsmasq.d/10-dns.conf" \
-    "$tmp/etc/iptables/rules-save" \
+    "$tmp/etc/nftables.nft" \
     "$tmp/etc/litefwm/htpasswd" \
     "$tmp/etc/inittab" \
     "$tmp/etc/ssh/sshd_config.d/90-litefwm-console-only.conf"
@@ -255,7 +256,7 @@ rc_add hostname boot
 rc_add bootmisc boot
 rc_add syslog boot
 rc_add networking boot
-rc_add iptables boot
+rc_add nftables boot
 rc_add litefwm-init boot
 rc_add dnsmasq default
 rc_add lighttpd default
@@ -277,4 +278,10 @@ cat >"$tmp/etc/issue" <<ISSUE
 LiteFW $(cat "$src/VERSION") - Firewall & Network Appliance
 ISSUE
 
+# mktemp -d creates mode 0700. Tar includes the leading "." entry and Alpine
+# apkovl extraction applies that metadata to / itself. If it stays 0700,
+# every unprivileged daemon (lighttpd, dnsmasq, etc.) cannot traverse /.
+# Only relax the staged root directory; protected files such as htpasswd
+# keep their own restrictive permissions.
+chmod 0755 "$tmp"
 tar -c -C "$tmp" . | gzip -9n >"${host}.apkovl.tar.gz"

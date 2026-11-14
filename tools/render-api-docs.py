@@ -130,6 +130,8 @@ md=['# LiteFW HTTP API Reference','',f'OpenAPI 3.1 · Version {VERSION}', '',
 for method,path,info in routes:
     md.append(f'| {method} | /api{path} | {info["summary"]} |')
 md+=['','The canonical source is docs/openapi.json.']
+firewall_guide=(ROOT/"docs/FIREWALL_RULES.md").read_text().strip()
+md+=['',firewall_guide]
 write("docs/API.md","\n".join(md)+"\n")
 heads="<h1>LiteFW HTTP API Reference</h1>"
 heads+=f'<p>OpenAPI 3.1 · Version {html.escape(VERSION)} · Base URL: <code>/api</code></p>'
@@ -139,6 +141,7 @@ heads+='<table><thead><tr><th>Verb</th><th>Endpoint</th><th>Purpose</th></tr></t
 for method,path,info in routes:
     heads+='<tr><td>'+html.escape(method)+'</td><td><code>/api'+html.escape(path)+'</code></td><td>'+html.escape(info["summary"])+'</td></tr>'
 heads+='</tbody></table>'
+heads+=render_markdown(firewall_guide)
 write("www/docs/api.html",page("HTTP API reference",heads))
 
 raw_cli=(ROOT/"docs/CLI_MANUAL.md").read_text()

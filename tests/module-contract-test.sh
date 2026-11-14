@@ -55,7 +55,7 @@ grep -q 'op_ipsec_tunnelset()' lib/modules.sh
 grep -q 'op_ipsec_service()' lib/modules.sh
 grep -q 'module-ipsec' www/app.js
 grep -q 'swanctl' modules/ipsec/module.sh
-grep -q 'policy --dir out --pol ipsec' lib/fw.sh
+grep -q 'ipsec out reqid != 0 accept' lib/fw.sh
 grep -q 'client-profile' modules/openvpn/module.sh
 grep -q 'ovpn.*echo vpn' lib/net.sh
 grep -q 'kind == "physical" or .kind == "bridge" or .kind == "vlan"' lib/persist.jq

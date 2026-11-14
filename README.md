@@ -1,7 +1,7 @@
 # LiteFWM — Lite Firewall Manager
 
 A small firewall appliance for Alpine Linux, in the spirit of pfSense/IPFire but
-as light as possible: Bash, iproute2, iptables, dnsmasq, lighttpd and a static
+as light as possible: Bash, iproute2, nftables, dnsmasq, lighttpd and a static
 web UI. LiteFWM **owns** the host's networking — install it on a dedicated
 Alpine machine.
 
@@ -42,7 +42,7 @@ Alpine machine.
 There is no LiteFWM configuration store. The UI shows what the kernel and the
 native service files say *now*; **Apply** changes the machine immediately and
 the UI re-reads it. After each change LiteFWM rewrites the native boot files
-(`/etc/network/interfaces`, `/etc/iptables/rules-save`, `/etc/dnsmasq.d`) from
+(`/etc/network/interfaces`, `/etc/nftables.nft`, `/etc/dnsmasq.d`) from
 the live system so the same state comes back after a reboot. See ARCHITECTURE.md.
 
 ## Install (appliance ISO only)
@@ -73,10 +73,21 @@ Set the web administrator password during `setup-alpine`. The password itself
 is never saved as plaintext; only its bcrypt hash is stored. Use `lfw-setup`
 only for later recovery or reconfiguration, not initial installation.
 
-Upgrading from the older LiteFWM control plane preserves native BIND, OpenVPN
-and inadyn configuration where present, removes the old `/opt/litefwm` control
-plane and its owned nftables table, and adopts those services into the v2 live
-state model.
+**nftables migration branch:** Firewall filtering, NAT, and persistence use
+native nftables; routing and interface management continue to use iproute2.
+A live appliance using iptables, or an older LiteFWM-owned nftables table,
+**cannot be switched automatically**. The installer deliberately refuses
+in-place conversions rather than discarding rules or locking out access.
+Runtime-only upgrades also refuse an iptables-to-nftables transition.
+See [migration safety notes](docs/NFTABLES_MIGRATION.md).
+This is a development branch, not a published or deployed release.
+
+The Firewall page now presents **one ordered source-to-destination policy**
+for the WAN, network segments and traffic to or from the firewall host.
+Its guided editor accepts optional IP/CIDR/ranges, source/destination ports,
+and allow/block/reject, with no native syntax. Published services remain a
+separate NAT operation. First-match precedence applies inside each relevant
+Linux packet path (INPUT, FORWARD, or OUTPUT).
 
 ## CLI and HTTP API
 

@@ -7,7 +7,7 @@
 | links, bridges, VLANs, addresses, routes | `ip -j`, `bridge -j`, sysfs | `/etc/network/interfaces` (ifupdown-ng), regenerated |
 | segment role / name   | interface alias `lfw:role=…;name=…` (kernel) | `post-up ip link set … alias` |
 | DHCP client           | running `udhcpc` pid files                | `inet dhcp` stanza             |
-| firewall / NAT        | `iptables -S` of the LFW_* chains         | `/etc/iptables/rules-save`     |
+| firewall / NAT        | native nftables inet litefw chains          | /etc/nftables.nft     |
 | DHCP server, DNS      | dnsmasq's own files in `/etc/dnsmasq.d`   | same files (native config)     |
 | optional BIND DNS     | `/etc/bind/named.conf`, `/var/bind/litefwm` | same files (native config)   |
 | optional OpenVPN      | `/etc/openvpn/litefwm.conf`, PKI, live TUN interface | same native OpenVPN files; TUN is service-owned |
@@ -27,13 +27,15 @@ Nothing is ever loaded *from* a LiteFWM file into the machine.
 * `lib/net.sh` — interfaces, bridges, VLANs, segments, `l3_move` (identity
   migration between interfaces); `inventory.jq` builds the model from `ip -j`,
   `persist.jq` renders ifupdown-ng stanzas from it.
-* `lib/fw.sh` — iptables. Each change snapshots the user chains from the kernel,
-  edits them, loads the whole ruleset atomically with `iptables-restore`, then
-  `iptables-save`s it. Derived chains (LFW_SVC, LFW_MOD, LFW_SNAT, LFW_MGMT) are
-  regenerated from live roles/services on every change. `LFW_MOD` contains only
-  narrow service openings contributed by installed modules; VPN forwarding still
-  requires ordinary user firewall rules. Rules carry `lfw:<id> <description>`
-  comments; foreign rules are shown read-only. `fwparse.awk` parses `iptables -S`.
+* lib/fw.sh — native nftables, with a dedicated inet litefw table.
+  Each change snapshots ordered user chains from the running kernel, validates
+  a complete table-scoped transaction with nft -c, applies it atomically, and
+  saves the native boot file (/etc/nftables.nft). A destroy-table directive
+  makes reload idempotent without modifying other firewall tables.
+  Derived management, services, module, and WAN masquerade rules regenerate
+  from live roles/services. User rules carry lfw:<id> comments; complex native
+  expressions remain imported/read-only. The existing JSON API and staged
+  confirm/timeout rollback contract are preserved.
 * `lib/dhcp.sh` — dnsmasq DHCP servers, leases, reservations, DNS. Config is
   validated with `dnsmasq --test` before it takes effect and rolled back if rejected.
 * `lib/sys.sh` — hostname, management port/access with lock-out protection,
@@ -57,7 +59,9 @@ Nothing is ever loaded *from* a LiteFWM file into the machine.
 
 ## Firewall layout
 
-    filter INPUT   DROP : lo, established, invalid→drop, DHCP replies, LFW_MGMT, LFW_SVC, LFW_MOD, LFW_IN
-    filter FORWARD DROP : established, invalid→drop, ctstate DNAT (port forwards), LFW_FWD
-    nat PREROUTING      : LFW_DNAT (port forwards)
-    nat POSTROUTING     : LFW_SNAT (masquerade out of the WAN)
+    inet INPUT     DROP : LFW_WEB guard, lo, established, invalid→drop, DHCP replies, LFW_MGMT, LFW_SVC, LFW_MOD, LFW_IN
+    inet FORWARD   DROP : established, invalid→drop, ct status dnat (port forwards), LFW_FWD
+    inet PREROUTING    : LFW_DNAT (port forwards)
+    inet POSTROUTING   : outbound IPsec exemption, LFW_SNAT (WAN masquerade)
+    inet OUTPUT        : established replies, LFW_OUT (host-originated rules)
+    LFW_ORDER          : non-hook nft metadata retaining one global UI order

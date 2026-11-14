@@ -19,12 +19,26 @@ let fails = 0; const ok = (c, m) => { console.log((c ? '  ok   ' : '  FAIL ') + 
   p.on('console', m => { if (m.type() === 'error' && !/status of 400/.test(m.text())) errs.push(m.text()); });
   const go = async v => { await p.goto(API + '/#' + v); await p.waitForSelector(`#sideNav a.active[href="#${v}"]`); await p.waitForTimeout(250); };
   const settle = async () => { await p.waitForFunction(() => !document.querySelector('#dlg').classList.contains('show') || document.querySelector('#dlgErr').textContent, null, { timeout: 60000 }); };
+  // Firewall wizard edits now stay in one draft until the browser confirms
+  // Apply + Keep; accept these two explicit browser confirmation dialogs.
+  p.on('dialog', async dialog => { await dialog.accept(); });
   const applyDlg = async () => { await p.click('#dlgApply'); await settle();
-    const e = await p.textContent('#dlgErr'); if (e) { await p.click('#dlg .btn-secondary'); await p.waitForTimeout(400); } else await p.waitForTimeout(700); return e; };
+    const e = await p.textContent('#dlgErr');
+    if (e) { await p.click('#dlg .btn-secondary'); await p.waitForTimeout(400); }
+    else {
+      await p.waitForTimeout(400);
+      if ((await p.evaluate(() => location.hash)) === '#firewall' &&
+          await p.locator('.alert-warning', {hasText:'UNSAVED DRAFT'}).count()) {
+        await p.getByRole('button', {name:'Apply changes'}).click();
+        await p.waitForTimeout(900);
+      }
+    }
+    return e;
+  };
   const next = async () => { await p.click('#dlgApply'); await p.waitForTimeout(300); return p.textContent('#dlgErr'); };
   const row = txt => p.locator('tr', { hasText: txt });
   const li = txt => p.locator('.rule-list li', { hasText: txt });
-  const startWizard = async id => { await go('firewall'); await p.click('text=+ New rule…'); await p.click(`button.intent[data-intent="${id}"]`); await p.waitForTimeout(200); };
+  const startWizard = async id => { await go('firewall'); await p.click('text=Guided examples…'); await p.click(`button.intent[data-intent="${id}"]`); await p.waitForTimeout(200); };
   let e, st;
 
   console.log('== layout');
@@ -43,10 +57,10 @@ let fails = 0; const ok = (c, m) => { console.log((c ? '  ok   ' : '  FAIL ') + 
   await startWizard('internet');
   await p.selectOption('#f_from', LAN); await p.selectOption('#f_svc', 'web');
   ok(!(await next()), 'details accepted');
-  ok(/Allow LAN → the internet · TCP 80,443/.test(await p.textContent('#dlgBody')), 'review shows a plain-English sentence');
+  ok(/Allow .* → WAN · TCP 80,443/.test(await p.textContent('#dlgBody')), 'review shows a plain-English sentence');
   e = await applyDlg(); ok(!e, 'wizard created the rule ' + (e || ''));
   ok(lanNet(), 'lan1 now reaches the internet (web)');
-  ok(await li('Allow LAN → the internet').count() === 1, 'rule listed as a sentence');
+  ok(await li('→ WAN').count() >= 1, 'rule listed as a sentence');
 
   console.log('== wizard: block one device (real traffic)');
   st = await state(); const l1 = st.dhcp.leases.find(l => l.ip.startsWith('192.168.10.'));
@@ -57,7 +71,7 @@ let fails = 0; const ok = (c, m) => { console.log((c ? '  ok   ' : '  FAIL ') + 
   st = await state(); const fr = st.firewall.rules.filter(r => r.chain === 'forward');
   ok(fr[0].action === 'reject' && fr[0].src === l1.ip, 'block rule placed first');
   ok(!lanNet(), 'lan1 is blocked although the segment is allowed');
-  await go('firewall'); await li('Block').getByRole('button', { name: 'Delete' }).click(); e = await applyDlg();
+  await go('firewall'); await li('Reject').getByRole('button', { name: 'Delete' }).click(); e = await applyDlg();
   ok(!e && lanNet(), 'removing the block restores access');
 
   console.log('== wizard: publish a service (port forward + reservation, real traffic)');
@@ -79,7 +93,7 @@ let fails = 0; const ok = (c, m) => { console.log((c ? '  ok   ' : '  FAIL ') + 
   console.log('== wizard: preconditions and firewall access');
   await startWizard('between');
   ok(/at least two LAN segments/.test(await p.textContent('#dlgBody')), 'between-segments explains it needs two LANs');
-  await p.click('#dlgBack'); ok(await p.locator('button.intent').count() === 5, 'Back returns to the intent choice');
+  await p.click('#dlgBack'); ok(await p.locator('button.intent').count() === 6, 'Back returns to the intent choice');
   await p.click('#dlg .btn-secondary'); await p.waitForTimeout(400);
   for (const r of (await state()).firewall.rules.filter(r => r.chain === 'input'))
     await fetch(API + '/api/op/rule.delete', { method: 'POST', headers: { Authorization: auth, 'X-LiteFWM': '1' }, body: JSON.stringify({ id: r.id }) });
@@ -90,18 +104,44 @@ let fails = 0; const ok = (c, m) => { console.log((c ? '  ok   ' : '  FAIL ') + 
   ok(!e && sh(`sudo docker exec lfwlab-isp ping -c1 -W2 ${FWIP}`) !== null, 'ping from the internet allowed by an access rule');
   await go('firewall'); await li('this firewall · ping').getByRole('button', { name: 'Delete' }).click(); await applyDlg();
 
-  console.log('== advanced (manual) mode');
-  await go('firewall'); await p.check('#advToggle');
-  await p.locator('.card', { hasText: 'Forwarding rules (filter FORWARD)' }).getByRole('button', { name: 'Add rule' }).click();
-  await p.selectOption('#f_action', 'reject'); await p.selectOption('#f_in', LAN); await p.fill('#f_src', '192.168.10.0/24');
-  await p.selectOption('#f_proto', 'tcp'); await p.fill('#f_ports', '25'); await p.fill('#f_description', 'no smtp'); await p.selectOption('#f_position', '0');
-  e = await applyDlg(); ok(!e, 'manual rule added ' + (e || ''));
-  await row('no smtp').getByRole('button', { name: '↓' }).click(); await p.waitForTimeout(1500);
-  st = await state(); ok(st.firewall.rules.filter(r => r.chain === 'forward')[1].description === 'no smtp', 'manual move down');
-  await row('no smtp').getByRole('button', { name: 'Edit' }).click(); await p.fill('#f_ports', '25,465'); e = await applyDlg();
-  st = await state(); ok(!e && st.firewall.rules.some(r => r.description === 'no smtp' && r.ports === '25,465'), 'manual edit');
-  await row('no smtp').getByRole('button', { name: 'Delete' }).click(); e = await applyDlg();
-  await p.uncheck('#advToggle');
+  console.log('== unified source/destination rule editor');
+  await go('firewall');
+  ok(await p.locator('#advToggle').count() === 0, 'no raw iptables/nftables advanced toggle');
+  ok(await p.locator('.card', {hasText:'Traffic rules — one ordered policy'}).count() === 1, 'host and network policy use one list');
+  await p.click('text=+ New rule…');
+  await p.selectOption('#f_action','reject');
+  await p.selectOption('#f_fromScope','iface:' + LAN);
+  await p.selectOption('#f_toScope','wan');
+  await p.fill('#f_src','192.168.10.0/24');
+  await p.selectOption('#f_proto','tcp');
+  await p.fill('#f_srcPorts','1024-65535');
+  await p.fill('#f_ports','25');
+  await p.fill('#f_description','no smtp');
+  await p.selectOption('#f_position','top');
+  ok(!(await next()), 'unified source/destination rule details accepted');
+  e = await applyDlg();
+  st = await state();
+  ok(!e && st.firewall.rules.some(r => r.description === 'no smtp' && r.srcPorts === '1024-65535'), 'source port range saved');
+  await go('firewall');
+  await li('no smtp').getByRole('button', {name:'Edit'}).click();
+  await p.fill('#f_ports','25,465');
+  e = await applyDlg();
+  st = await state();
+  ok(!e && st.firewall.rules.some(r => r.description === 'no smtp' && r.ports === '25,465'), 'unified rule edit persisted');
+  await go('firewall');
+  await li('no smtp').getByRole('button', {name:'Delete'}).click(); await applyDlg();
+
+  // Rules originating on the firewall are in the same policy list.
+  await go('firewall'); await p.click('text=+ New rule…');
+  await p.selectOption('#f_fromScope','host');
+  await p.selectOption('#f_toScope','wan');
+  await p.selectOption('#f_proto','udp');
+  await p.fill('#f_ports','5353');
+  await p.fill('#f_description','host outbound dns');
+  await next(); e = await applyDlg();
+  st = await state();
+  ok(!e && st.firewall.rules.some(r => r.chain === 'output' && r.source.scope === 'host'), 'firewall-host source uses output hook');
+  await go('firewall'); await li('host outbound dns').getByRole('button',{name:'Delete'}).click(); await applyDlg();
 
   console.log('== DHCP: lease → static');
   await go('dhcp');

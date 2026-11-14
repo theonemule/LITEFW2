@@ -13,7 +13,7 @@
 : "${LFW_DNSMASQ_DIR:=/etc/dnsmasq.d}"
 : "${LFW_HOSTS_DIR:=/etc/dnsmasq.hosts.d}"
 : "${LFW_LEASES:=/var/lib/misc/dnsmasq.leases}"
-: "${LFW_FW_SAVE:=/etc/iptables/rules-save}"
+: "${LFW_FW_SAVE:=/etc/nftables.nft}"
 : "${LFW_LIGHTTPD_CONF:=/etc/lighttpd/litefwm.conf}"
 : "${LFW_HTPASSWD:=/etc/litefwm/htpasswd}"
 : "${LFW_SSHD_CONF:=/etc/ssh/sshd_config}"
@@ -55,6 +55,25 @@ is_cidr() {
 }
 # address: bare IPv4 or CIDR
 is_addr() { is_ipv4 "$1" || is_cidr "$1"; }
+
+# A validated IPv4, CIDR, inclusive address range or list of up to 16 entries.
+is_addr_match() {
+  local _piece _count _first _last
+  [ -n "$1" ] || return 1
+  _count=0
+  for _piece in $(printf '%s' "$1" | tr ',' ' '); do
+    _count=$((_count + 1))
+    case "$_piece" in
+      *-*)
+        _first=$(printf '%s' "$_piece" | cut -d- -f1)
+        _last=$(printf '%s' "$_piece" | cut -d- -f2)
+        is_ipv4 "$_first" && is_ipv4 "$_last" || return 1
+        [ "$(ip2int "$_first")" -le "$(ip2int "$_last")" ] || return 1;;
+      *) is_addr "$_piece" || return 1;;
+    esac
+  done
+  [ "$_count" -gt 0 ] && [ "$_count" -le 16 ]
+}
 is_mac() {
   printf '%s' "$1" | grep -Eq '^([0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2}$'
 }

@@ -47,6 +47,10 @@ jobs:
           ./tests/dns-provider-presets.sh
           ./tests/bind-zone-management.sh
           ./tests/inplace-upgrade-smoke.sh
+          # Explicitly confirm legacy iptables -> nftables is refused, and
+          # native rule/rollback/module operations still work.
+          bash tests/run-local-regressions.sh
+          node tests/firewall-ui-model-test.js
           ./tests/upgrade-check-test.sh
           node --check www/app.js
           if command -v google-chrome >/dev/null 2>&1; then
@@ -108,11 +112,11 @@ jobs:
             }
             gh release create "$tag" "dist/$bundle" "dist/$cli" dist/SHA256SUMS --verify-tag \
               --title "LiteFW2 $tag" \
-              --notes "In-place LiteFW runtime upgrade. The System > Software updates UI downloads and verifies this archive before applying it. Existing network, DNS, DHCP and firewall configuration is preserved."
+              --notes "LiteFW 2.2.25 native nftables backend. Legacy iptables installations cannot use the in-place runtime update; migrate with console recovery or install a fresh ISO. Already-migrated nftables appliances may update their application runtime with configuration backups."
           else
             gh release create "$tag" "dist/$bundle" "dist/$cli" dist/SHA256SUMS \
               --target "$GITHUB_SHA" --title "LiteFW2 $tag" \
-              --notes "In-place LiteFW runtime upgrade. The System > Software updates UI downloads and verifies this archive before applying it. Existing network, DNS, DHCP and firewall configuration is preserved."
+              --notes "LiteFW 2.2.25 native nftables backend. Legacy iptables installations cannot use the in-place runtime update; migrate with console recovery or install a fresh ISO. Already-migrated nftables appliances may update their application runtime with configuration backups."
           fi
           gh release view "$tag" --json name,tagName,assets
 

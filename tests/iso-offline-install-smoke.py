@@ -97,7 +97,7 @@ def install_from_iso():
     # optional modules with APK network access explicitly disabled.
     pkgs=(
         "alpine-base alpine-conf linux-lts syslinux e2fsprogs "
-        "ifupdown-ng iproute2 iptables dnsmasq jq util-linux openssh "
+        "ifupdown-ng iproute2 nftables nftables-openrc dnsmasq jq util-linux openssh "
         "lighttpd lighttpd-mod_auth apache2-utils sudo busybox-openrc "
         "bind bind-tools bind-openrc openvpn openvpn-openrc easy-rsa inadyn inadyn-openrc"
     )
@@ -157,7 +157,7 @@ def install_from_iso():
 def verify_installed_system():
     spawn_vm(False)
     for p in (
-        "alpine-base alpine-conf linux-lts ifupdown-ng iproute2 iptables dnsmasq jq "
+        "alpine-base alpine-conf linux-lts ifupdown-ng iproute2 nftables nftables-openrc dnsmasq jq "
         "util-linux openssh lighttpd lighttpd-mod_auth apache2-utils sudo busybox-openrc"
     ).split():
         vmcmd(f"apk info -e {p}")
@@ -177,12 +177,13 @@ def verify_installed_system():
     vmcmd("test -x /usr/lib/litefwm/cgi/api.cgi")
     vmcmd("test -f /usr/share/litefwm/www/index.html")
     vmcmd("test -f /etc/lighttpd/litefwm.conf")
+    vmcmd("test -f /var/log/lighttpd/error.log")
     vmcmd("test -f /etc/sysctl.d/90-litefwm.conf")
-    vmcmd("test -f /etc/iptables/rules-save")
+    vmcmd("test -f /etc/nftables.nft")
     vmcmd("test -L /etc/runlevels/default/lighttpd")
     vmcmd("test -L /etc/runlevels/default/dnsmasq")
     vmcmd("test -L /etc/runlevels/default/sshd")
-    vmcmd("test -L /etc/runlevels/boot/iptables")
+    vmcmd("test -L /etc/runlevels/boot/nftables")
     vmcmd("test -L /etc/runlevels/boot/litefwm-init")
     vmcmd("test -s /etc/litefwm/htpasswd")
     vmcmd("test -x /usr/sbin/litefw-web-bind")

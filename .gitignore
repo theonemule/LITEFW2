@@ -5,3 +5,4 @@ test-output/
 dist/
 __pycache__/
 *.pyc
+qa-results/

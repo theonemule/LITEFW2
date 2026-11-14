@@ -16,15 +16,21 @@ command -v docker >/dev/null 2>&1 || {
   exit 1
 }
 
-# Use disk-backed container scratch instead of a RAM tmpfs that starves the host.
-docker run --rm \
+# Docker may be remote or hosted outside the source mount namespace, so
+# transferring the source using docker cp is safer than a host bind mount.
+# Work entirely inside a temporary, disposable build container. No live
+# appliance configuration is mounted or modified.
+BUILD_CONTAINER="litefw-iso-build-$(date +%s)-$$"
+cleanup() { docker rm -f "$BUILD_CONTAINER" >/dev/null 2>&1 || true; }
+trap cleanup EXIT HUP INT TERM
+# Use disk-backed container scratch instead of RAM tmpfs that starves CI.
+docker create --name "$BUILD_CONTAINER" \
   -e ALPINE_VERSION="$ALPINE_VERSION" \
   -e ALPINE_BRANCH="$ALPINE_BRANCH" \
   -e ARCH="$ARCH" \
   -e HOST_UID="$(id -u)" -e HOST_GID="$(id -g)" \
-  -v "$ROOT:/src:ro" \
-  -v "$OUT:/out" \
   "alpine:$ALPINE_VERSION" /bin/sh -euxc '
+    mkdir -p /out
     apk add --no-cache abuild apk-tools alpine-conf busybox fakeroot git syslinux xorriso squashfs-tools grub mtools dosfstools
     # Limit squashfs compression concurrency and RAM. The default worker
     # count can exhaust a 16 GiB CI/dev box while building the kernel modloop.
@@ -50,9 +56,13 @@ docker run --rm \
       --tag v$ALPINE_VERSION --outdir /out --arch $ARCH --profile litefwm \
       --repository https://dl-cdn.alpinelinux.org/alpine/v$ALPINE_VERSION/main \
       --repository https://dl-cdn.alpinelinux.org/alpine/v$ALPINE_VERSION/community"
-    chown -R "$HOST_UID:$HOST_GID" /out
   '
-
+# Stream only the tracked/configured source into /src. ISO binaries, test
+# output and Git metadata must never be bundled back into a new build.
+tar --transform='s#^\.#src#' --exclude='./dist' --exclude='./qa-results' \
+  --exclude='./.git' -C "$ROOT" -cf - . | docker cp - "$BUILD_CONTAINER:/"
+docker start -a "$BUILD_CONTAINER"
+docker cp "$BUILD_CONTAINER:/out/." "$OUT/"
 echo
 echo "LiteFWM ISO output:"
 find "$OUT" -maxdepth 1 -type f -name '*litefwm*.iso' -print

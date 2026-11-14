@@ -3,13 +3,11 @@
 # A reported successful install MUST select, erase, and partition a disk.
 set -eu
 cd "$(dirname "$0")/.."
-docker run --rm \
-  -v "$PWD/iso/setup-alpine-litefwm:/usr/local/sbin/setup-alpine:ro" \
-  -v "$PWD/bin/litefw-network:/usr/sbin/litefw-network:ro" \
-  -v "$PWD/bin/litefw-admin:/usr/sbin/litefw-admin:ro" \
-  -v "$PWD/bin/litefw-console:/usr/sbin/litefw-console:ro" \
-  -v "$PWD/bin/litefw-recovery:/usr/sbin/litefw-recovery:ro" \
-  alpine:3.24 sh -euc '
+# Works even when Docker daemon cannot see this checkout's mount namespace.
+C="litefw-installer-qa-$$"
+TEMP=$(mktemp -d)
+trap 'docker rm -f "$C" >/dev/null 2>&1 || true; rm -rf "$TEMP"' EXIT HUP INT TERM
+docker create --name "$C" alpine:3.24 sh -euc '
   apk add --quiet --no-cache alpine-conf apache2-utils lighttpd jq iproute2 util-linux >/dev/null
   mkdir -p /media/cdrom/apks /tmp/mocknet /etc/litefwm
   # Installed disk shows only administration, and direct installer calls fail.
@@ -168,3 +166,12 @@ MOCK
   htpasswd -vb /etc/litefwm/htpasswd WebAdmin SmokeTestOnlyPassword123! >/dev/null
   echo "PASS: regional, package and web-admin setup while still installing to disk"
 '
+# Copy the fixture tree before start; do not rely on directories already
+# existing inside the minimal Alpine container.
+mkdir -p "$TEMP/usr/local/sbin" "$TEMP/usr/sbin"
+cp iso/setup-alpine-litefwm "$TEMP/usr/local/sbin/setup-alpine"
+for f in litefw-network litefw-admin litefw-console litefw-recovery; do
+  cp "bin/$f" "$TEMP/usr/sbin/$f"
+done
+docker cp "$TEMP/." "$C:/"
+docker start -a "$C"

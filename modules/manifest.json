@@ -77,7 +77,7 @@
       "id": "geoip",
       "version": "1",
       "packages": [
-        "ipset",
+        "nftables",
         "curl"
       ],
       "scripts": {
@@ -165,7 +165,7 @@
         "ca-certificates",
         "libmicrohttpd",
         "bash",
-        "iptables",
+        "nftables",
         "iproute2"
       ],
       "scripts": {

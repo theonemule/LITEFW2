@@ -15,7 +15,7 @@ world contains:
 
 - Alpine base and Alpine setup tools
 - ifupdown-ng and iproute2
-- iptables
+- native nftables
 - dnsmasq
 - jq and util-linux
 - OpenSSH
@@ -122,7 +122,7 @@ disabled. Pressing Configure never implicitly enables the DHCP server.
 source-inversion anti-spoof rules. Each rule has up/down buttons; moving a rule
 across an anti-spoofing rule prompts for confirmation. The underlying rule is
 moved without rewriting its match semantics. Imported rules remain read-only
-for field editing; technical iptables details are available if needed.
+for field editing; technical native nftables details are available if needed.
 
 ## Upgrades from the System page
 
@@ -165,11 +165,11 @@ reordering, new rules and port forwards remain **local browser drafts** until
 Apply changes is pressed. Discard edits restores the previously read policy.
 The browser sends its original live-rule baseline with the draft; concurrent
 changes made from SSH or another browser cause a conflict instead of silently
-overwriting newer rules. Existing imported/unmanaged iptables rules are kept
+overwriting newer rules. Existing imported/unmanaged native nftables rules are kept
 exactly as-is when reordered; they are not rewritten through the simplified
 editor. Edits of managed rules use the normal native rule validation.
 
-The backend builds one complete iptables-restore transaction covering
+The backend builds one complete validated nftables transaction covering
 LFW_FWD, LFW_IN and LFW_DNAT, atomically applies the change, and requires
 an explicit in-browser Keep confirmation within 120 seconds. Until that
 confirmation, the old policy remains the boot policy and a watchdog

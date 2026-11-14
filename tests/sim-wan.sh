@@ -70,8 +70,8 @@ export LFW_LIB
 . "$LFW_LIB/common.sh"
 . "$LFW_LIB/modules.sh"
 out=$(module_firewall_snat_rules lfw_w1)
-printf '%s\n' "$out" | grep -Fq -- '-A LFW_SNAT -o lfw_w2 -j MASQUERADE'
-if printf '%s\n' "$out" | grep -Fq -- '-A LFW_SNAT -o lfw_w1 -j MASQUERADE'; then
+printf '%s\n' "$out" | grep -Fq -- 'oifname "lfw_w2" masquerade'
+if printf '%s\n' "$out" | grep -Fq -- 'oifname "lfw_w1" masquerade'; then
   echo 'FAIL duplicate primary WAN SNAT rule' >&2; exit 1
 fi
 jq '.enabled=false' "$LFW_MODULE_CONFIG_DIR/multiwan.json" >"$state/off"

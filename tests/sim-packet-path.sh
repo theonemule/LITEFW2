@@ -23,8 +23,9 @@ ip netns exec lfw_isv ip link set lfw_si up
 ip netns exec lfw_ics ip route add default via 192.0.2.1
 ip netns exec lfw_isv ip route add default via 198.51.100.1
 sysctl -w net.ipv4.ip_forward=1 >/dev/null
-iptables -P FORWARD ACCEPT
-iptables -N LFW_FWD
-iptables -A FORWARD -j LFW_FWD
+# Exercise the same Netfilter nftables forward hook used by LiteFW, rather
+# than inadvertently passing a test using the now-retired iptables chains.
+nft add table inet lfw_sim
+nft 'add chain inet lfw_sim filter_forward { type filter hook forward priority filter; policy accept; }'
 ip netns exec lfw_ics ping -n -c 2 -W 2 198.51.100.2 >/dev/null
 echo 'PASS synthetic LAN/WAN packet forwarding works with no filters'

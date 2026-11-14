@@ -1,25 +1,41 @@
 #!/bin/sh
 set -eu
-apk add -q --no-cache iptables jq >/dev/null
-mkdir -p /etc/iptables /run/litefwm
-iptables -P INPUT DROP
-iptables -P FORWARD DROP
-iptables -A INPUT -p tcp --dport 22 -j DROP
-iptables-save >/etc/iptables/rules-save
-before=$(sha256sum /etc/iptables/rules-save | cut -d' ' -f1)
+apk add -q --no-cache nftables jq >/dev/null
+mkdir -p /run/litefwm
+cat >/tmp/recovery-test.nft <<'NFT'
+table inet litefw {
+  chain INPUT {
+    type filter hook input priority filter; policy drop;
+    tcp dport 22 drop comment "test:deny-ssh"
+  }
+  chain FORWARD {
+    type filter hook forward priority filter; policy drop;
+  }
+  chain PREROUTING {
+    type nat hook prerouting priority dstnat; policy accept;
+  }
+  chain POSTROUTING {
+    type nat hook postrouting priority srcnat; policy accept;
+    oifname "eth0" masquerade
+  }
+}
+NFT
+nft -f /tmp/recovery-test.nft
+nft list table inet litefw >/etc/nftables.nft
+before=$(sha256sum /etc/nftables.nft | awk '{print $1}')
 if /src/bin/litefw-recovery status >/dev/null; then echo 'Unexpected bypass active'; exit 1; fi
-if printf 'NO\n' | /src/bin/litefw-recovery enable >/tmp/denied; then echo 'FAIL: bypass without YES'; exit 1; fi
-test ! -e /run/litefwm/breakglass/snapshot
+if printf 'NO\n' | /src/bin/litefw-recovery enable >/dev/null; then echo 'FAIL: bypass without YES'; exit 1; fi
+[ ! -e /run/litefwm/breakglass/snapshot ]
 printf 'YES\n' | /src/bin/litefw-recovery enable
 /src/bin/litefw-recovery status | grep -Fxq enabled
-iptables -S INPUT | head -1 | grep -q '^-P INPUT DROP'
-iptables -S INPUT | grep -Fxq -- '-A INPUT -j ACCEPT'
-iptables -S FORWARD | grep -Fxq -- '-A FORWARD -j ACCEPT'
-test "$before" = "$(sha256sum /etc/iptables/rules-save | cut -d' ' -f1)"
+nft -a list chain inet litefw INPUT | grep -q 'accept # handle'
+nft -a list chain inet litefw FORWARD | grep -q 'accept # handle'
+nft list chain inet litefw POSTROUTING | grep -q masquerade
+[ "$before" = "$(sha256sum /etc/nftables.nft | awk '{print $1}')" ]
 /src/bin/litefw-recovery disable
 if /src/bin/litefw-recovery status >/dev/null; then echo 'Bypass still active'; exit 1; fi
-iptables -S INPUT | grep -Fxq -- '-A INPUT -p tcp -m tcp --dport 22 -j DROP'
-! iptables -S INPUT | grep -Fxq -- '-A INPUT -j ACCEPT'
-! iptables -S FORWARD | grep -Fxq -- '-A FORWARD -j ACCEPT'
-test "$before" = "$(sha256sum /etc/iptables/rules-save | cut -d' ' -f1)"
-echo 'PASS: break-glass requires YES, restores original live rules without reboot; boot rules never bypassed'
+nft list chain inet litefw INPUT | grep -q 'tcp dport 22 drop'
+! nft list chain inet litefw INPUT | grep -Eq '^[[:space:]]+accept$'
+! nft list chain inet litefw FORWARD | grep -Eq '^[[:space:]]+accept$'
+[ "$before" = "$(sha256sum /etc/nftables.nft | awk '{print $1}')" ]
+echo 'PASS: native nftables console recovery, volatile bypass, original policies and NAT restored'

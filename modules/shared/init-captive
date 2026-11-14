@@ -4,5 +4,5 @@ command="/usr/local/bin/opennds"
 command_args="-f -c /etc/opennds/opennds.conf"
 command_background="yes"
 pidfile="/run/opennds.pid"
-depend() { need net; after iptables; }
+depend() { need net; after nftables; }
 start_pre() { [ -s /etc/opennds/opennds.conf ] && [ -x "$command" ]; }

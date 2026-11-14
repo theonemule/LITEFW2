@@ -434,7 +434,7 @@ module_firewall_snat_rules() {
   jq -r '.uplinks[].interface' "$_file" | sort -u | while IFS= read -r _iface; do
     is_ifname "$_iface" || continue
     [ "$_iface" = "$_primary" ] && continue
-    printf '%s\n' "-A LFW_SNAT -o $_iface -j MASQUERADE"
+    printf 'oifname "%s" masquerade\n' "$_iface"
   done
 }
 

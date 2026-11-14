@@ -79,7 +79,7 @@ api_request(){
   case "$status" in 2??) :;; *) die "HTTP $status: request rejected";; esac
 }
 # GENERATED_HELP_START
-print_version(){ printf 'LiteFW standalone CLI %s\n' '2.2.24' ; }
+print_version(){ printf 'LiteFW standalone CLI %s\n' '2.2.25' ; }
 print_help(){ cat <<'LITEFW_EMBEDDED_MANUAL'
 LiteFW CLI Manual
 
@@ -159,7 +159,7 @@ POST  /api/dhcp/reservations/delete  - Delete DHCP reservation
 POST  /api/dhcp/server/set  - Configure DHCP
 GET   /api/dns  - DNS settings
 POST  /api/dns/set  - Configure DNS
-GET   /api/firewall  - Current managed firewall rules
+GET   /api/firewall  - Read the unified ordered source/destination traffic policy
 POST  /api/firewall/batch  - Stage a firewall ruleset transaction
 POST  /api/firewall/confirm  - Confirm staged firewall rules
 POST  /api/firewall/rules/add  - Add firewall rule

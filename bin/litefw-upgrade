@@ -35,6 +35,25 @@ tar -tvzf "$archive" | awk '
   END{exit bad}
 ' || exit 1
 tar -xzf "$archive" -C "$stage"
+if grep -q 'nftables-backend' "$stage/lib/fw.sh" 2>/dev/null &&
+   [ -e /etc/init.d/iptables ] &&
+   iptables -S INPUT 2>/dev/null | grep -q -- '-j LFW_MGMT'; then
+  echo 'Runtime-only iptables -> nftables upgrades are prohibited.' >&2
+  echo 'Use an explicit firewall migration with console access and rollback.' >&2
+  exit 1
+fi
+# A runtime-only upgrade cannot convert firewall backend ownership. The
+# operator must use a console-backed migration or clean install to carry
+# persistent rules, NAT, modules and management access across the boundary.
+# Enforce this even if an old ruleset is currently empty/stopped, so a reboot
+# cannot suddenly load a different backend with no intentional cutover.
+if grep -q '^# nftables-backend:' "$stage/lib/fw.sh" 2>/dev/null &&
+   [ -r /usr/lib/litefwm/fw.sh ] &&
+   ! grep -q '^# nftables-backend:' /usr/lib/litefwm/fw.sh; then
+  echo 'Existing iptables backend requires a console-backed nftables migration.' >&2
+  echo 'Application-only upgrade refused; existing runtime and rules unchanged.' >&2
+  exit 1
+fi
 new=$(cat "$stage/VERSION")
 for ver in "$old" "$new"; do
   printf '%s' "$ver" | grep -Eq '^2[.]2[.][0-9]+$' || { echo "Invalid version: $ver" >&2; exit 1; }
@@ -62,9 +81,16 @@ tar -C / -czf "$backup" usr/sbin/lfwctl usr/sbin/lfw-setup \
   usr/sbin/litefw-web-bind usr/sbin/litefw-ssh-access \
   usr/lib/litefwm usr/share/litefwm/www
 config="/root/litefw-upgrade-backups/config-$old-$datecode.tar.gz"
-tar -C / -czf "$config" etc/dnsmasq.conf etc/dnsmasq.d \
-  etc/dnsmasq.hosts.d etc/network/interfaces etc/iptables/rules-save \
-  etc/litefwm etc/lighttpd etc/ssh 2>/dev/null || true
+# Back up the native firewall backend as well as any retained old rules.
+# Do not silently lose a missing optional configuration path in the middle
+# of a tar invocation; build the list from real filesystem entries.
+set --
+for item in etc/dnsmasq.conf etc/dnsmasq.d etc/dnsmasq.hosts.d \
+  etc/network/interfaces etc/iptables/rules-save etc/nftables.nft \
+  etc/litefw-addons etc/litefwm etc/lighttpd etc/ssh; do
+  [ ! -e "/$item" ] || set -- "$@" "$item"
+done
+[ "$#" -eq 0 ] || tar -C / -czf "$config" "$@"
 
 # Runtime files only. Never call the disk installer or network/DHCP mutation APIs.
 for file in "$stage"/bin/*; do

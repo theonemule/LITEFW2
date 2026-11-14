@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "LiteFW Management API",
-    "version": "2.2.24",
+    "version": "2.2.25",
     "description": "LAN-only JSON API. HTTP Basic credentials or an X-API-Key token authenticate. For API keys use HTTPS or a trusted encrypted tunnel: plain HTTP exposes secrets. Keys are read or admin; key management and password/management changes always require Basic. All changes use POST with X-LiteFWM: 1."
   },
   "servers": [
@@ -29,6 +29,110 @@
         "type": "apiKey",
         "in": "header",
         "name": "X-API-Key"
+      }
+    },
+    "schemas": {
+      "FirewallEndpoint": {
+        "type": "object",
+        "description": "A source or destination endpoint; an empty address/ports matches any. Use scope interface with a real interface name.",
+        "required": [
+          "scope"
+        ],
+        "properties": {
+          "scope": {
+            "type": "string",
+            "enum": [
+              "any",
+              "host",
+              "wan",
+              "interface"
+            ]
+          },
+          "interface": {
+            "type": "string"
+          },
+          "address": {
+            "type": "string",
+            "description": "IPv4, CIDR, inclusive IPv4 range, or comma-separated list (at most 16)"
+          },
+          "ports": {
+            "type": "string",
+            "description": "TCP/UDP port, port range or comma-separated list (at most 15)"
+          }
+        }
+      },
+      "FirewallRuleWrite": {
+        "type": "object",
+        "description": "Structured source-to-destination rule; direction is inferred, with optional deprecated legacy fields.",
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "For updating an existing rule"
+          },
+          "action": {
+            "type": "string",
+            "enum": [
+              "accept",
+              "drop",
+              "reject",
+              "allow",
+              "block"
+            ]
+          },
+          "proto": {
+            "type": "string",
+            "enum": [
+              "any",
+              "tcp",
+              "udp",
+              "icmp"
+            ]
+          },
+          "description": {
+            "type": "string",
+            "maxLength": 64
+          },
+          "source": {
+            "$ref": "#/components/schemas/FirewallEndpoint"
+          },
+          "destination": {
+            "$ref": "#/components/schemas/FirewallEndpoint"
+          },
+          "chain": {
+            "type": "string",
+            "enum": [
+              "input",
+              "forward",
+              "output"
+            ],
+            "deprecated": true,
+            "description": "Legacy; do not use when source/destination given"
+          },
+          "in": {
+            "type": "string",
+            "deprecated": true
+          },
+          "out": {
+            "type": "string",
+            "deprecated": true
+          },
+          "src": {
+            "type": "string",
+            "deprecated": true
+          },
+          "dst": {
+            "type": "string",
+            "deprecated": true
+          },
+          "srcPorts": {
+            "type": "string",
+            "deprecated": true
+          },
+          "ports": {
+            "type": "string",
+            "deprecated": true
+          }
+        }
       }
     }
   },
@@ -216,7 +320,7 @@
         "tags": [
           "Firewall"
         ],
-        "summary": "Current managed firewall rules",
+        "summary": "Read the unified ordered source/destination traffic policy",
         "operationId": "get_firewall",
         "responses": {
           "200": {
@@ -264,7 +368,8 @@
               }
             }
           }
-        }
+        },
+        "description": "Stage one ordered source/destination policy and NAT forwards; confirm within 120 seconds or roll back."
       }
     },
     "/firewall/confirm": {
@@ -326,7 +431,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "type": "object"
+                "$ref": "#/components/schemas/FirewallRuleWrite"
               }
             }
           }
@@ -425,7 +530,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "type": "object"
+                "$ref": "#/components/schemas/FirewallRuleWrite"
               }
             }
           }

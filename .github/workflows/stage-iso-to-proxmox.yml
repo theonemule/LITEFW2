@@ -1,39 +1,52 @@
-name: Stage verified LiteFW ISO for Proxmox VM 107
+name: Stage verified LiteFW release ISO on Proxmox development runner
 
+# Deliberately manual-only: pushing a firewall release must never alter a
+# Proxmox host or accidentally deploy it to a running VM.
 on:
-  push:
-    paths:
-      - .github/workflows/stage-iso-to-proxmox.yml
   workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Published release tag, e.g. v2.2.25; latest selects the newest release'
+        required: true
+        type: string
+        default: latest
 
 permissions:
-  actions: read
-  contents: write
+  contents: read
 
 jobs:
   stage-iso:
-    name: Download and verify GitHub ISO on LiteFW dev runner
+    name: Download and verify published ISO on development runner
     runs-on: [self-hosted, Linux, X64]
     timeout-minutes: 30
     steps:
-      - name: Download successful LiteFW 2.2.5 build artifact
-        uses: actions/download-artifact@v4
-        with:
-          repository: theonemule/LITEFW2
-          run-id: 41240013694
-          name: litefw2-alpine-appliance-57
-          github-token: ${{ github.token }}
-          path: ${{ runner.temp }}/litefw-vm107-stage
-      - name: Verify SHA256 checksum and stage ISO for Proxmox
+      - name: Verify release downloads and stage to runner only
         shell: bash
+        env:
+          REQUESTED_TAG: ${{ inputs.tag }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          src="${{ runner.temp }}/litefw-vm107-stage"
+          command -v gh >/dev/null || { echo 'gh CLI is required on self-hosted runner'; exit 1; }
+          case "$REQUESTED_TAG" in
+            latest) tag=$(gh release list --repo "$GITHUB_REPOSITORY" --limit 1 --json tagName --jq '.[0].tagName');;
+            v2.2.*) tag=$REQUESTED_TAG;;
+            *) echo 'Invalid release tag' >&2; exit 2;;
+          esac
+          [[ "$tag" =~ ^v2[.]2[.][0-9]+$ ]] || { echo "Unsafe tag: $tag" >&2; exit 2; }
+          version=${tag#v}
+          iso="litefw2-$version-alpine3.24-x86_64.iso"
+          src="$RUNNER_TEMP/litefw-stage-$version"
           dest="/opt/github-actions-runner/LITEFW2/_work/_litefw_iso_transfer"
+          mkdir -p "$src"
+          # Download all four assets so the complete release checksum manifest
+          # can be verified instead of silently ignoring missing assets.
+          gh release download "$tag" --repo "$GITHUB_REPOSITORY" --dir "$src"
+          test -s "$src/$iso"
+          test -s "$src/SHA256SUMS"
           (cd "$src" && sha256sum -c SHA256SUMS)
-          test -s "$src/litefw2-2.2.5-alpine3.24-x86_64.iso"
           install -d -m 0755 "$dest"
-          install -m 0644 "$src/litefw2-2.2.5-alpine3.24-x86_64.iso" "$dest/litefw2-2.2.5-alpine3.24-x86_64.iso"
+          install -m 0644 "$src/$iso" "$dest/$iso"
           install -m 0644 "$src/SHA256SUMS" "$dest/SHA256SUMS"
-          (cd "$dest" && sha256sum -c SHA256SUMS)
-          echo "Verified LiteFW 2.2.5 ISO staged on dev runner for Proxmox VM 107."
+          (cd "$dest" && sha256sum -c --ignore-missing SHA256SUMS)
+          echo "Verified $iso staged on development runner, not installed in a VM."

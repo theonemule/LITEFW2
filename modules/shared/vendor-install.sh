@@ -25,7 +25,7 @@ case "$mod" in
    ;;
  captive)
    [ "$(uname -m)" = x86_64 ] || { echo "openNDS source build supported on x86_64 only" >&2; exit 1; }
-   apk add --no-cache build-base linux-headers libmicrohttpd-dev libmicrohttpd bash iptables iproute2
+   apk add --no-cache build-base linux-headers libmicrohttpd-dev libmicrohttpd bash nftables iproute2
    fetch "https://github.com/openNDS/openNDS/archive/refs/tags/v11.0.0.tar.gz" \
      33940f8ef52e958cdf37fd49ca20a8140b85a096d529cf4e0122592ac24ced00
    tar xzf "$tmp/archive" -C "$tmp"

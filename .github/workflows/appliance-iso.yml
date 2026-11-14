@@ -35,6 +35,9 @@ jobs:
           test -f iso/genapkovl-litefwm.sh
           test -x bin/litefw-web-bind
           ./tests/web-lan-security.sh
+          ./tests/iso-overlay-permissions.sh
+          node --check www/app.js
+          node tests/firewall-ui-model-test.js
           ./tests/temporary-root-ssh.sh
           ./tests/inplace-upgrade-smoke.sh
           ./tests/upgrade-check-test.sh
@@ -58,6 +61,9 @@ jobs:
           ./tests/ddns-api-contract.sh
           ./tests/firewall-staged-apply.sh
           ./tests/firewall-recovery.sh
+          # Native packet, VPN, GeoIP and multi-WAN integration in a fresh
+          # disposable Alpine kernel namespace (does not touch the runner).
+          bash tests/run-local-regressions.sh
           while IFS= read -r -d '' script; do
             if head -n 1 "$script" | grep -Eq '^#!.*(/|env )bash([[:space:]]|$)'; then
               bash -n "$script"
@@ -94,20 +100,23 @@ jobs:
           tar -czf "dist/litefw2-$(cat VERSION)-runtime.tar.gz" VERSION bin lib modules cgi www
           install -m 0755 bin/litefw "dist/litefw-$(cat VERSION)-cli.sh"
           (cd dist && sha256sum *.iso *.tar.gz *-cli.sh > SHA256SUMS)
-      - name: Offline installation smoke test
-        env:
-          LITEFWM_OFFLINE_WORK: ${{ runner.temp }}/litefw2-offline
-          LITEFWM_QEMU_ACCEL: tcg
+      - name: Full three-stage offline installation and WAN/LAN acceptance
+        shell: bash
         run: |
           set -euo pipefail
-          python3 tests/iso-offline-install-smoke.py dist/*.iso
-      - name: Upload serial logs on test failure
+          # Boot the exact published candidate: install to disk with no NIC,
+          # exercise the live ISO with routed/forwarded packets, and boot the
+          # installed disk to repeat network and authenticated API checks.
+          ./tools/test-iso-local.sh dist/*.iso both
+      - name: Upload QEMU installation and network logs on test failure
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: litefw2-offline-test-logs-${{ github.run_number }}
-          path: ${{ runner.temp }}/litefw2-offline/*-serial.log
-          if-no-files-found: ignore
+          name: litefw2-qemu-acceptance-logs-${{ github.run_number }}
+          path: |
+            qa-results/qemu/**
+            qa-results/local/**
+          if-no-files-found: warn
           retention-days: 7
       - name: Publish build artifact
         uses: actions/upload-artifact@v4
@@ -171,7 +180,7 @@ jobs:
               echo "Tag $tag exists without a release; run the workflow on that tag to publish its matching ISO." >&2
               exit 1
             fi
-            gh release create "$tag" dist/*.iso dist/*.tar.gz dist/*-cli.sh dist/SHA256SUMS --target "$GITHUB_SHA" --title "LiteFW2 $tag" --notes "Bootable Alpine Linux x86_64 firewall appliance ISO. SHA256SUMS included. New installations use the ISO. Existing appliances may upgrade the application runtime in place using bin/litefw-upgrade and the release runtime bundle; existing configuration is preserved."
+            gh release create "$tag" dist/*.iso dist/*.tar.gz dist/*-cli.sh dist/SHA256SUMS --target "$GITHUB_SHA" --title "LiteFW2 $tag" --notes "Bootable Alpine Linux x86_64 firewall appliance ISO. SHA256SUMS included. Fresh installations use the ISO. Runtime upgrades are supported only on already-migrated nftables appliances; older iptables appliances must use a console-backed migration or clean install."
           else
-            gh release create "$tag" dist/*.iso dist/*.tar.gz dist/*-cli.sh dist/SHA256SUMS --title "LiteFW2 $tag" --notes "Bootable Alpine Linux x86_64 firewall appliance ISO. SHA256SUMS included. New installations use the ISO. Existing appliances may upgrade the application runtime in place using bin/litefw-upgrade and the release runtime bundle; existing configuration is preserved." --verify-tag
+            gh release create "$tag" dist/*.iso dist/*.tar.gz dist/*-cli.sh dist/SHA256SUMS --title "LiteFW2 $tag" --notes "Bootable Alpine Linux x86_64 firewall appliance ISO. SHA256SUMS included. Fresh installations use the ISO. Runtime upgrades are supported only on already-migrated nftables appliances; older iptables appliances must use a console-backed migration or clean install." --verify-tag
           fi
