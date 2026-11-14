@@ -37,7 +37,8 @@ jobs:
     needs: first-friday
     if: needs.first-friday.outputs.enabled == 'true'
     name: Alpine x86_64 ISO + full QEMU acceptance
-    runs-on: ubuntu-24.04
+    # Use the physical CI163 runner only once registration is fully enabled.
+    runs-on: ${{ vars.CI163_READY == 'true' && 'ci163-litefw2' || 'ubuntu-24.04' }}
     timeout-minutes: 180
     steps:
       - uses: actions/checkout@v4
@@ -103,8 +104,16 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          sudo apt-get update
-          sudo apt-get install -y xorriso qemu-system-x86 qemu-utils python3-pexpect
+          if [[ "$RUNNER_ENVIRONMENT" == 'self-hosted' ]]; then
+            for tool in xorriso qemu-system-x86_64 qemu-img docker; do
+              command -v "$tool" >/dev/null || { echo "Missing runner tool: $tool" >&2; exit 1; }
+            done
+            # QEMU guests and nftables packet tests run inside disposable Docker containers.
+            # Do not change the host's own firewall, bridges or libvirt guests.
+          else
+            sudo apt-get update
+            sudo apt-get install -y xorriso qemu-system-x86 qemu-utils python3-pexpect
+          fi
 
       - name: Build standalone Alpine x86_64 firewall ISO
         shell: bash
