@@ -1,6 +1,10 @@
 name: Monthly LiteFW2 ISO and appliance regression
 
 on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/monthly-regression.yml'
   schedule:
     - cron: '31 15 * * 5'
   workflow_dispatch:
